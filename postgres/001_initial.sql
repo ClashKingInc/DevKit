@@ -7,8 +7,26 @@ CREATE TABLE servers (
 CREATE TABLE server_clans (
     tag text NOT NULL,
     server_id text NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    clan_channel_id text DEFAULT NULL,
     PRIMARY KEY (tag, server_id)
 );
+
+CREATE TABLE clan_position_roles (
+    id uuid PRIMARY KEY DEFAULT uuidv7(),
+    server_id text NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    clan_tag text,
+    position text NOT NULL CHECK (position IN ('member', 'elder', 'coleader', 'leader')),
+    role_id text NOT NULL
+);
+
+CREATE UNIQUE INDEX idx_clan_position_roles_clan
+    ON clan_position_roles (server_id, clan_tag, position)
+    WHERE clan_tag IS NOT NULL;
+
+CREATE UNIQUE INDEX idx_clan_position_roles_global
+    ON clan_position_roles (server_id, position)
+    WHERE clan_tag IS NULL;
+
 
 CREATE TABLE bases (
     id uuid PRIMARY KEY DEFAULT uuidv7(),
