@@ -97,10 +97,30 @@ CREATE TABLE rosters (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+class TABLE roster_groups (
+    id uuid PRIMARY KEY DEFAULT uuidv7(),
+    server_id text NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    name text NOT NULL,
+    PRIMARY KEY (server_id, name)
+);
+
 class TABLE roster_members (
     tag text NOT NULL,
     roster_id uuid NOT NULL REFERENCES rosters(id) ON DELETE CASCADE,
+    roster_group_id uuid,
     PRIMARY KEY (tag, roster_id)
+);
+
+class TABLE player_links (
+    tag text NOT NULL,
+);
+
+class TABLE strikes (
+   tag text NOT NULL,
+);
+
+class TABLE bans (
+    tag text NOT NULL,
 );
 
 CREATE TABLE audit_history (
