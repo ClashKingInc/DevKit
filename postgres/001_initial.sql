@@ -7,16 +7,39 @@ CREATE TABLE servers (
 CREATE TABLE server_clans (
     tag text NOT NULL,
     server_id text NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    category_id uuid NOT NULL,
     clan_channel_id text DEFAULT NULL,
     PRIMARY KEY (tag, server_id)
 );
+
+CREATE TABLE clan_categories (
+    id uuid PRIMARY KEY DEFAULT uuidv7(),
+    server_id text NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    name text NOT NULL,
+    UNIQUE (server_id, name)
+);
+
+CREATE TABLE clan_logs (
+    server_id text NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    clan_tag text NOT NULL,
+    type text NOT NULL,
+    webhook_token text NOT NULL,
+    thread_id text,
+    PRIMARY KEY (server_id, clan_tag, type),
+    FOREIGN KEY (clan_tag, server_id)
+        REFERENCES server_clans(tag, server_id)
+        ON DELETE CASCADE
+)
 
 CREATE TABLE clan_position_roles (
     id uuid PRIMARY KEY DEFAULT uuidv7(),
     server_id text NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
     clan_tag text,
     position text NOT NULL CHECK (position IN ('member', 'elder', 'coleader', 'leader')),
-    role_id text NOT NULL
+    role_id text NOT NULL,
+    FOREIGN KEY (clan_tag, server_id)
+        REFERENCES server_clans(tag, server_id)
+        ON DELETE CASCADE
 );
 
 CREATE UNIQUE INDEX idx_clan_position_roles_clan
