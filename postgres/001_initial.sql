@@ -97,29 +97,29 @@ CREATE TABLE rosters (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
-class TABLE roster_groups (
+CREATE TABLE roster_groups (
     id uuid PRIMARY KEY DEFAULT uuidv7(),
     server_id text NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
     name text NOT NULL,
     PRIMARY KEY (server_id, name)
 );
 
-class TABLE roster_members (
+CREATE TABLE roster_members (
     tag text NOT NULL,
     roster_id uuid NOT NULL REFERENCES rosters(id) ON DELETE CASCADE,
     roster_group_id uuid,
     PRIMARY KEY (tag, roster_id)
 );
 
-class TABLE player_links (
+CREATE TABLE player_links (
     tag text NOT NULL,
 );
 
-class TABLE strikes (
+CREATE TABLE strikes (
    tag text NOT NULL,
 );
 
-class TABLE bans (
+CREATE TABLE bans (
     tag text NOT NULL,
 );
 
@@ -150,7 +150,77 @@ CREATE INDEX idx_one_time_login_tokens_expires_at
 
 CREATE TABLE basic_clan (
     tag text PRIMARY KEY,
-    name text NOT NULL
+    name text NOT NULL,
+    location_id int NOT NULL,
+    cwl_league_id int NOT NULL,
+    public_war_log boolean NOT NULL,
+    war_wins int NOT NULL,
+    member_count int NOT NULL,
+    badge_url text NOT NULL,
+    troops_donated int NOT NULL,
+    troops_received int NOT NULL
 );
+
+CREATE MATERIALIZED VIEW war_league_counts AS
+SELECT
+    c.cwl_league_id,
+    count(*) AS clan_count
+FROM basic_clan c
+GROUP BY c.cwl_league_id;
+
+CREATE MATERIALIZED VIEW clan_leaderboards AS
+SELECT
+    c.tag,
+    c.location_id,
+    rank() OVER (
+        ORDER BY c.troops_donated DESC, c.tag
+    ) AS donated_rank,
+    rank() OVER (
+        ORDER BY c.troops_received DESC, c.tag
+    ) AS received_rank,
+    rank() OVER (
+        ORDER BY c.war_wins DESC, c.tag
+    ) AS war_wins_rank,
+    rank() OVER (
+        PARTITION BY c.location_id
+        ORDER BY c.troops_donated DESC, c.tag
+    ) AS location_donated_rank,
+    rank() OVER (
+        PARTITION BY c.location_id
+        ORDER BY c.troops_received DESC, c.tag
+    ) AS location_received_rank,
+    rank() OVER (
+        PARTITION BY c.location_id
+        ORDER BY c.war_wins DESC, c.tag
+    ) AS location_war_wins_rank
+FROM basic_clan c;
+
+CREATE UNIQUE INDEX idx_clan_leaderboards_tag
+    ON clan_leaderboards (tag);
+
+CREATE INDEX idx_clan_leaderboards_donated_rank
+    ON clan_leaderboards (donated_rank);
+
+CREATE INDEX idx_clan_leaderboards_received_rank
+    ON clan_leaderboards (received_rank);
+
+CREATE INDEX idx_clan_leaderboards_war_wins_rank
+    ON clan_leaderboards (war_wins_rank);
+
+CREATE INDEX idx_clan_leaderboards_location_donated_rank
+    ON clan_leaderboards (location_id, location_donated_rank);
+
+CREATE INDEX idx_clan_leaderboards_location_received_rank
+    ON clan_leaderboards (location_id, location_received_rank);
+
+CREATE INDEX idx_clan_leaderboards_location_war_wins_rank
+    ON clan_leaderboards (location_id, location_war_wins_rank);
+
+CREATE TABLE hall_counts (
+    village_type int NOT NULL,
+    level int NOT NULL,
+    total_count int NOT NULL,
+    PRIMARY KEY (village_type, level)
+)
 
 -- +goose Down
