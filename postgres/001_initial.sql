@@ -116,12 +116,22 @@ CREATE TABLE player_links (
 );
 
 CREATE TABLE strikes (
-   tag text NOT NULL,
+    id text NOT NULL,
+    server_id text NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    tag text NOT NULL,
+    date_created timestamptz NOT NULL,
+    reason text NOT NULL,
+    added_by text NOT NULL,
+    strike_weight int, -- if the weight is NULL, then the strike is a BAN
+    rollover_date timestamptz,
+    PRIMARY KEY (id, server_id)
 );
 
-CREATE TABLE bans (
-    tag text NOT NULL,
-);
+CREATE INDEX idx_strikes_tag
+    ON strikes (tag);
+
+CREATE INDEX idx_strikes_server_id
+    ON strikes (server_id);
 
 CREATE TABLE audit_history (
     id uuid PRIMARY KEY DEFAULT uuidv7(),
