@@ -110,8 +110,27 @@ CREATE TABLE roster_members (
 );
 
 CREATE TABLE player_links (
-    tag text NOT NULL,
+    tag text PRIMARY KEY NULL,
+    is_main boolean NOT NULL DEFAULT false,
+    discord_id text,
+    order_index int NOT NULL DEFAULT 0,
+    is_verified boolean NOT NULL DEFAULT false,
+    source text NOT NULL,
+    added_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE player_links_settings (
+    tag text NOT NULL,
+    server_id text NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    is_main boolean NOT NULL DEFAULT false,
+    PRIMARY KEY (tag, server_id)
+);
+
+CREATE TABLE giveaways (
+    id uuid PRIMARY KEY DEFAULT uuidv7(),
+    server_id text NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+
+)
 
 CREATE TABLE strikes (
     id text NOT NULL,
@@ -279,7 +298,7 @@ CREATE TABLE ticket_panel_buttons (
     auto_transcript boolean NOT NULL DEFAULT true
     staff_to_ping text[] DEFAULT '{}' -- if NULL, then no ping, if array is set, then ping those roles
 
-    -- if any of these are null use the ricket panel settings, otherwise use these as overrides
+    -- if any of these are NULL use the ticket panel settings, otherwise use these as overrides
     parent_channel_id text,
     open_category_id text,
     closed_category_id text,
@@ -318,5 +337,7 @@ CREATE TABLE reminders (
     war_types int NOT NULL DEFAULT 0, -- is bitmask
     trigger_threshold int,
 );
+
+
 
 -- +goose Down
