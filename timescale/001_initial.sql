@@ -8,7 +8,11 @@ CREATE TABLE player_online_events (
     townhall_level smallint NOT NULL
 );
 
-SELECT create_hypertable('player_online_events', 'seen_at', if_not_exists => TRUE);
+SELECT create_hypertable(
+    'player_online_events',
+    'seen_at',
+    if_not_exists => TRUE
+);
 
 CREATE INDEX idx_player_online_events_clan_time
     ON player_online_events (clan_tag, seen_at DESC);
@@ -25,7 +29,11 @@ CREATE TABLE join_leave_history (
     townhall_level smallint NOT NULL
 );
 
-SELECT create_hypertable('join_leave_history', 'event_time', if_not_exists => TRUE);
+SELECT create_hypertable(
+    'join_leave_history',
+    'event_time',
+    if_not_exists => TRUE
+);
 
 CREATE INDEX idx_join_leave_history_clan_time
     ON join_leave_history (clan_tag, event_time DESC);
@@ -56,7 +64,12 @@ CREATE TABLE battlelogs (
     PRIMARY KEY (battle_id, battle_time)
 );
 
-SELECT create_hypertable('battlelogs', 'battle_time', if_not_exists => TRUE);
+SELECT create_hypertable(
+    'battlelogs',
+    'battle_time',
+    chunk_time_interval => INTERVAL '1 day',
+    if_not_exists => TRUE
+);
 
 ALTER TABLE battlelogs SET (
     timescaledb.compress,
@@ -91,32 +104,6 @@ CREATE INDEX idx_battlelogs_army_counts
     WHERE attack = true
       AND player_th = opponent_th
       AND battle_type IN ('ranked', 'legend');
-
-CREATE MATERIALIZED VIEW army_stats_daily
-WITH (timescaledb.continuous) AS
-SELECT
-    time_bucket('1 day', battle_time) AS day_start,
-    player_th,
-    league_id,
-    battle_type,
-    army_hash,
-    count(*) AS attacks,
-    count(*) FILTER (WHERE stars = 0) AS zero_stars,
-    count(*) FILTER (WHERE stars = 1) AS one_stars,
-    count(*) FILTER (WHERE stars = 2) AS two_stars,
-    count(*) FILTER (WHERE stars = 3) AS three_stars
-FROM battlelogs
-WHERE attack = true
-  AND player_th = opponent_th
-  AND battle_type IN ('ranked', 'legend')
-GROUP BY day_start, player_th, league_id, battle_type, army_hash;
-
-SELECT add_continuous_aggregate_policy(
-    'army_stats_daily',
-    start_offset => INTERVAL '2 hours',
-    end_offset => INTERVAL '15 minutes',
-    schedule_interval => INTERVAL '1 hour'
-);
 
 CREATE MATERIALIZED VIEW townhall_stats_daily
 WITH (timescaledb.continuous) AS
