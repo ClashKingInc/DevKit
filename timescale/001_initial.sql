@@ -66,8 +66,54 @@ CREATE TABLE basic_player (
     tag text PRIMARY KEY,
     name text NOT NULL,
     league_id integer,
+    clan_tag text,
     townhall_level integer NOT NULL,
-    last_updated timestamptz NOT NULL DEFAULT now()
+    last_activity timestamptz
+);
+
+CREATE TABLE tracked_player_targets (
+    tag text PRIMARY KEY,
+    enabled boolean NOT NULL DEFAULT true,
+    source text NOT NULL DEFAULT 'manual',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE player_profile_changes (
+    event_time timestamptz NOT NULL DEFAULT now(),
+    player_tag text NOT NULL,
+    clan_tag text NOT NULL DEFAULT '',
+    townhall_level integer NOT NULL DEFAULT 0,
+    change_type text NOT NULL,
+    previous_value jsonb,
+    current_value jsonb
+);
+
+SELECT create_hypertable(
+    'player_profile_changes',
+    'event_time',
+    chunk_time_interval => INTERVAL '7 days',
+    if_not_exists => TRUE
+);
+
+CREATE INDEX idx_player_profile_changes_player_time
+    ON player_profile_changes (player_tag, event_time DESC);
+
+CREATE INDEX idx_player_profile_changes_type_time
+    ON player_profile_changes (change_type, event_time DESC);
+
+CREATE TABLE player_season_stats (
+    player_tag text NOT NULL,
+    season text NOT NULL,
+    clan_tag text NOT NULL DEFAULT '',
+    donated integer NOT NULL DEFAULT 0,
+    received integer NOT NULL DEFAULT 0,
+    capital_gold_donos integer NOT NULL DEFAULT 0,
+    activity_score integer NOT NULL DEFAULT 0,
+    last_online_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (player_tag, season, clan_tag)
 );
 
 CREATE TABLE battlelogs (
@@ -313,10 +359,45 @@ CREATE TABLE player_links_settings (
 );
 
 CREATE TABLE giveaways (
-    id uuid PRIMARY KEY DEFAULT uuidv7(),
+    id text PRIMARY KEY,
     server_id text NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
-    created_at timestamptz NOT NULL DEFAULT now()
+    prize text NOT NULL,
+    channel_id text,
+    status text NOT NULL CHECK (status IN ('scheduled', 'ongoing', 'ended')),
+    start_time timestamptz NOT NULL,
+    end_time timestamptz NOT NULL,
+    winners integer NOT NULL,
+    mentions text[] NOT NULL DEFAULT '{}',
+    text_above_embed text NOT NULL DEFAULT '',
+    text_in_embed text NOT NULL DEFAULT '',
+    text_on_end text NOT NULL DEFAULT '',
+    image_url text,
+    profile_picture_required boolean NOT NULL DEFAULT false,
+    coc_account_required boolean NOT NULL DEFAULT false,
+    roles_mode text NOT NULL DEFAULT 'none',
+    roles text[] NOT NULL DEFAULT '{}',
+    boosters jsonb NOT NULL DEFAULT '[]'::jsonb,
+    entries jsonb NOT NULL DEFAULT '[]'::jsonb,
+    winners_list jsonb NOT NULL DEFAULT '[]'::jsonb,
+    updated boolean NOT NULL DEFAULT false,
+    message_id text,
+    event_pending text,
+    event_pending_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE INDEX idx_giveaways_due_start
+    ON giveaways (start_time)
+    WHERE status = 'scheduled';
+
+CREATE INDEX idx_giveaways_due_end
+    ON giveaways (end_time)
+    WHERE status = 'ongoing';
+
+CREATE INDEX idx_giveaways_pending_event
+    ON giveaways (event_pending_at)
+    WHERE event_pending IS NOT NULL;
 
 CREATE TABLE strikes (
     id text NOT NULL,
@@ -360,13 +441,92 @@ CREATE INDEX idx_one_time_login_tokens_user_id
 CREATE INDEX idx_one_time_login_tokens_expires_at
     ON one_time_login_tokens (expires_at);
 
+CREATE TABLE mobile_push_devices (
+    id uuid PRIMARY KEY DEFAULT uuidv7(),
+    user_id text NOT NULL,
+    device_id text NOT NULL,
+    platform text NOT NULL CHECK (platform IN ('ios', 'android')),
+    provider text NOT NULL CHECK (provider IN ('apns', 'fcm')),
+    environment text NOT NULL DEFAULT 'production' CHECK (environment IN ('sandbox', 'production')),
+    token_ciphertext text NOT NULL,
+    token_hash text NOT NULL UNIQUE,
+    app_version text NOT NULL DEFAULT '',
+    build_number text NOT NULL DEFAULT '',
+    os_version text NOT NULL DEFAULT '',
+    device_model text NOT NULL DEFAULT '',
+    enabled boolean NOT NULL DEFAULT true,
+    last_seen_at timestamptz NOT NULL DEFAULT now(),
+    disabled_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (user_id, device_id, provider, environment)
+);
+
+CREATE INDEX idx_mobile_push_devices_user_device
+    ON mobile_push_devices (user_id, device_id);
+
+CREATE INDEX idx_mobile_push_devices_enabled_provider
+    ON mobile_push_devices (provider, environment, enabled)
+    WHERE enabled = true;
+
+CREATE TABLE mobile_war_subscriptions (
+    id uuid PRIMARY KEY DEFAULT uuidv7(),
+    user_id text NOT NULL,
+    device_id text NOT NULL,
+    clan_tag text NOT NULL,
+    war_start_enabled boolean NOT NULL DEFAULT true,
+    score_change_enabled boolean NOT NULL DEFAULT true,
+    war_end_enabled boolean NOT NULL DEFAULT true,
+    cwl_rank_enabled boolean NOT NULL DEFAULT true,
+    live_activity_enabled boolean NOT NULL DEFAULT true,
+    enabled boolean NOT NULL DEFAULT true,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (user_id, device_id, clan_tag)
+);
+
+CREATE INDEX idx_mobile_war_subscriptions_clan_enabled
+    ON mobile_war_subscriptions (clan_tag, enabled)
+    WHERE enabled = true;
+
+CREATE INDEX idx_mobile_war_subscriptions_user_device
+    ON mobile_war_subscriptions (user_id, device_id);
+
+CREATE TABLE mobile_live_activities (
+    id uuid PRIMARY KEY DEFAULT uuidv7(),
+    user_id text NOT NULL,
+    device_id text NOT NULL,
+    activity_id text NOT NULL,
+    clan_tag text NOT NULL,
+    war_id text,
+    cwl_war_tag text,
+    environment text NOT NULL DEFAULT 'production' CHECK (environment IN ('sandbox', 'production')),
+    push_token_ciphertext text NOT NULL,
+    push_token_hash text NOT NULL UNIQUE,
+    status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'ended', 'stale', 'disabled')),
+    last_payload_hash text,
+    started_at timestamptz NOT NULL DEFAULT now(),
+    ended_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (user_id, device_id, activity_id)
+);
+
+CREATE INDEX idx_mobile_live_activities_clan_active
+    ON mobile_live_activities (clan_tag, status)
+    WHERE status = 'active';
+
+CREATE INDEX idx_mobile_live_activities_war_active
+    ON mobile_live_activities (war_id, cwl_war_tag, status)
+    WHERE status = 'active';
+
 CREATE TABLE basic_clan (
     tag text PRIMARY KEY,
     name text NOT NULL,
     description text NOT NULL DEFAULT '',
     clan_level integer NOT NULL DEFAULT 0,
     location_id integer,
-    cwl_league_id integer,
+    cwl_league_id integer NOT NULL DEFAULT 48000000,
     capital_league_id integer,
     public_war_log boolean NOT NULL,
     war_wins integer NOT NULL,
@@ -383,6 +543,121 @@ CREATE INDEX idx_basic_clan_member_count
 
 CREATE INDEX idx_basic_clan_last_active
     ON basic_clan (last_active);
+
+CREATE TABLE war_log_index (
+    war_id text NOT NULL,
+    clan_tag text NOT NULL,
+    opponent_tag text NOT NULL,
+    prep_time timestamptz NOT NULL,
+    start_time timestamptz,
+    end_time timestamptz NOT NULL,
+    clan_badge_url text NOT NULL DEFAULT '',
+    opponent_badge_url text NOT NULL DEFAULT '',
+    size integer NOT NULL,
+    war_type text NOT NULL CHECK (war_type IN ('random', 'cwl', 'friendly')),
+    state text NOT NULL,
+    battle_modifier text NOT NULL DEFAULT '',
+    cwl_war_tag text,
+    r2_key text,
+    stored_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (war_id, clan_tag)
+);
+
+CREATE INDEX idx_war_log_index_clan_end_time
+    ON war_log_index (clan_tag, end_time DESC);
+
+CREATE INDEX idx_war_log_index_pending_store
+    ON war_log_index (end_time)
+    WHERE stored_at IS NULL;
+
+CREATE TABLE war_attack_events (
+    war_id text NOT NULL,
+    war_end_time timestamptz NOT NULL,
+    war_type text NOT NULL,
+    war_size integer NOT NULL,
+    attacking_clan_tag text NOT NULL,
+    defending_clan_tag text NOT NULL,
+    attacker_tag text NOT NULL,
+    defender_tag text NOT NULL,
+    attacker_townhall smallint NOT NULL,
+    defender_townhall smallint NOT NULL,
+    attacker_map_position smallint NOT NULL,
+    defender_map_position smallint NOT NULL,
+    stars smallint NOT NULL,
+    destruction_percentage smallint NOT NULL,
+    duration integer NOT NULL,
+    attack_order integer NOT NULL,
+    battle_modifier text NOT NULL DEFAULT '',
+    PRIMARY KEY (war_id, war_end_time, attacker_tag, defender_tag, attack_order)
+);
+
+SELECT create_hypertable(
+    'war_attack_events',
+    'war_end_time',
+    chunk_time_interval => INTERVAL '1 day',
+    if_not_exists => TRUE
+);
+
+CREATE INDEX idx_war_attack_events_clan_time
+    ON war_attack_events (attacking_clan_tag, war_end_time DESC);
+
+CREATE INDEX idx_war_attack_events_player_time
+    ON war_attack_events (attacker_tag, war_end_time DESC);
+
+CREATE INDEX idx_war_attack_events_hitrate
+    ON war_attack_events (attacker_townhall, defender_townhall, war_type, war_end_time DESC);
+
+CREATE TABLE war_schedule (
+    war_id text PRIMARY KEY,
+    source_clan_tag text NOT NULL,
+    opponent_tag text NOT NULL,
+    prep_time timestamptz NOT NULL,
+    end_time timestamptz NOT NULL,
+    next_run_at timestamptz NOT NULL,
+    cwl_war_tag text,
+    status text NOT NULL CHECK (status IN ('pending', 'storing', 'complete', 'failed')),
+    attempts integer NOT NULL DEFAULT 0,
+    last_error text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_war_schedule_pending
+    ON war_schedule (next_run_at)
+    WHERE status IN ('pending', 'storing');
+
+CREATE TABLE cwl_groups (
+    cwl_id text PRIMARY KEY,
+    season text NOT NULL,
+    cwl_league_id integer NOT NULL,
+    clan_tags text[] NOT NULL,
+    rounds jsonb NOT NULL,
+    data jsonb NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_cwl_groups_season_league
+    ON cwl_groups (season, cwl_league_id);
+
+CREATE TABLE leaderboard_snapshot_items (
+    kind text NOT NULL,
+    location_id text NOT NULL,
+    date date NOT NULL,
+    tag text NOT NULL,
+    name text NOT NULL,
+    rank integer NOT NULL,
+    data jsonb NOT NULL,
+    PRIMARY KEY (kind, location_id, date, tag)
+);
+
+CREATE INDEX idx_leaderboard_snapshot_items_tag_history
+    ON leaderboard_snapshot_items (kind, tag, date DESC);
+
+CREATE INDEX idx_leaderboard_snapshot_items_location_rank
+    ON leaderboard_snapshot_items (kind, location_id, date DESC, rank);
 
 CREATE MATERIALIZED VIEW war_league_counts AS
 SELECT
