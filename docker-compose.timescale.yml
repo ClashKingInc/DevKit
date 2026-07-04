@@ -10,7 +10,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "${TIMESCALE_PORT}:5432"
+      - "100.96.0.1:${TIMESCALE_PORT}:5432"
     volumes:
       - timescale-data:/var/lib/postgresql
     healthcheck:

@@ -9,7 +9,7 @@ services:
       VALKEY_PASSWORD: ${VALKEY_PASSWORD}
     command: ["sh", "-c", "exec valkey-server --appendonly yes --requirepass \"$${VALKEY_PASSWORD}\""]
     ports:
-      - "${VALKEY_PORT}:6379"
+      - "100.96.0.1:${VALKEY_PORT}:6379"
     volumes:
       - valkey-data:/data
     healthcheck:

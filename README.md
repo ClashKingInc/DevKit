@@ -19,7 +19,7 @@ docker compose -f docker-compose.valkey.yml up -d
 docker compose -f docker-compose.jaeger.yml up -d
 ```
 
-To start all three from one command:
+To start all three service files from one command:
 
 ```bash
 docker compose \
@@ -33,11 +33,36 @@ Services:
 
 | Service | URL / address |
 | --- | --- |
-| Timescale/Postgres | `postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${TIMESCALE_PORT}/${POSTGRES_DB}?sslmode=disable` |
-| Valkey | `localhost:${VALKEY_PORT}` |
-| Jaeger UI | `http://localhost:${JAEGER_UI_PORT}` |
-| OTLP HTTP | `http://localhost:${OTEL_HTTP_PORT}` |
-| OTLP gRPC | `localhost:${OTEL_GRPC_PORT}` |
+| Timescale/Postgres | `postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@100.96.0.1:${TIMESCALE_PORT}/${POSTGRES_DB}?sslmode=disable` |
+| Valkey | `100.96.0.1:${VALKEY_PORT}` |
+| Jaeger UI | `http://100.96.0.1:${JAEGER_UI_PORT}` |
+| OTLP HTTP | `http://100.96.0.1:${OTEL_HTTP_PORT}` |
+| OTLP gRPC | `100.96.0.1:${OTEL_GRPC_PORT}` |
+
+Host ports are bound to the server's Cloudflare Mesh IP, `100.96.0.1`, so
+services are reachable to devices on the Mesh but not published on the public
+interface.
+
+## Cloudflare Mesh
+
+Cloudflare Mesh is not a `cloudflared` tunnel service. Mesh nodes run the
+Cloudflare One Client (`warp-cli`) on the Linux host in headless connector mode.
+Install it on the server from the Cloudflare Zero Trust dashboard:
+
+1. Go to **Networking** > **Mesh**.
+2. Select **Add a node**.
+3. Create the node and copy the Linux install commands from Cloudflare.
+4. Run the generated install commands on the server.
+5. Register and connect the node:
+
+```bash
+sudo warp-cli connector new <TOKEN>
+sudo warp-cli connect
+warp-cli status
+```
+
+After the node is online, connect to these services through the server's Mesh IP
+and the Mesh-bound host ports.
 
 ## Apply Timescale Schema
 
@@ -46,14 +71,14 @@ Use goose when you want migration semantics:
 ```bash
 go run github.com/pressly/goose/v3/cmd/goose@latest \
   -dir timescale \
-  postgres "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${TIMESCALE_PORT}/${POSTGRES_DB}?sslmode=disable" \
+  postgres "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@100.96.0.1:${TIMESCALE_PORT}/${POSTGRES_DB}?sslmode=disable" \
   up
 ```
 
 For a throwaway fresh database where only the initial schema is needed:
 
 ```bash
-psql "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${TIMESCALE_PORT}/${POSTGRES_DB}?sslmode=disable" \
+psql "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@100.96.0.1:${TIMESCALE_PORT}/${POSTGRES_DB}?sslmode=disable" \
   -f timescale/001_initial.sql
 ```
 
@@ -66,8 +91,8 @@ rollback sections.
 When running `clashking_tracking` from the host, use:
 
 ```bash
-TIMESCALE_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${TIMESCALE_PORT}/${POSTGRES_DB}?sslmode=disable"
-VALKEY_ADDR="localhost:${VALKEY_PORT}"
+TIMESCALE_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@100.96.0.1:${TIMESCALE_PORT}/${POSTGRES_DB}?sslmode=disable"
+VALKEY_ADDR="100.96.0.1:${VALKEY_PORT}"
 VALKEY_PASSWORD="${VALKEY_PASSWORD}"
 ```
 
@@ -78,7 +103,7 @@ without uploading to a local object store.
 For tracing from the host, set the tracking config OTLP endpoint to Jaeger:
 
 ```text
-http://localhost:${OTEL_HTTP_PORT}
+http://100.96.0.1:${OTEL_HTTP_PORT}
 ```
 
 For tracing from another compose container on this network, use:
@@ -92,7 +117,7 @@ http://jaeger:4318
 Open Redis Insight or another Redis-compatible client and add:
 
 ```text
-Host: localhost
+Host: 100.96.0.1
 Port: ${VALKEY_PORT}
 Password: ${VALKEY_PASSWORD}
 ```
