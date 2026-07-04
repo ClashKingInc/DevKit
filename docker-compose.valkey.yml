@@ -1,0 +1,22 @@
+name: clashking_tracking
+
+services:
+  valkey:
+    image: valkey/valkey:8
+    container_name: clashking-tracking-valkey
+    restart: unless-stopped
+    environment:
+      VALKEY_PASSWORD: ${VALKEY_PASSWORD:?set VALKEY_PASSWORD}
+    command: ["sh", "-c", "exec valkey-server --appendonly yes --requirepass \"$${VALKEY_PASSWORD}\""]
+    ports:
+      - "${VALKEY_PORT:?set VALKEY_PORT}:6379"
+    volumes:
+      - valkey-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "VALKEYCLI_AUTH=\"$${VALKEY_PASSWORD}\" valkey-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  valkey-data:
