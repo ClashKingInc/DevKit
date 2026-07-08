@@ -864,7 +864,6 @@ SELECT create_hypertable(
 CREATE TABLE public.player_links (
     tag text NOT NULL,
     is_main boolean DEFAULT false NOT NULL,
-    discord_id text,
     order_index integer DEFAULT 0 NOT NULL,
     is_verified boolean DEFAULT false NOT NULL,
     source text NOT NULL,
@@ -1209,6 +1208,44 @@ CREATE TABLE public.search_groups (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
+
+
+--
+-- Name: user_bookmarks; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_bookmarks (
+    user_id text NOT NULL,
+    entity_type text NOT NULL,
+    tag text NOT NULL,
+    order_index integer DEFAULT 0 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT user_bookmarks_entity_type_check CHECK ((entity_type = ANY (ARRAY['player'::text, 'clan'::text])))
+);
+
+
+--
+-- Name: user_recent_searches; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_recent_searches (
+    user_id text NOT NULL,
+    entity_type text NOT NULL,
+    tag text NOT NULL,
+    data jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT user_recent_searches_entity_type_check CHECK ((entity_type = ANY (ARRAY['player'::text, 'clan'::text])))
+);
+
+SELECT create_hypertable(
+    'user_recent_searches',
+    'created_at',
+    chunk_time_interval => INTERVAL '7 days',
+    create_default_indexes => FALSE,
+    if_not_exists => TRUE
+);
+
+SELECT add_retention_policy('user_recent_searches', INTERVAL '90 days', if_not_exists => TRUE);
 
 
 --
@@ -2297,6 +2334,22 @@ ALTER TABLE public.tracked_player_targets
 
 
 --
+-- Name: user_bookmarks user_bookmarks_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.user_bookmarks
+    ADD CONSTRAINT user_bookmarks_pkey PRIMARY KEY (user_id, entity_type, tag);
+
+
+--
+-- Name: user_recent_searches user_recent_searches_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.user_recent_searches
+    ADD CONSTRAINT user_recent_searches_pkey PRIMARY KEY (user_id, entity_type, tag, created_at);
+
+
+--
 -- Name: user_settings user_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3071,6 +3124,27 @@ CREATE INDEX idx_tracking_process_stats_script_time ON public.tracking_process_s
 
 
 --
+-- Name: idx_user_bookmarks_order; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_bookmarks_order ON public.user_bookmarks USING btree (user_id, entity_type, order_index);
+
+
+--
+-- Name: idx_user_recent_searches_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_recent_searches_created ON public.user_recent_searches USING btree (user_id, entity_type, created_at DESC);
+
+
+--
+-- Name: idx_user_recent_searches_expiry; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_recent_searches_expiry ON public.user_recent_searches USING btree (created_at);
+
+
+--
 -- Name: idx_user_settings_search_gin; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3450,6 +3524,7 @@ ALTER TABLE public.tickets
 -- +goose Down
 SELECT remove_continuous_aggregate_policy('townhall_stats_daily', if_exists => TRUE);
 SELECT remove_compression_policy('battlelogs', if_exists => TRUE);
+SELECT remove_retention_policy('user_recent_searches', if_exists => TRUE);
 SELECT remove_retention_policy('tracking_domain_stats', if_exists => TRUE);
 SELECT remove_retention_policy('tracking_process_stats', if_exists => TRUE);
 DROP MATERIALIZED VIEW IF EXISTS public.townhall_stats_daily CASCADE;
@@ -3462,6 +3537,8 @@ DROP TABLE IF EXISTS public.war_missed_attacks CASCADE;
 DROP TABLE IF EXISTS public.war_attacks CASCADE;
 DROP TABLE IF EXISTS public.user_settings CASCADE;
 DROP TABLE IF EXISTS public.tracked_player_targets CASCADE;
+DROP TABLE IF EXISTS public.user_recent_searches CASCADE;
+DROP TABLE IF EXISTS public.user_bookmarks CASCADE;
 DROP TABLE IF EXISTS public.tickets CASCADE;
 DROP TABLE IF EXISTS public.ticket_panels CASCADE;
 DROP TABLE IF EXISTS public.ticket_panel_staff_permissions CASCADE;
