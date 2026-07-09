@@ -1,0 +1,11 @@
+{
+  "name": "clashking-design-system",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/css"
+  ],
+  "scripts": {
+    "check": "npm --workspace @clashking/design-system-css run check"
+  }
+}

@@ -1,0 +1,88 @@
+:root {
+  color-scheme: dark;
+
+  /* Brand / app palette extracted from the shipped ClashKing app direction. */
+  --ck-color-primary-red: #d90709;
+  --ck-color-primary-red-light: #bf0000;
+  --ck-color-secondary-blue: #026cc2;
+  --ck-color-secondary-blue-light: #035293;
+  --ck-color-war-gold: #e8a524;
+  --ck-color-capital-purple: #8d63d9;
+  --ck-color-builder-blue: #2a9fd6;
+  --ck-color-donation-green: #22c55e;
+
+  /* Web/admin semantic dark theme. */
+  --ck-color-bg: #08111f;
+  --ck-color-bg-strong: #030304;
+  --ck-color-surface: rgba(15, 23, 42, 0.86);
+  --ck-color-surface-solid: #111c31;
+  --ck-color-surface-soft: rgba(30, 41, 59, 0.72);
+  --ck-color-surface-muted: rgba(148, 163, 184, 0.08);
+  --ck-color-border: rgba(148, 163, 184, 0.18);
+  --ck-color-border-strong: rgba(148, 163, 184, 0.32);
+  --ck-color-text: #e5edf8;
+  --ck-color-text-muted: #96a3b8;
+  --ck-color-text-inverse: #241605;
+  --ck-color-focus: rgba(232, 165, 36, 0.38);
+
+  --ck-color-success: #22c55e;
+  --ck-color-success-bg: rgba(34, 197, 94, 0.12);
+  --ck-color-success-text: #a7f3d0;
+  --ck-color-warning: #f59e0b;
+  --ck-color-warning-bg: rgba(245, 158, 11, 0.12);
+  --ck-color-warning-text: #fde68a;
+  --ck-color-danger: #ef4444;
+  --ck-color-danger-bg: rgba(239, 68, 68, 0.12);
+  --ck-color-danger-text: #fecaca;
+  --ck-color-info: #38bdf8;
+  --ck-color-info-bg: rgba(56, 189, 248, 0.12);
+  --ck-color-info-text: #bae6fd;
+
+  --ck-font-family: Inter, Roboto, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  --ck-font-size-label-sm: 0.76rem;
+  --ck-font-size-label: 0.875rem;
+  --ck-font-size-body-sm: 0.9rem;
+  --ck-font-size-body: 1rem;
+  --ck-font-size-title-sm: 1.125rem;
+  --ck-font-size-title: 1.35rem;
+  --ck-font-size-display: clamp(2rem, 4vw, 3.8rem);
+
+  --ck-font-weight-medium: 500;
+  --ck-font-weight-semibold: 700;
+  --ck-font-weight-bold: 800;
+  --ck-font-weight-black: 900;
+
+  --ck-space-1: 4px;
+  --ck-space-2: 8px;
+  --ck-space-3: 12px;
+  --ck-space-4: 16px;
+  --ck-space-5: 20px;
+  --ck-space-6: 24px;
+  --ck-space-8: 32px;
+
+  --ck-radius-control: 12px;
+  --ck-radius-chip: 16px;
+  --ck-radius-panel: 28px;
+  --ck-radius-pill: 999px;
+
+  --ck-shadow-panel: 0 24px 80px rgba(0, 0, 0, 0.34);
+  --ck-shadow-accent: 0 10px 28px rgba(245, 158, 11, 0.24);
+
+  --ck-backdrop-blur: blur(18px);
+  --ck-transition-fast: 160ms ease;
+}
+
+.ck-theme-light {
+  color-scheme: light;
+  --ck-color-bg: #f4f4f4;
+  --ck-color-bg-strong: #ffffff;
+  --ck-color-surface: rgba(255, 255, 255, 0.9);
+  --ck-color-surface-solid: #ffffff;
+  --ck-color-surface-soft: rgba(244, 244, 244, 0.9);
+  --ck-color-surface-muted: rgba(2, 6, 23, 0.05);
+  --ck-color-border: rgba(15, 23, 42, 0.12);
+  --ck-color-border-strong: rgba(15, 23, 42, 0.22);
+  --ck-color-text: #111827;
+  --ck-color-text-muted: #4b5563;
+}

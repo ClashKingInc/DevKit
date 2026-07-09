@@ -1,0 +1,23 @@
+{
+  "name": "@clashking/design-system-css",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.css",
+  "style": "./index.css",
+  "exports": {
+    ".": "./index.css",
+    "./tokens.css": "./tokens.css",
+    "./components.css": "./components.css"
+  },
+  "scripts": {
+    "check": "node -e \"console.log('CSS package ready')\""
+  },
+  "files": [
+    "index.css",
+    "tokens.css",
+    "components.css",
+    "index.d.ts"
+  ],
+  "types": "./index.d.ts"
+}
