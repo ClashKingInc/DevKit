@@ -2,3 +2,6 @@ node_modules
 dist
 .DS_Store
 *.tsbuildinfo
+.dart_tool
+.flutter-plugins-dependencies
+pubspec.lock

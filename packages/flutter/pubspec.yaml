@@ -1,0 +1,14 @@
+name: clashking_design_system
+description: Shared ClashKing design tokens for Flutter clients.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.10.0 <4.0.0'
+
+flutter:
+  uses-material-design: false
+
+dependencies:
+  flutter:
+    sdk: flutter
