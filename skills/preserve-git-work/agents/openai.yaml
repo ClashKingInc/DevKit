@@ -1,0 +1,4 @@
+interface:
+  display_name: "Preserve Git Work"
+  short_description: "Protect dirty work and exact branch state"
+  default_prompt: "Use $preserve-git-work to make this Git change without losing local work."

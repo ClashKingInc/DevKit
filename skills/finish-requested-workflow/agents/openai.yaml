@@ -1,0 +1,4 @@
+interface:
+  display_name: "Finish Requested Workflow"
+  short_description: "Carry work through the requested endpoint"
+  default_prompt: "Use $finish-requested-workflow to complete this task through its exact terminal condition."

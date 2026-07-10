@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sync Contract Changes"
+  short_description: "Update authoritative contracts and consumers"
+  default_prompt: "Use $sync-contract-changes to migrate this public contract across its real consumers."

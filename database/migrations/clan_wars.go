@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -79,21 +78,6 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) (err error) {
 			}
 		}()
 	}
-	writeR2 := !envBool(cfg.Env, "CLAN_WARS_SKIP_R2")
-	var uploader warObjectUploader = noopR2Uploader{}
-	if writeR2 {
-		r2, err := migrateutil.R2FromConfig(cfg)
-		if err != nil {
-			return err
-		}
-		uploader = newAsyncR2Uploader(
-			ctx,
-			r2,
-			clanWarEnvInt(cfg.Env, "R2_UPLOAD_WORKERS", 32),
-			clanWarEnvInt(cfg.Env, "R2_UPLOAD_QUEUE", 50000),
-		)
-	}
-	defer uploader.Close()
 	collection := mongoClient.Database("looper").Collection("clan_war")
 	var wars []warIndexInsert
 	var members []warMemberInsert
@@ -114,8 +98,8 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) (err error) {
 		docsInBatch = 0
 		return err
 	}
-	seen, err := streamClanWarDocs(ctx, cfg, cp, "clan_war_id", collection, clanWarProjection(writeR2), func(doc clanWarDoc) (bool, error) {
-		accepted, err := appendClanWarDoc(doc, writeR2, uploader, &wars, &members, &missedAttacks, &attacks)
+	seen, err := streamClanWarDocs(ctx, cfg, cp, "clan_war_id", collection, clanWarProjection(), func(doc clanWarDoc) (bool, error) {
+		accepted, err := appendClanWarDoc(doc, &wars, &members, &missedAttacks, &attacks)
 		if err != nil || !accepted {
 			return false, err
 		}
@@ -125,14 +109,11 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) (err error) {
 	if err != nil {
 		return err
 	}
-	if err := uploader.Wait(); err != nil {
-		return err
-	}
 	fmt.Printf("clan_wars: scanned_docs=%d\n", seen)
 	return nil
 }
 
-func appendClanWarDoc(doc clanWarDoc, writeR2 bool, uploader warObjectUploader, wars *[]warIndexInsert, members *[]warMemberInsert, missedAttacks *[]warMissedAttackInsert, attacks *[]warAttackInsert) (bool, error) {
+func appendClanWarDoc(doc clanWarDoc, wars *[]warIndexInsert, members *[]warMemberInsert, missedAttacks *[]warMissedAttackInsert, attacks *[]warAttackInsert) (bool, error) {
 	clanTag := doc.Data.Clan.Tag
 	opponentTag := doc.Data.Opponent.Tag
 	prepAt, prepOK := migrateutil.Time(doc.Data.PreparationStartTime)
@@ -171,12 +152,6 @@ func appendClanWarDoc(doc clanWarDoc, writeR2 bool, uploader warObjectUploader, 
 	appendWarMemberRows(members, warID, endAt, doc.Data.Clan, doc.Data.Opponent)
 	appendWarMissedAttackRows(missedAttacks, warID, endAt, attacksPerMember, doc.Data.Clan, doc.Data.Opponent)
 	appendWarAttackRows(attacks, warID, endAt, warType, size, battleModifier, doc.Data.Clan, doc.Data.Opponent)
-	if writeR2 {
-		raw := []byte(migrateutil.RawJSON(doc.Data))
-		if err := uploader.Enqueue(warID, raw); err != nil {
-			return false, err
-		}
-	}
 	return true, nil
 }
 
@@ -244,10 +219,7 @@ type warAttackDoc struct {
 	Order                 int    `bson:"order" json:"order"`
 }
 
-func clanWarProjection(includeFullData bool) bson.M {
-	if includeFullData {
-		return bson.M{"data": 1, "type": 1, "war_tag": 1, "endTime": 1, "custom_id": 1, "war_id": 1}
-	}
+func clanWarProjection() bson.M {
 	return bson.M{
 		"data.clan.tag":                                       1,
 		"data.clan.name":                                      1,
@@ -377,127 +349,6 @@ func streamClanWarDocs(
 		}
 	}
 	return seen, nil
-}
-
-type r2Object struct {
-	key         string
-	raw         []byte
-	contentType string
-}
-
-type warObjectUploader interface {
-	Enqueue(string, []byte) error
-	Wait() error
-	Close()
-}
-
-type noopR2Uploader struct{}
-
-func (noopR2Uploader) Enqueue(string, []byte) error { return nil }
-func (noopR2Uploader) Wait() error                  { return nil }
-func (noopR2Uploader) Close()                       {}
-
-type asyncR2Uploader struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	store  interface {
-		PutObject(context.Context, string, []byte, string) error
-	}
-	jobs      chan r2Object
-	pending   sync.WaitGroup
-	workers   sync.WaitGroup
-	errMu     sync.Mutex
-	firstErr  error
-	closeOnce sync.Once
-}
-
-func newAsyncR2Uploader(ctx context.Context, store interface {
-	PutObject(context.Context, string, []byte, string) error
-}, workers int, queueSize int) *asyncR2Uploader {
-	if workers <= 0 {
-		workers = 1
-	}
-	if queueSize <= 0 {
-		queueSize = 1024
-	}
-	ctx, cancel := context.WithCancel(ctx)
-	uploader := &asyncR2Uploader{
-		ctx:    ctx,
-		cancel: cancel,
-		store:  store,
-		jobs:   make(chan r2Object, queueSize),
-	}
-	for range workers {
-		uploader.workers.Add(1)
-		go uploader.run()
-	}
-	return uploader
-}
-
-func (u *asyncR2Uploader) Enqueue(key string, raw []byte) error {
-	if err := u.Err(); err != nil {
-		return err
-	}
-	select {
-	case <-u.ctx.Done():
-		return u.Err()
-	default:
-	}
-	u.pending.Add(1)
-	object := r2Object{key: key, raw: raw, contentType: "application/json"}
-	select {
-	case <-u.ctx.Done():
-		u.pending.Done()
-		return u.Err()
-	case u.jobs <- object:
-		return nil
-	}
-}
-
-func (u *asyncR2Uploader) Wait() error {
-	u.pending.Wait()
-	return u.Err()
-}
-
-func (u *asyncR2Uploader) Close() {
-	u.closeOnce.Do(func() {
-		close(u.jobs)
-		u.workers.Wait()
-		u.cancel()
-	})
-}
-
-func (u *asyncR2Uploader) Err() error {
-	u.errMu.Lock()
-	defer u.errMu.Unlock()
-	if u.firstErr != nil {
-		return u.firstErr
-	}
-	if err := u.ctx.Err(); err != nil && err != context.Canceled {
-		return err
-	}
-	return nil
-}
-
-func (u *asyncR2Uploader) setErr(err error) {
-	if err == nil {
-		return
-	}
-	u.errMu.Lock()
-	if u.firstErr == nil {
-		u.firstErr = err
-		u.cancel()
-	}
-	u.errMu.Unlock()
-}
-
-func (u *asyncR2Uploader) run() {
-	defer u.workers.Done()
-	for object := range u.jobs {
-		err := u.store.PutObject(u.ctx, object.key, migrateutil.Snappy(object.raw), object.contentType)
-		u.setErr(err)
-		u.pending.Done()
-	}
 }
 
 type warIndexInsert struct {

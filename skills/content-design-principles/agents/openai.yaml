@@ -1,0 +1,4 @@
+interface:
+  display_name: "Content Design Principles"
+  short_description: "Clear user-first writing rules"
+  default_prompt: "Use $content-design-principles to write a concise user-facing update."

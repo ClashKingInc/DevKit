@@ -1,5 +1,3 @@
-//go:build ignore
-
 package main
 
 import (
@@ -17,6 +15,7 @@ import (
 	"time"
 
 	"clashking_devkit_database_migrations/migrateutil"
+
 	"github.com/disgoorg/disgo/discord"
 	disgo "github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
@@ -26,7 +25,7 @@ import (
 const (
 	defaultLinkAPIBaseURL = "https://cocdiscord.link"
 	defaultLinkBatchSize  = 1000
-	linkSource            = "discord_links_import"
+	linkSource            = "clashking"
 )
 
 type settings struct {
@@ -74,10 +73,6 @@ func runPlayerLinks(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 
-	cp, err := migrateutil.LoadCheckpoint(cfg, "player_links")
-	if err != nil {
-		return err
-	}
 	var pool interface {
 		Begin(context.Context) (pgx.Tx, error)
 	}
@@ -105,14 +100,8 @@ func runPlayerLinks(ctx context.Context, cfg migrateutil.Config) error {
 	fmt.Fprintf(os.Stderr, "player_links: guilds=%d batch_size=%d dry_run=%t link_api=%s\n", len(guilds), s.BatchSize, s.DryRun, s.LinkAPIBaseURL)
 
 	seenDiscordIDs := map[string]struct{}{}
-	var scannedGuilds, skippedGuilds, membersSeen, linkBatches, rowsWritten int64
+	var scannedGuilds, membersSeen, linkBatches, rowsWritten int64
 	for i, guild := range guilds {
-		if cp.Get(completedGuildKey(guild.ID)) == "true" {
-			skippedGuilds++
-			fmt.Fprintf(os.Stderr, "player_links: skip completed guild=%s name=%q index=%d/%d\n", guild.ID, guild.Name, i+1, len(guilds))
-			continue
-		}
-
 		memberIDs, err := discord.guildMemberIDs(ctx, guild.ID)
 		if err != nil {
 			return fmt.Errorf("guild %s members: %w", guild.ID, err)
@@ -146,16 +135,10 @@ func runPlayerLinks(ctx context.Context, cfg migrateutil.Config) error {
 			rowsWritten += written
 			fmt.Fprintf(os.Stderr, "player_links: wrote guild=%s link_batch=%d ids=%d rows=%d total_rows=%d\n", guild.ID, linkBatches, len(batch), written, rowsWritten)
 		}
-
-		if !s.DryRun {
-			if err := cp.Set(completedGuildKey(guild.ID), "true"); err != nil {
-				return err
-			}
-		}
 	}
 
-	fmt.Printf("player_links: guilds_scanned=%d guilds_skipped=%d members_seen=%d unique_discord_ids=%d link_api_batches=%d rows_%s=%d\n",
-		scannedGuilds, skippedGuilds, membersSeen, len(seenDiscordIDs), linkBatches, ternary(s.DryRun, "staged", "written"), rowsWritten)
+	fmt.Printf("player_links: guilds_scanned=%d members_seen=%d unique_discord_ids=%d link_api_batches=%d rows_%s=%d\n",
+		scannedGuilds, membersSeen, len(seenDiscordIDs), linkBatches, ternary(s.DryRun, "staged", "written"), rowsWritten)
 	return nil
 }
 
@@ -204,25 +187,36 @@ func guildsForRun(ctx context.Context, source *discordSource, s settings) ([]gui
 
 func (s *discordSource) botGuilds(ctx context.Context) ([]guildRef, error) {
 	var guilds []guildRef
-	var before snowflake.ID
+	seen := map[string]struct{}{}
+	var after snowflake.ID
 	for {
 		if err := s.wait(ctx); err != nil {
 			return nil, err
 		}
-		page, err := s.client.GetCurrentUserGuilds("", before, 0, 200, false, disgo.WithCtx(ctx))
+		page, err := s.client.GetCurrentUserGuilds("", 0, after, 200, false, disgo.WithCtx(ctx))
 		if err != nil {
 			return nil, err
 		}
 		if len(page) == 0 {
 			break
 		}
+		var maxID snowflake.ID
+		newGuilds := 0
 		for _, guild := range page {
+			if guild.ID > maxID {
+				maxID = guild.ID
+			}
+			if _, ok := seen[guild.ID.String()]; ok {
+				continue
+			}
+			seen[guild.ID.String()] = struct{}{}
 			guilds = append(guilds, guildRef{ID: guild.ID.String(), Name: guild.Name})
+			newGuilds++
 		}
-		before = page[len(page)-1].ID
-		if len(page) < 200 {
+		if maxID <= after || newGuilds == 0 {
 			break
 		}
+		after = maxID
 	}
 	sort.Slice(guilds, func(i, j int) bool { return guilds[i].ID < guilds[j].ID })
 	return guilds, nil
@@ -495,15 +489,15 @@ func flushPlayerLinkRows(ctx context.Context, pool interface {
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO public.player_links (tag, is_main, order_index, is_verified, source, added_at, user_id, verified_at, updated_at)
-		SELECT tag, false, order_index, true, $1, now(), user_id, now(), now()
+		SELECT tag, false, order_index, false, $1, now(), user_id, NULL, now()
 		FROM _ck_player_links
 		WHERE tag <> '' AND user_id <> ''
 		ON CONFLICT (tag) DO UPDATE SET
 			user_id = EXCLUDED.user_id,
 			order_index = EXCLUDED.order_index,
 			source = EXCLUDED.source,
-			is_verified = true,
-			verified_at = COALESCE(public.player_links.verified_at, EXCLUDED.verified_at),
+			is_verified = false,
+			verified_at = NULL,
 			updated_at = now()
 	`, linkSource); err != nil {
 		return 0, err
@@ -570,10 +564,6 @@ func parseSnowflake(raw string) (snowflake.ID, error) {
 		return 0, errors.New("zero snowflake")
 	}
 	return id, nil
-}
-
-func completedGuildKey(guildID string) string {
-	return "guild:" + guildID + ":complete"
 }
 
 func sleepBackoff(ctx context.Context, attempt int) error {

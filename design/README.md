@@ -43,7 +43,7 @@ dependencies:
 ```
 
 Agent-facing mobile implementation rules live in
-[`../ai/design-system/mobile.md`](../ai/design-system/mobile.md). Those rules
+[`../ai/design-system/mobile.md`](../docs/mobile.md). Those rules
 reference the concrete widgets and themes in the separate `ClashKingApp`
 repository; this directory owns only shared tokens and packages.
 

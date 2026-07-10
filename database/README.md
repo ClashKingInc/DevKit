@@ -16,7 +16,8 @@ cd database
 
 Set the environment variables in Coolify, copy `.env.example` to `.env`, or
 export the variables in your shell before starting services. Migration tools
-also resolve `.env` and `.migration_state/` from this directory.
+also resolve `.env` and `migration_state.json` from this directory. The shared
+checkpoint loader can still read legacy `.migration_state/<script>.json` files.
 
 ## Start
 
@@ -90,9 +91,10 @@ rollback sections.
 
 ## Data migration tools
 
-The build-ignored Go programs in `migrations/` backfill data from legacy stores.
-Run them from this directory or from `migrations/`; both locations resolve this
-directory as the database root.
+The Go programs in `migrations/` backfill data from legacy stores. Run them from
+this directory or from `migrations/`; both locations resolve this directory as
+the database root. Most long-running backfills use shared checkpoints;
+`player_links.go` intentionally reruns without a checkpoint.
 
 ```bash
 cd migrations
@@ -102,6 +104,9 @@ go run player_stats.go
 Each tool documents its required environment keys in code and fails closed when
 required values are absent. Never commit the local `.env` file or migration
 checkpoint data.
+
+See [`../docs/database-workflows.md`](../docs/database-workflows.md) for the
+Goose, backfill, remote-run, and validation workflow.
 
 ## Tracking Environment
 

@@ -1,3 +1,4 @@
 .env
 *.idea
 .migration_state/
+migration_state.json

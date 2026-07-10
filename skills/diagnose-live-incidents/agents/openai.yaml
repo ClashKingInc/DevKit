@@ -1,0 +1,4 @@
+interface:
+  display_name: "Diagnose Live Incidents"
+  short_description: "Prove production causes from live evidence"
+  default_prompt: "Use $diagnose-live-incidents to investigate this incident without changing production first."

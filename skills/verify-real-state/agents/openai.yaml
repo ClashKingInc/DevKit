@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verify Real State"
+  short_description: "Ground work in current implementation evidence"
+  default_prompt: "Use $verify-real-state to inspect the real project state before acting."

@@ -1,20 +1,20 @@
-# ClashKing Developer Kit
+# ClashKing DevKit
 
-Shared development resources for ClashKing applications and services.
+Shared database, design, documentation, and AI-development resources for
+ClashKing applications and services.
 
 ## Repository layout
 
 | Path | Contents |
 | --- | --- |
-| [`database/`](database/) | TimescaleDB schema, Goose migrations, MongoDB-to-Timescale migration tools, and the local Timescale/Valkey Compose stack. |
+| [`database/`](database/) | TimescaleDB schema, Goose migrations, MongoDB-to-Timescale backfills, and the local Timescale/Valkey Compose stack. |
 | [`design/`](design/) | Cross-platform design tokens and reusable CSS and Flutter packages. |
-| [`ai/`](ai/) | Implementation guidance intended for coding agents and AI-assisted development. |
-| [`docs/`](docs/) | Developer-kit maintenance and repository-migration records. |
-| [`scripts/`](scripts/) | Cross-cutting developer-kit validation. |
+| [`docs/`](docs/) | DevKit-specific architecture, workflows, ownership, and mobile design guidance. |
+| [`skills/`](skills/) | Versioned copies of custom Codex skills plus reusable workflow skills derived from recurring team work. |
 
-Database-specific migration executables stay in `database/migrations/` rather
-than a root `scripts/` directory because they share a Go module, configuration,
-and checkpoint lifecycle with the database schema.
+Database migration executables stay in `database/migrations/` because they
+share a Go module, environment loading, checkpoint storage, and schema-root
+discovery.
 
 ## Quick start
 
@@ -26,40 +26,34 @@ cp .env.example .env
 docker compose -f docker-compose.timescale.yml -f docker-compose.valkey.yml up -d
 ```
 
-See [`database/README.md`](database/README.md) for schema application and
-service configuration.
+See [`database/README.md`](database/README.md) and
+[`docs/database-workflows.md`](docs/database-workflows.md).
 
-### Web design tokens
+### Design tokens
 
 ```bash
 npm --prefix design install
 npm --prefix design run check
 ```
 
-See [`design/README.md`](design/README.md) for CSS and Flutter package usage.
+See [`design/README.md`](design/README.md) and
+[`docs/mobile-design.md`](docs/mobile-design.md).
 
-### Validate the repository
+### Skills
 
-```bash
-scripts/validate-repository.sh
-```
-
-The script compiles the database migration tools, checks SQL migrations when
-Goose is installed, validates Compose, verifies design-package exports and
-tokens, and analyzes Flutter when the SDK is installed. The same script runs in
-GitHub Actions with every required tool available.
+Browse [`docs/skills-catalog.md`](docs/skills-catalog.md). Each directory under
+`skills/` is self-contained and can be copied into a Codex skills directory.
 
 ## Repository history
 
-This repository was renamed from `ClashKingInc/DatabaseSchemas` to
-`ClashKingInc/ClashKingDevKit`. The public
-`ClashKingInc/ClahKingDesignSystem` history was imported without squashing.
-The original design-system repository remains available during migration
-review. See [`docs/design-system-migration.md`](docs/design-system-migration.md)
-for the exact file mapping and deletion checklist.
+The repository was renamed from `ClashKingInc/DatabaseSchemas` to
+`ClashKingInc/DevKit`. The two-commit history of the public
+`ClashKingInc/ClahKingDesignSystem` repository is preserved in this Git history.
+The source design-system repository remains unchanged until its migration is
+reviewed separately.
 
 ## Secrets
 
-Do not commit local `.env` files, migration checkpoints, tokens, database URLs,
-or generated build output. The tracked examples contain keys only, never
-credentials.
+Do not commit `.env` files, migration checkpoints, tokens, database URLs, or
+generated build output. Tracked examples must contain keys and placeholders
+only.

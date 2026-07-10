@@ -4,24 +4,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/golang/snappy"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -36,17 +27,15 @@ type Config struct {
 	StatsMongo   string
 	StaticMongo  string
 	TimescaleURL string
-	R2Endpoint   string
-	R2AccessKey  string
-	R2SecretKey  string
-	R2Bucket     string
 	BatchSize    int
 	LimitDocs    int64
 }
 
 type Checkpoint struct {
-	path string
-	data map[string]string
+	path   string
+	script string
+	state  map[string]any
+	data   map[string]string
 }
 
 type Progress struct {
@@ -89,10 +78,6 @@ func LoadConfig() (Config, error) {
 		StatsMongo:   firstNonEmpty(env["STATS_MONGODB"], env["STATS_MONGODB_URI"]),
 		StaticMongo:  firstNonEmpty(env["STATIC_MONGODB"], env["STATIC_MONGODB_URI"]),
 		TimescaleURL: firstNonEmpty(env["TIMESCALE_URL"], env["DATABASE_URL"]),
-		R2Endpoint:   env["R2_ENDPOINT"],
-		R2AccessKey:  env["R2_ACCESS_KEY_ID"],
-		R2SecretKey:  env["R2_SECRET_ACCESS_KEY"],
-		R2Bucket:     env["R2_BUCKET"],
 		BatchSize:    envInt(env, "MIGRATION_BATCH_SIZE", defaultBatchSize),
 		LimitDocs:    envInt64(env, "MIGRATION_LIMIT_DOCS", 0),
 	}
@@ -150,15 +135,70 @@ func TimescalePool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 }
 
 func LoadCheckpoint(cfg Config, script string) (*Checkpoint, error) {
-	dir := filepath.Join(cfg.Root, ".migration_state")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	path := filepath.Join(cfg.Root, "migration_state.json")
+	cp := &Checkpoint{
+		path:   path,
+		script: script,
+		state:  map[string]any{},
+		data:   map[string]string{},
+	}
+
+	payload, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return loadLegacyCheckpoint(cfg, cp)
+	}
+	if err != nil {
 		return nil, err
 	}
-	cp := &Checkpoint{
-		path: filepath.Join(dir, script+".json"),
-		data: map[string]string{},
+	if len(bytes.TrimSpace(payload)) != 0 {
+		if err := json.Unmarshal(payload, &cp.state); err != nil {
+			return nil, err
+		}
 	}
-	payload, err := os.ReadFile(cp.path)
+	if raw := cp.state[script]; raw != nil {
+		data, err := checkpointDataFromJSONValue(script, raw)
+		if err != nil {
+			return nil, err
+		}
+		cp.data = data
+		return cp, nil
+	}
+	return loadLegacyCheckpoint(cfg, cp)
+}
+
+func (c *Checkpoint) Get(key string) string {
+	return c.data[key]
+}
+
+func (c *Checkpoint) Set(key, value string) error {
+	c.data[key] = value
+	c.state[c.script] = c.jsonValue()
+	payload, err := json.MarshalIndent(c.state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(c.path, append(payload, '\n'), 0o600)
+}
+
+func (c *Checkpoint) Clear() error {
+	c.data = map[string]string{}
+	delete(c.state, c.script)
+	if len(c.state) == 0 {
+		if err := os.Remove(c.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	payload, err := json.MarshalIndent(c.state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(c.path, append(payload, '\n'), 0o600)
+}
+
+func loadLegacyCheckpoint(cfg Config, cp *Checkpoint) (*Checkpoint, error) {
+	path := filepath.Join(cfg.Root, ".migration_state", cp.script+".json")
+	payload, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return cp, nil
 	}
@@ -168,28 +208,74 @@ func LoadCheckpoint(cfg Config, script string) (*Checkpoint, error) {
 	if len(bytes.TrimSpace(payload)) == 0 {
 		return cp, nil
 	}
-	return cp, json.Unmarshal(payload, &cp.data)
-}
-
-func (c *Checkpoint) Get(key string) string {
-	return c.data[key]
-}
-
-func (c *Checkpoint) Set(key, value string) error {
-	c.data[key] = value
-	payload, err := json.MarshalIndent(c.data, "", "  ")
-	if err != nil {
-		return err
+	if err := json.Unmarshal(payload, &cp.data); err != nil {
+		return nil, err
 	}
-	return os.WriteFile(c.path, append(payload, '\n'), 0o600)
+	cp.state[cp.script] = cp.jsonValue()
+	return cp, nil
 }
 
-func (c *Checkpoint) Clear() error {
-	c.data = map[string]string{}
-	if err := os.Remove(c.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+func (c *Checkpoint) jsonValue() any {
+	if key := singleValueCheckpointKey(c.script); key != "" && len(c.data) == 1 {
+		if value, ok := c.data[key]; ok {
+			return value
+		}
 	}
-	return nil
+	out := make(map[string]string, len(c.data))
+	for key, value := range c.data {
+		out[key] = value
+	}
+	return out
+}
+
+func checkpointDataFromJSONValue(script string, value any) (map[string]string, error) {
+	switch typed := value.(type) {
+	case string:
+		key := singleValueCheckpointKey(script)
+		if key == "" {
+			return nil, fmt.Errorf("checkpoint %s is a string but has no single-value key", script)
+		}
+		return map[string]string{key: typed}, nil
+	case map[string]any:
+		out := make(map[string]string, len(typed))
+		for key, raw := range typed {
+			value, ok := raw.(string)
+			if !ok {
+				return nil, fmt.Errorf("checkpoint %s.%s is %T, want string", script, key, raw)
+			}
+			out[key] = value
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("checkpoint %s is %T, want string or object", script, value)
+	}
+}
+
+func singleValueCheckpointKey(script string) string {
+	switch script {
+	case "basic_clans":
+		return "clan_tags_id"
+	case "clan_change_history":
+		return "all_clans_changes_id"
+	case "clan_records":
+		return "all_clans_records_id"
+	case "clan_wars":
+		return "clan_war_id"
+	case "cwl_groups":
+		return "cwl_group_id"
+	case "join_leave_history":
+		return "join_leave_id"
+	case "legend_history_snapshots":
+		return "legend_history_id"
+	case "player_history_events":
+		return "player_history_id"
+	case "player_online_events":
+		return "last_online_id"
+	case "player_stats":
+		return "player_stats_id"
+	default:
+		return ""
+	}
 }
 
 func StreamByObjectID(
@@ -467,29 +553,6 @@ func SeasonFromDate(value time.Time) string {
 	return value.UTC().Format("2006-01")
 }
 
-func R2FromConfig(cfg Config) (*R2ObjectStore, error) {
-	if cfg.R2Endpoint == "" || cfg.R2AccessKey == "" || cfg.R2SecretKey == "" || cfg.R2Bucket == "" {
-		return nil, errors.New("missing R2_ENDPOINT/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_BUCKET in .env")
-	}
-	endpoint, err := url.Parse(strings.TrimRight(cfg.R2Endpoint, "/"))
-	if err != nil {
-		return nil, err
-	}
-	return &R2ObjectStore{
-		endpoint:        endpoint,
-		accessKeyID:     cfg.R2AccessKey,
-		secretAccessKey: cfg.R2SecretKey,
-		bucket:          strings.Trim(cfg.R2Bucket, "/"),
-		client:          newR2HTTPClient(),
-		now:             time.Now,
-		limiter:         newRequestRateLimiter(envInt(cfg.Env, "R2_REQUESTS_PER_SECOND", 100)),
-	}, nil
-}
-
-func Snappy(payload []byte) []byte {
-	return snappy.Encode(nil, payload)
-}
-
 func BadgeToken(values ...any) string {
 	for _, value := range values {
 		raw := String(value)
@@ -506,179 +569,6 @@ func BadgeToken(values ...any) string {
 		}
 	}
 	return ""
-}
-
-type R2ObjectStore struct {
-	endpoint        *url.URL
-	accessKeyID     string
-	secretAccessKey string
-	bucket          string
-	client          *http.Client
-	now             func() time.Time
-	limiter         *requestRateLimiter
-}
-
-func (s *R2ObjectStore) PutObject(ctx context.Context, key string, payload []byte, contentType string) error {
-	if err := s.limiter.Wait(ctx); err != nil {
-		return err
-	}
-	key = strings.TrimLeft(key, "/")
-	target := *s.endpoint
-	target.Path = "/" + s.bucket + "/" + key
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, target.String(), bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(payload)))
-	if err := s.sign(req, payload); err != nil {
-		return err
-	}
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
-	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return fmt.Errorf("r2 put %s failed: status=%d body=%s", key, resp.StatusCode, strings.TrimSpace(string(body)))
-}
-
-func newR2HTTPClient() *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
-			MaxIdleConns:          300,
-			MaxIdleConnsPerHost:   300,
-			MaxConnsPerHost:       300,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-		},
-		Timeout: 30 * time.Second,
-	}
-}
-
-type requestRateLimiter struct {
-	mu       sync.Mutex
-	interval time.Duration
-	next     time.Time
-}
-
-func newRequestRateLimiter(requestsPerSecond int) *requestRateLimiter {
-	if requestsPerSecond <= 0 {
-		requestsPerSecond = 100
-	}
-	return &requestRateLimiter{interval: time.Second / time.Duration(requestsPerSecond)}
-}
-
-func (l *requestRateLimiter) Wait(ctx context.Context) error {
-	now := time.Now()
-	l.mu.Lock()
-	if l.next.Before(now) {
-		l.next = now
-	}
-	waitUntil := l.next
-	l.next = l.next.Add(l.interval)
-	l.mu.Unlock()
-	wait := time.Until(waitUntil)
-	if wait <= 0 {
-		return nil
-	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
-func (s *R2ObjectStore) sign(req *http.Request, payload []byte) error {
-	now := s.now().UTC()
-	amzDate := now.Format("20060102T150405Z")
-	dateStamp := now.Format("20060102")
-	payloadHash := sha256Hex(payload)
-	req.Header.Set("Host", req.URL.Host)
-	req.Header.Set("X-Amz-Date", amzDate)
-	req.Header.Set("X-Amz-Content-Sha256", payloadHash)
-	signedHeaders := canonicalSignedHeaders(req.Header)
-	canonicalRequest := strings.Join([]string{
-		req.Method,
-		req.URL.EscapedPath(),
-		req.URL.RawQuery,
-		canonicalHeaders(req.Header, signedHeaders),
-		strings.Join(signedHeaders, ";"),
-		payloadHash,
-	}, "\n")
-	scope := dateStamp + "/auto/s3/aws4_request"
-	stringToSign := strings.Join([]string{
-		"AWS4-HMAC-SHA256",
-		amzDate,
-		scope,
-		sha256Hex([]byte(canonicalRequest)),
-	}, "\n")
-	signature := hex.EncodeToString(hmacSHA256(signingKey(s.secretAccessKey, dateStamp), []byte(stringToSign)))
-	req.Header.Set("Authorization", fmt.Sprintf(
-		"AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
-		s.accessKeyID,
-		scope,
-		strings.Join(signedHeaders, ";"),
-		signature,
-	))
-	return nil
-}
-
-func canonicalSignedHeaders(headers http.Header) []string {
-	out := make([]string, 0, len(headers))
-	for key := range headers {
-		out = append(out, strings.ToLower(key))
-	}
-	sort.Strings(out)
-	return out
-}
-
-func canonicalHeaders(headers http.Header, signed []string) string {
-	var b strings.Builder
-	for _, key := range signed {
-		values := headers.Values(key)
-		if len(values) == 0 {
-			values = headers.Values(http.CanonicalHeaderKey(key))
-		}
-		for i := range values {
-			values[i] = strings.Join(strings.Fields(values[i]), " ")
-		}
-		sort.Strings(values)
-		b.WriteString(key)
-		b.WriteByte(':')
-		b.WriteString(strings.Join(values, ","))
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
-func signingKey(secret, dateStamp string) []byte {
-	dateKey := hmacSHA256([]byte("AWS4"+secret), []byte(dateStamp))
-	regionKey := hmacSHA256(dateKey, []byte("auto"))
-	serviceKey := hmacSHA256(regionKey, []byte("s3"))
-	return hmacSHA256(serviceKey, []byte("aws4_request"))
-}
-
-func hmacSHA256(key, data []byte) []byte {
-	mac := hmac.New(sha256.New, key)
-	mac.Write(data)
-	return mac.Sum(nil)
-}
-
-func sha256Hex(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
 }
 
 func repoRoot() (string, error) {
