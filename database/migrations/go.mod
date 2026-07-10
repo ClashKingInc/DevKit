@@ -1,4 +1,4 @@
-module clashking_schemas_migrations
+module clashking_devkit_database_migrations
 
 go 1.25.0
 

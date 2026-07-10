@@ -1,15 +1,17 @@
-# Design System Master File
+# ClashKing mobile implementation guidance
 
-> **LOGIC:** When building a specific page, first check `design-system/pages/[page-name].md`.
-> If that file exists, its rules **override** this Master file.
-> If not, strictly follow the rules below.
+Use this guidance when changing the separate `ClashKingApp` Flutter repository.
+If a page-specific guide is added under `ai/design-system/pages/`, it overrides
+this file for that page.
 
 ---
 
 **Project:** ClashKing
 **Platform:** Flutter (iOS + Android), native mobile app — not web
 **Category:** Gaming / stats companion (Clash of Clans)
-**Updated:** 2026-07-03 — rewritten to match the actual shipped app (see `lib/core/app/my_app.dart`); the previous auto-generated version described an unrelated web/CSS design system and should be disregarded.
+**Updated:** 2026-07-09 — migrated from the standalone design-system
+repository. App-relative paths below refer to files in `ClashKingApp`, not this
+developer-kit repository.
 
 ---
 

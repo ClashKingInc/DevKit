@@ -6,6 +6,6 @@
     "packages/css"
   ],
   "scripts": {
-    "check": "npm --workspace @clashking/design-system-css run check"
+    "check": "node scripts/check.mjs && npm --workspace @clashking/design-system-css run check"
   }
 }

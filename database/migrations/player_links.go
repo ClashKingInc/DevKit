@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"clashking_schemas_migrations/migrateutil"
+	"clashking_devkit_database_migrations/migrateutil"
 	"github.com/disgoorg/disgo/discord"
 	disgo "github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"

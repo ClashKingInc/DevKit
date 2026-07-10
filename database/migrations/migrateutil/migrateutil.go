@@ -695,7 +695,7 @@ func repoRoot() (string, error) {
 		}
 		parent := filepath.Dir(wd)
 		if parent == wd {
-			return "", errors.New("could not locate clashking_schemas root")
+			return "", errors.New("could not locate ClashKing database root")
 		}
 		wd = parent
 	}
