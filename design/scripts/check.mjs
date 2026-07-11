@@ -39,4 +39,25 @@ for (const className of ['CKColors', 'CKRadius', 'CKOpacity', 'CKSpacing']) {
   assert(flutterTokens.includes(`class ${className}`), `Missing Flutter token class: ${className}`);
 }
 
+for (const className of [
+  'CKMetricChip',
+  'CKMetricChipGrid',
+  'CKStatTile',
+  'CKGlassPanel',
+  'CKSegmentedControl',
+]) {
+  assert(flutterTokens.includes(`class ${className}`), `Missing Flutter primitive: ${className}`);
+}
+
+for (const docPath of [
+  'CHANGELOG.md',
+  'docs/MASTER.md',
+  'docs/flutter.md',
+  'docs/components.md',
+  'docs/drift-checks.md',
+  'docs/governance.md',
+]) {
+  assert(existsSync(join(root, docPath)), `Missing design documentation: ${docPath}`);
+}
+
 console.log('Design manifests, exports, imports, and required tokens are valid');

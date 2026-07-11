@@ -2,8 +2,9 @@
   min-height: 100vh;
   color: var(--ck-color-text);
   background:
-    radial-gradient(circle at top left, rgba(232, 165, 36, 0.16), transparent 32rem),
-    radial-gradient(circle at 80% 10%, rgba(42, 159, 214, 0.12), transparent 26rem),
+    linear-gradient(180deg, rgba(217, 7, 9, 0.12), transparent 20rem),
+    radial-gradient(circle at top left, rgba(2, 108, 194, 0.2), transparent 32rem),
+    radial-gradient(circle at 80% 10%, rgba(217, 7, 9, 0.16), transparent 26rem),
     var(--ck-color-bg);
   font-family: var(--ck-font-family);
 }
@@ -41,14 +42,14 @@
 .ck-button:hover,
 .ck-button:focus-visible {
   transform: translateY(-1px);
-  outline: 2px solid var(--ck-color-focus);
+  outline: 2px solid rgba(217, 7, 9, 0.36);
   outline-offset: 2px;
 }
 
 .ck-button-primary {
-  color: var(--ck-color-text-inverse);
-  border-color: transparent;
-  background: linear-gradient(135deg, #fde68a, var(--ck-color-war-gold));
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.08);
+  background: linear-gradient(135deg, var(--ck-color-primary-red), #9d0002);
   font-weight: var(--ck-font-weight-bold);
 }
 
@@ -74,7 +75,7 @@
 
 .ck-badge-success {
   color: var(--ck-color-success-text);
-  border-color: rgba(34, 197, 94, 0.28);
+  border-color: rgba(20, 163, 127, 0.28);
   background: var(--ck-color-success-bg);
 }
 
@@ -116,8 +117,8 @@
 }
 
 .ck-toggle-on {
-  background: rgba(34, 197, 94, 0.28);
-  border-color: rgba(34, 197, 94, 0.36);
+  background: rgba(20, 163, 127, 0.28);
+  border-color: rgba(20, 163, 127, 0.36);
 }
 
 .ck-toggle-on span {
@@ -131,8 +132,8 @@
   display: grid;
   place-items: center;
   border-radius: var(--ck-radius-chip);
-  color: var(--ck-color-war-gold);
-  background: rgba(232, 165, 36, 0.12);
+  color: #fff;
+  background: linear-gradient(135deg, var(--ck-color-primary-red), var(--ck-color-secondary-blue));
 }
 
 .ck-table-wrap {

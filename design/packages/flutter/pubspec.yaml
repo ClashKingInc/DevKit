@@ -1,6 +1,6 @@
 name: clashking_design_system
 description: Shared ClashKing design tokens for Flutter clients.
-version: 0.1.0
+version: 0.2.0
 publish_to: none
 
 environment:
@@ -11,4 +11,8 @@ flutter:
 
 dependencies:
   flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
     sdk: flutter

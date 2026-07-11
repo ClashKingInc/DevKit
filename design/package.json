@@ -1,11 +1,13 @@
 {
   "name": "clashking-design-system",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "workspaces": [
     "packages/css"
   ],
   "scripts": {
-    "check": "node scripts/check.mjs && npm --workspace @clashking/design-system-css run check"
+    "check": "node scripts/check.mjs && npm --workspace @clashking/design-system-css run check",
+    "drift:app": "node scripts/drift-check.mjs",
+    "drift:app:strict": "node scripts/drift-check.mjs --strict"
   }
 }
