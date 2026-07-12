@@ -103,6 +103,9 @@ Uniformity contract:
 - Calendar opens directly on its timeline with a 60-day horizon. Its date row
   remains pinned while lanes scroll vertically, and it shares the timeline's
   horizontal coordinate space so dates stay aligned with upgrade bars.
+  Its vertical timeline uses the detail page's primary nested-scroll controller
+  so pulling down at the top restores the collapsed hero header. Only the
+  horizontal calendar axis owns an independent controller.
 - Collection categories start collapsed. Entering the tab must not choose or
   open a category on the user's behalf.
 - Every searchable profile tab places the shared search field and filter in its
