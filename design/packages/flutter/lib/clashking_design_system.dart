@@ -613,7 +613,10 @@ class CKResourceCost extends StatelessWidget {
               children: [
                 TextSpan(
                   text: amount,
-                  style: CKTypography.of(context, CKTextRole.rowTitle),
+                  style: CKTypography.of(
+                    context,
+                    CKTextRole.metadata,
+                  ).copyWith(fontWeight: FontWeight.w700),
                 ),
                 if (label != null)
                   TextSpan(
