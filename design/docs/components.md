@@ -116,6 +116,9 @@ Uniformity contract:
   breakdowns, and collapsible headers. Nested metrics may use a subtle
   container tint, but the enclosing card always uses `CKSectionPanel` or the
   exact shared card color and outline tokens.
+- Do not place summary cards inside a structural card. Loot Outlook and similar
+  grouped summaries use flat regions separated by whitespace or dividers;
+  compact resource pills may remain framed because they are atomic values.
 - Dense mixed categories use quiet text subheads before their grids. Laboratory
   groups by troop, spell, and siege type; Equipment groups by assigned hero.
   Equipment subheads pair the real hero asset with the hero name. These
