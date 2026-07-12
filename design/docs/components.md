@@ -83,6 +83,10 @@ Uniformity contract:
 
 - Tracker search fields use the app's shared `AppSearchField`; do not style a
   raw `TextField` independently in sheets or tabs.
+- Editable search fields use the stable dark card surface shared by the main
+  Player and Clan search. Never place a platform/native glass view behind a
+  `TextField`; focus-time platform composition can detach the glass capsule
+  from its editable content. Reserve native glass for non-editable controls.
 - Standard collapsible content uses the shared `CollapsibleItemSection`.
   Sliver-backed grids use a dark header card, then reveal their lazy grid
   directly on the page background instead of painting a box around the whole
@@ -104,6 +108,12 @@ Uniformity contract:
 - Upgrade category headers should match the app's main Player, Clan, and War
   cards: near-black surfaces, quiet outlines, and no glass on ordinary list
   content. Expanded artwork grids remain unboxed and lazy.
+- Dense mixed categories use quiet text subheads before their grids. Laboratory
+  groups by troop, spell, and siege type; Equipment groups by assigned hero.
+  These subheads do not introduce another card surface.
+- Leveled artwork falls back to the closest available lower-level asset when a
+  newer CDN render is unavailable. The tile owns its full hit target, so image
+  loading or failure never controls whether details can open.
 - Village rows are parent navigation surfaces: keep their height stable and
   communicate expansion through the chevron and revealed hierarchy, without
   adding a second enclosing surface.
@@ -113,8 +123,9 @@ Uniformity contract:
 - Tracker tab content uses one horizontal content gutter for search/filter rows,
   village parents, and section headers; do not introduce per-tab 14/18/22px
   variants.
-- Lazy section expansion must animate sliver paint extent with the shared
-  motion duration and curve; do not insert or remove a full grid in one frame.
+- Lazy section expansion animates only sliver paint extent with the shared
+  motion duration and curve. Do not cross-fade stacked grid slivers; their
+  overlapping extents make closing feel delayed and disconnected.
 - Align resource icon, amount, and label on one text baseline. At 100 percent,
   section progress uses `CKUpgradeColors.completion`; incomplete progress keeps
   the normal tracker accent.
