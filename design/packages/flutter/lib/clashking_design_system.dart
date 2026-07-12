@@ -607,18 +607,25 @@ class CKResourceCost extends StatelessWidget {
       children: [
         SizedBox.square(dimension: 20, child: icon),
         const SizedBox(width: CKSpacing.xs),
-        Text(amount, style: CKTypography.of(context, CKTextRole.rowTitle)),
-        if (label != null) ...[
-          const SizedBox(width: CKSpacing.xs),
-          Flexible(
-            child: Text(
-              label!,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: CKTypography.of(context, CKTextRole.metadata),
+        Flexible(
+          child: Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(
+                  text: amount,
+                  style: CKTypography.of(context, CKTextRole.rowTitle),
+                ),
+                if (label != null)
+                  TextSpan(
+                    text: ' $label',
+                    style: CKTypography.of(context, CKTextRole.metadata),
+                  ),
+              ],
             ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
-        ],
+        ),
       ],
     ),
   );
@@ -789,7 +796,7 @@ class CKSegmentedControl<T> extends StatelessWidget {
     }
 
     final colorScheme = Theme.of(context).colorScheme;
-    final selectedColor = color ?? colorScheme.primary;
+    final selectedColor = color ?? colorScheme.onSurface;
     final indicatorDuration = CKMotion.durationOf(context, CKMotion.standard);
     final scaledLabelHeight = MediaQuery.textScalerOf(context).scale(14);
     final extraTextHeight = scaledLabelHeight > 14
@@ -825,8 +832,11 @@ class CKSegmentedControl<T> extends StatelessWidget {
                   width: segmentWidth - inset * 2,
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      color: colorScheme.surface.withValues(alpha: 0.72),
+                      color: colorScheme.surface.withValues(alpha: 0.78),
                       borderRadius: BorderRadius.circular(CKRadius.pill),
+                      border: Border.all(
+                        color: selectedColor.withValues(alpha: 0.16),
+                      ),
                     ),
                   ),
                 ),
@@ -839,6 +849,10 @@ class CKSegmentedControl<T> extends StatelessWidget {
                           selected: index == selectedIndex,
                           child: InkWell(
                             borderRadius: BorderRadius.circular(CKRadius.pill),
+                            splashFactory: NoSplash.splashFactory,
+                            overlayColor: const WidgetStatePropertyAll(
+                              Colors.transparent,
+                            ),
                             onTap: () => onChanged(values[index]),
                             child: Center(
                               child: AnimatedDefaultTextStyle(
@@ -853,7 +867,7 @@ class CKSegmentedControl<T> extends StatelessWidget {
                                       CKTextRole.compactLabel,
                                     ).copyWith(
                                       color: index == selectedIndex
-                                          ? selectedColor
+                                          ? colorScheme.onSurface
                                           : colorScheme.onSurface.withValues(
                                               alpha: 0.76,
                                             ),
