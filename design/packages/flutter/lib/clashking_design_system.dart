@@ -775,15 +775,18 @@ class CKSegmentedControl<T> extends StatelessWidget {
     required this.labels,
     required this.selected,
     required this.onChanged,
+    this.icons,
     this.height,
     this.density = CKControlDensity.standard,
     this.color,
-  }) : assert(values.length == labels.length);
+  }) : assert(values.length == labels.length),
+       assert(icons == null || icons.length == labels.length);
 
   final List<T> values;
   final List<String> labels;
   final T selected;
   final ValueChanged<T> onChanged;
+  final List<Widget>? icons;
   final double? height;
   final CKControlDensity density;
   final Color? color;
@@ -796,7 +799,6 @@ class CKSegmentedControl<T> extends StatelessWidget {
     }
 
     final colorScheme = Theme.of(context).colorScheme;
-    final selectedColor = color ?? colorScheme.onSurface;
     final indicatorDuration = CKMotion.durationOf(context, CKMotion.standard);
     final scaledLabelHeight = MediaQuery.textScalerOf(context).scale(14);
     final extraTextHeight = scaledLabelHeight > 14
@@ -832,11 +834,10 @@ class CKSegmentedControl<T> extends StatelessWidget {
                   width: segmentWidth - inset * 2,
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      color: colorScheme.surface.withValues(alpha: 0.78),
-                      borderRadius: BorderRadius.circular(CKRadius.pill),
-                      border: Border.all(
-                        color: selectedColor.withValues(alpha: 0.16),
+                      color: colorScheme.surfaceContainerHighest.withValues(
+                        alpha: 0.72,
                       ),
+                      borderRadius: BorderRadius.circular(CKRadius.pill),
                     ),
                   ),
                 ),
@@ -876,10 +877,30 @@ class CKSegmentedControl<T> extends StatelessWidget {
                                           : FontWeight.w600,
                                       height: 1,
                                     ),
-                                child: Text(
-                                  labels[index],
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    if (icons != null) ...[
+                                      ExcludeSemantics(
+                                        child: SizedBox.square(
+                                          dimension: 20,
+                                          child: FittedBox(
+                                            fit: BoxFit.contain,
+                                            child: icons![index],
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: CKSpacing.xs),
+                                    ],
+                                    Flexible(
+                                      child: Text(
+                                        labels[index],
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             ),

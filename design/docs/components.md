@@ -72,8 +72,26 @@ Rules:
 - Reduced motion is respected through `MediaQuery.disableAnimations`.
 - Use standard density by default. Compact density remains at least 44dp high
   and is appropriate when nearby content already provides strong context.
+- Keep selected labels neutral. Selection comes from the filled indicator and
+  weight; brand red is not a generic selected-text color.
+- Use compact symbols when options represent status, and use real game assets
+  when options represent Home Village or Builder Base. The selected segment is
+  a quiet fill, not a second outlined pill inside the control.
 
 ### Upgrade tracker primitives
+
+Uniformity contract:
+
+- Tracker search fields use the app's shared `AppSearchField`; do not style a
+  raw `TextField` independently in sheets or tabs.
+- Standard collapsible content uses the shared `CollapsibleItemSection`.
+  Sliver-backed grids use the app's shared sliver section shell with the same
+  DevKit panel tokens, so lazy rendering does not create a second visual style.
+- Upgrade and Player Info artwork tiles share the strong square treatment.
+  Collection keeps its artwork-specific tile treatment inside the same section
+  shell.
+- Filters use `CKSegmentedControl`; village filters include current Hall assets.
+- Do not add one-off search, selector, progress badge, or section-card colors.
 
 - `CKUpgradeRow` keeps game artwork primary and uses one narrow semantic queue
   accent rather than a field of metric chips.
@@ -83,6 +101,12 @@ Rules:
   missing state instead of color alone.
 - `CKProgressBadge` is a compact supporting treatment, not a replacement for
   the hero progress visualization.
+- Upgrade category grids should match Player Info: one quiet rounded section
+  panel per category, strong square artwork tiles, and no glass on ordinary
+  list content. Preserve lazy sliver construction for long grids.
+- Align resource icon, amount, and label on one text baseline. At 100 percent,
+  section progress uses `CKUpgradeColors.completion`; incomplete progress keeps
+  the normal tracker accent.
 
 Queue accents come from `CKUpgradeColors`: builders, research, and pets.
 State accents cover active, scheduled, complete, and unavailable. User-facing
