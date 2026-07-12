@@ -111,9 +111,15 @@ Uniformity contract:
 - The tracker Progress overview is a structural content card, not floating
   chrome. It uses the same near-black `CKSectionPanel` surface as Player and
   Clan cards; do not use `CKGlassPanel` for this hero-sized summary.
+- This structural-card rule applies across every tracker tab, including Loot
+  Outlook, calendar lanes, plan comparisons, import/empty states, village
+  breakdowns, and collapsible headers. Nested metrics may use a subtle
+  container tint, but the enclosing card always uses `CKSectionPanel` or the
+  exact shared card color and outline tokens.
 - Dense mixed categories use quiet text subheads before their grids. Laboratory
   groups by troop, spell, and siege type; Equipment groups by assigned hero.
-  These subheads do not introduce another card surface.
+  Equipment subheads pair the real hero asset with the hero name. These
+  subheads do not introduce another card surface.
 - Leveled artwork falls back to the closest available lower-level asset when a
   newer CDN render is unavailable. The tile owns its full hit target, so image
   loading or failure never controls whether details can open.
