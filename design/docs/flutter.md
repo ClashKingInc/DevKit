@@ -29,6 +29,8 @@ Use these constants before adding new raw values:
 | `CKOpacity` | Reusable alpha values for borders and muted fills. |
 | `CKSpacing` | Common spacing scale. |
 | `CKMotion` | Shared durations/curve and reduced-motion resolution. |
+| `CKTypography` | Semantic text roles derived from the active `TextTheme`. |
+| `CKUpgradeColors` | Upgrade queue and state color vocabulary. |
 
 Radius semantics:
 
@@ -63,6 +65,28 @@ The package now includes the first reusable mobile primitives:
 - `CKStatTile`
 - `CKGlassPanel`
 - `CKSegmentedControl`
+- `CKSectionPanel`
+- `CKUpgradeRow`
+- `CKResourceCost`
+- `CKCollectionTile`
+- `CKProgressBadge`
+
+## Typography and Dynamic Type
+
+Use `CKTypography.of(context, role)` rather than local size/weight overrides.
+The available roles are `heroMetric`, `screenTitle`, `sectionTitle`,
+`rowTitle`, `body`, `metadata`, and `compactLabel`. Roles derive from the
+active Material `TextTheme`, so Flutter's `TextScaler` remains in control.
+
+Do not cap the user's text scale inside shared components. Use bounded line
+counts with ellipsis for compact rows, allow ordinary body copy to wrap, and
+let controls grow above their minimum touch height when text becomes larger.
+
+## Density
+
+`CKControlDensity.standard` uses a 52dp minimum. `compact` uses a 44dp minimum
+and is intended for dense, already-labeled controls such as tracker filters.
+Both variants grow for larger text and must not be forced below their minimum.
 
 Use these for new work before creating app-local variants.
 

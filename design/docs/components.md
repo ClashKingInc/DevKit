@@ -49,10 +49,17 @@ Use as the token-driven panel shell for floating or elevated sections.
 
 Rules:
 
-- Use one outer panel per logical section.
-- Avoid card-in-card nesting.
+- Reserve it for floating hero, navigation, or elevated functional material.
+- Avoid stacking glass panels or using glass for every ordinary list section.
 - Use `tint` sparingly for identity/status emphasis.
 - Native clients may layer platform glass behind this shape when needed.
+
+### `CKSectionPanel`
+
+Use for ordinary list, grid, and explanatory sections. It is deliberately
+quieter than `CKGlassPanel` so material depth continues to communicate
+hierarchy. Use one outer panel per logical section and avoid card-in-card
+nesting.
 
 ### `CKSegmentedControl`
 
@@ -63,6 +70,23 @@ Rules:
 - Use 2–5 options.
 - Keep labels short.
 - Reduced motion is respected through `MediaQuery.disableAnimations`.
+- Use standard density by default. Compact density remains at least 44dp high
+  and is appropriate when nearby content already provides strong context.
+
+### Upgrade tracker primitives
+
+- `CKUpgradeRow` keeps game artwork primary and uses one narrow semantic queue
+  accent rather than a field of metric chips.
+- `CKResourceCost` presents an icon and amount inline without another framed
+  surface.
+- `CKCollectionTile` is artwork-first and uses opacity plus text/semantics for
+  missing state instead of color alone.
+- `CKProgressBadge` is a compact supporting treatment, not a replacement for
+  the hero progress visualization.
+
+Queue accents come from `CKUpgradeColors`: builders, research, and pets.
+State accents cover active, scheduled, complete, and unavailable. User-facing
+state labels remain owned by the localized client.
 
 ## Web/admin primitives
 

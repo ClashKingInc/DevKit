@@ -18,6 +18,43 @@ class CKColors {
   static const Color discordBlurple = Color(0xFF5865F2);
 }
 
+/// Semantic colors for upgrade planning and collection surfaces.
+///
+/// These names describe meaning rather than a single screen so queue and state
+/// colors remain consistent across the tracker, widgets, and future clients.
+class CKUpgradeColors {
+  CKUpgradeColors._();
+
+  static const Color builders = CKColors.builderBlue;
+  static const Color research = CKColors.capitalPurple;
+  static const Color pets = Color(0xFFE85D9E);
+  static const Color completion = CKColors.warGold;
+  static const Color unavailable = Color(0xFF7C8798);
+  static const Color scheduled = CKColors.legendBlue;
+
+  static Color forQueue(CKUpgradeQueueTone queue) => switch (queue) {
+    CKUpgradeQueueTone.builders => builders,
+    CKUpgradeQueueTone.research => research,
+    CKUpgradeQueueTone.pets => pets,
+  };
+
+  static Color forState(
+    CKUpgradeStateTone state, {
+    required ColorScheme colorScheme,
+  }) => switch (state) {
+    CKUpgradeStateTone.active => colorScheme.primary,
+    CKUpgradeStateTone.scheduled => scheduled,
+    CKUpgradeStateTone.complete => completion,
+    CKUpgradeStateTone.unavailable => colorScheme.onSurfaceVariant.withValues(
+      alpha: 0.64,
+    ),
+  };
+}
+
+enum CKUpgradeQueueTone { builders, research, pets }
+
+enum CKUpgradeStateTone { active, scheduled, complete, unavailable }
+
 class CKRadius {
   CKRadius._();
 
@@ -46,6 +83,80 @@ class CKSpacing {
   static const double lg = 16;
   static const double xl = 24;
   static const double xxl = 32;
+}
+
+/// Named mobile text roles for consistent hierarchy across features.
+///
+/// Roles are derived from the active [TextTheme] instead of fixing a second
+/// font-size scale. Flutter therefore applies the platform text scaler and the
+/// app remains compatible with Dynamic Type and Android font-size settings.
+enum CKTextRole {
+  heroMetric,
+  screenTitle,
+  sectionTitle,
+  rowTitle,
+  body,
+  metadata,
+  compactLabel,
+}
+
+class CKTypography {
+  CKTypography._();
+
+  static TextStyle of(BuildContext context, CKTextRole role) {
+    final theme = Theme.of(context).textTheme;
+    return switch (role) {
+      CKTextRole.heroMetric =>
+        (theme.displaySmall ?? theme.headlineLarge ?? const TextStyle())
+            .copyWith(
+              fontWeight: FontWeight.w800,
+              height: 0.98,
+              letterSpacing: -0.5,
+            ),
+      CKTextRole.screenTitle =>
+        (theme.headlineSmall ?? theme.titleLarge ?? const TextStyle()).copyWith(
+          fontWeight: FontWeight.w700,
+          height: 1.08,
+        ),
+      CKTextRole.sectionTitle =>
+        (theme.titleMedium ?? const TextStyle()).copyWith(
+          fontWeight: FontWeight.w700,
+          height: 1.18,
+        ),
+      CKTextRole.rowTitle => (theme.bodyMedium ?? const TextStyle()).copyWith(
+        fontWeight: FontWeight.w600,
+        height: 1.22,
+      ),
+      CKTextRole.body => (theme.bodyMedium ?? const TextStyle()).copyWith(
+        fontWeight: FontWeight.w500,
+        height: 1.42,
+      ),
+      CKTextRole.metadata => (theme.bodySmall ?? const TextStyle()).copyWith(
+        fontWeight: FontWeight.w500,
+        height: 1.34,
+      ),
+      CKTextRole.compactLabel =>
+        (theme.labelSmall ?? const TextStyle()).copyWith(
+          fontWeight: FontWeight.w600,
+          height: 1.2,
+          letterSpacing: 0.1,
+        ),
+    };
+  }
+}
+
+extension CKTextThemeRoles on TextTheme {
+  TextStyle role(BuildContext context, CKTextRole role) =>
+      CKTypography.of(context, role);
+}
+
+enum CKControlDensity { compact, standard }
+
+extension CKControlDensitySize on CKControlDensity {
+  double get minimumHeight => switch (this) {
+    CKControlDensity.compact => 44,
+    CKControlDensity.standard => 52,
+  };
 }
 
 /// Shared motion durations and curves for ClashKing interfaces.
@@ -137,19 +248,18 @@ class CKMetricChip extends StatelessWidget {
                   label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                    fontWeight: FontWeight.w700,
-                  ),
+                  style: CKTypography.of(
+                    context,
+                    CKTextRole.compactLabel,
+                  ).copyWith(color: colorScheme.onSurfaceVariant),
                 ),
                 const SizedBox(height: 1),
                 Text(
                   value,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  style: CKTypography.of(context, CKTextRole.rowTitle).copyWith(
                     color: color ?? colorScheme.onSurface,
-                    fontWeight: FontWeight.w900,
                     height: 1.1,
                   ),
                 ),
@@ -253,9 +363,10 @@ class CKStatTile extends StatelessWidget {
               textAlign: TextAlign.center,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
+              style: CKTypography.of(
+                context,
+                CKTextRole.compactLabel,
+              ).copyWith(color: colorScheme.onSurfaceVariant),
             ),
             const SizedBox(height: 2),
             Text(
@@ -263,9 +374,7 @@ class CKStatTile extends StatelessWidget {
               textAlign: TextAlign.center,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.bold),
+              style: CKTypography.of(context, CKTextRole.rowTitle),
             ),
           ],
         ),
@@ -326,6 +435,331 @@ class CKGlassPanel extends StatelessWidget {
   }
 }
 
+/// A quiet section-level surface for lists, grids, and ordinary content.
+///
+/// Use [CKGlassPanel] for floating hero/navigation material. Use this component
+/// for normal page sections so glass remains a meaningful hierarchy signal.
+class CKSectionPanel extends StatelessWidget {
+  const CKSectionPanel({
+    super.key,
+    required this.child,
+    this.padding = const EdgeInsets.all(CKSpacing.lg),
+    this.onTap,
+  });
+
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final decoration = BoxDecoration(
+      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.34),
+      borderRadius: BorderRadius.circular(CKRadius.card),
+      border: Border.all(
+        color: colorScheme.outlineVariant.withValues(alpha: CKOpacity.border),
+      ),
+    );
+    final panel = DecoratedBox(
+      decoration: decoration,
+      child: Padding(padding: padding, child: child),
+    );
+    if (onTap == null) return panel;
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(CKRadius.card),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(CKRadius.card),
+        child: panel,
+      ),
+    );
+  }
+}
+
+/// Image-led upgrade row with a restrained queue accent.
+class CKUpgradeRow extends StatelessWidget {
+  const CKUpgradeRow({
+    super.key,
+    required this.leading,
+    required this.title,
+    required this.subtitle,
+    required this.accentColor,
+    this.trailing,
+    this.onTap,
+    this.semanticLabel,
+    this.density = CKControlDensity.standard,
+  });
+
+  final Widget leading;
+  final String title;
+  final String subtitle;
+  final Color accentColor;
+  final Widget? trailing;
+  final VoidCallback? onTap;
+  final String? semanticLabel;
+  final CKControlDensity density;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final content = ConstrainedBox(
+      constraints: BoxConstraints(minHeight: density.minimumHeight),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: CKSpacing.md,
+          vertical: CKSpacing.sm,
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 4,
+              height: 36,
+              decoration: BoxDecoration(
+                color: accentColor,
+                borderRadius: BorderRadius.circular(CKRadius.pill),
+              ),
+            ),
+            const SizedBox(width: CKSpacing.sm),
+            SizedBox.square(dimension: 40, child: leading),
+            const SizedBox(width: CKSpacing.md),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: CKTypography.of(context, CKTextRole.rowTitle),
+                  ),
+                  const SizedBox(height: CKSpacing.xs),
+                  Text(
+                    subtitle,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: CKTypography.of(
+                      context,
+                      CKTextRole.metadata,
+                    ).copyWith(color: colorScheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+            if (trailing != null) ...[
+              const SizedBox(width: CKSpacing.sm),
+              trailing!,
+            ],
+          ],
+        ),
+      ),
+    );
+    final surface = DecoratedBox(
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.26),
+        borderRadius: BorderRadius.circular(CKRadius.tile),
+      ),
+      child: content,
+    );
+    return Semantics(
+      button: onTap != null,
+      label: semanticLabel ?? '$title, $subtitle',
+      excludeSemantics: true,
+      child: onTap == null
+          ? surface
+          : Material(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(CKRadius.tile),
+              child: InkWell(
+                onTap: onTap,
+                borderRadius: BorderRadius.circular(CKRadius.tile),
+                child: surface,
+              ),
+            ),
+    );
+  }
+}
+
+/// Inline resource cost that keeps game art visible without creating another
+/// chip or framed surface.
+class CKResourceCost extends StatelessWidget {
+  const CKResourceCost({
+    super.key,
+    required this.icon,
+    required this.amount,
+    this.label,
+    this.semanticLabel,
+  });
+
+  final Widget icon;
+  final String amount;
+  final String? label;
+  final String? semanticLabel;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: semanticLabel ?? [if (label != null) label!, amount].join(' '),
+    excludeSemantics: true,
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox.square(dimension: 20, child: icon),
+        const SizedBox(width: CKSpacing.xs),
+        Text(amount, style: CKTypography.of(context, CKTextRole.rowTitle)),
+        if (label != null) ...[
+          const SizedBox(width: CKSpacing.xs),
+          Flexible(
+            child: Text(
+              label!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: CKTypography.of(context, CKTextRole.metadata),
+            ),
+          ),
+        ],
+      ],
+    ),
+  );
+}
+
+/// Artwork-first collection tile with a quiet missing state.
+class CKCollectionTile extends StatelessWidget {
+  const CKCollectionTile({
+    super.key,
+    required this.image,
+    required this.label,
+    required this.owned,
+    this.onTap,
+    this.subtitle,
+    this.semanticLabel,
+  });
+
+  final Widget image;
+  final String label;
+  final bool owned;
+  final VoidCallback? onTap;
+  final String? subtitle;
+  final String? semanticLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final tile = Padding(
+      padding: const EdgeInsets.all(CKSpacing.xs),
+      child: Column(
+        children: [
+          Expanded(
+            child: Opacity(
+              opacity: owned ? 1 : 0.48,
+              child: SizedBox.expand(child: image),
+            ),
+          ),
+          const SizedBox(height: CKSpacing.sm),
+          Text(
+            label,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: CKTypography.of(context, CKTextRole.compactLabel).copyWith(
+              color: owned
+                  ? colorScheme.onSurface
+                  : colorScheme.onSurfaceVariant,
+            ),
+          ),
+          if (subtitle != null) ...[
+            const SizedBox(height: CKSpacing.xs),
+            Text(
+              subtitle!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: CKTypography.of(
+                context,
+                CKTextRole.metadata,
+              ).copyWith(color: colorScheme.onSurfaceVariant),
+            ),
+          ],
+        ],
+      ),
+    );
+    return Semantics(
+      button: onTap != null,
+      label: semanticLabel ?? '$label, ${owned ? 'collected' : 'missing'}',
+      excludeSemantics: true,
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(CKRadius.tile),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(CKRadius.tile),
+          child: tile,
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact progress treatment for counts and completion without another card.
+class CKProgressBadge extends StatelessWidget {
+  const CKProgressBadge({
+    super.key,
+    required this.label,
+    required this.progress,
+    this.color = CKUpgradeColors.completion,
+  });
+
+  final String label;
+  final double progress;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final normalized = progress.clamp(0.0, 1.0).toDouble();
+    return Semantics(
+      label: '$label, ${(normalized * 100).round()} percent',
+      excludeSemantics: true,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 28),
+        padding: const EdgeInsets.symmetric(
+          horizontal: CKSpacing.sm,
+          vertical: CKSpacing.xs,
+        ),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(CKRadius.pill),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 34,
+              child: LinearProgressIndicator(
+                value: normalized,
+                minHeight: 3,
+                borderRadius: BorderRadius.circular(CKRadius.pill),
+                color: color,
+                backgroundColor: colorScheme.surface.withValues(alpha: 0.54),
+              ),
+            ),
+            const SizedBox(width: CKSpacing.sm),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: CKTypography.of(context, CKTextRole.compactLabel),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Lightweight segmented control for filters and view modes.
 class CKSegmentedControl<T> extends StatelessWidget {
   const CKSegmentedControl({
@@ -334,7 +768,8 @@ class CKSegmentedControl<T> extends StatelessWidget {
     required this.labels,
     required this.selected,
     required this.onChanged,
-    this.height = 52,
+    this.height,
+    this.density = CKControlDensity.standard,
     this.color,
   }) : assert(values.length == labels.length);
 
@@ -342,7 +777,8 @@ class CKSegmentedControl<T> extends StatelessWidget {
   final List<String> labels;
   final T selected;
   final ValueChanged<T> onChanged;
-  final double height;
+  final double? height;
+  final CKControlDensity density;
   final Color? color;
 
   @override
@@ -355,6 +791,11 @@ class CKSegmentedControl<T> extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final selectedColor = color ?? colorScheme.primary;
     final indicatorDuration = CKMotion.durationOf(context, CKMotion.standard);
+    final scaledLabelHeight = MediaQuery.textScalerOf(context).scale(14);
+    final extraTextHeight = scaledLabelHeight > 14
+        ? (scaledLabelHeight - 14) * 1.4
+        : 0.0;
+    final resolvedHeight = height ?? density.minimumHeight + extraTextHeight;
 
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -365,7 +806,9 @@ class CKSegmentedControl<T> extends StatelessWidget {
         ),
       ),
       child: SizedBox(
-        height: height,
+        height: resolvedHeight < density.minimumHeight
+            ? density.minimumHeight
+            : resolvedHeight,
         child: LayoutBuilder(
           builder: (context, constraints) {
             final segmentWidth = constraints.maxWidth / labels.length;
@@ -405,27 +848,17 @@ class CKSegmentedControl<T> extends StatelessWidget {
                                 ),
                                 curve: CKMotion.standardCurve,
                                 style:
-                                    Theme.of(
+                                    CKTypography.of(
                                       context,
-                                    ).textTheme.labelLarge?.copyWith(
+                                      CKTextRole.compactLabel,
+                                    ).copyWith(
                                       color: index == selectedIndex
                                           ? selectedColor
                                           : colorScheme.onSurface.withValues(
                                               alpha: 0.76,
                                             ),
                                       fontWeight: index == selectedIndex
-                                          ? FontWeight.w800
-                                          : FontWeight.w600,
-                                      height: 1,
-                                    ) ??
-                                    TextStyle(
-                                      color: index == selectedIndex
-                                          ? selectedColor
-                                          : colorScheme.onSurface.withValues(
-                                              alpha: 0.76,
-                                            ),
-                                      fontWeight: index == selectedIndex
-                                          ? FontWeight.w800
+                                          ? FontWeight.w700
                                           : FontWeight.w600,
                                       height: 1,
                                     ),
