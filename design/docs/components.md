@@ -90,6 +90,9 @@ Uniformity contract:
   freshness, and global actions stay stable. Use `InfoHeroBackdrop`,
   `HeaderIconButton`, and shared header stat panels rather than recreating the
   gradient, action sizing, or glass recipe.
+- Scenic sliver headers darken artwork with a clipped gradient overlay, never a
+  `ColorFiltered` save-layer. Filter layers can retain oversized compositor
+  bounds and dim sibling tab/body slivers until the next scroll repaint.
 - Upgrade Tracker uses five integrated profile tabs: Home Village, Builder
   Base, Plan, Calendar, and Collection. Never move tracker content into a
   separate overview page or modal sheet when it belongs in this tab system.
