@@ -445,17 +445,20 @@ class CKSectionPanel extends StatelessWidget {
     required this.child,
     this.padding = const EdgeInsets.all(CKSpacing.lg),
     this.onTap,
+    this.color,
   });
 
   final Widget child;
   final EdgeInsetsGeometry padding;
   final VoidCallback? onTap;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final decoration = BoxDecoration(
-      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.34),
+      color:
+          color ?? colorScheme.surfaceContainerHighest.withValues(alpha: 0.34),
       borderRadius: BorderRadius.circular(CKRadius.card),
       border: Border.all(
         color: colorScheme.outlineVariant.withValues(alpha: CKOpacity.border),

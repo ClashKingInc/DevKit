@@ -98,15 +98,21 @@ Uniformity contract:
 - `CKResourceCost` presents an icon and amount inline without another framed
   surface.
 - `CKCollectionTile` is artwork-first and uses opacity plus text/semantics for
-  missing state instead of color alone.
+  missing state instead of color alone. Do not wrap missing tiles in
+  `ColorFiltered`; per-tile compositing layers make long collection grids
+  noticeably less responsive.
 - `CKProgressBadge` is a compact supporting treatment, not a replacement for
   the hero progress visualization.
 - Upgrade category grids should match Player Info: one quiet rounded section
   panel per category, strong square artwork tiles, and no glass on ordinary
   list content. Preserve lazy sliver construction for long grids.
+- Section shells use a low-contrast neutral fill. Avoid both full glass and
+  heavy opaque dashboard cards for long Upgrade or Collection grids.
 - Village rows are parent navigation surfaces: keep them visible while open,
   make them wider than their inset category children, and never remove their
-  surface into the page background on expansion.
+  surface into the page background on expansion. Parent and child headers use
+  the same fixed interaction height; open state is communicated with a stronger
+  neutral fill, never by changing row height.
 - Compact category headers use the 44dp interaction minimum without extra
   vertical card padding. This density applies to Upgrade and Collection
   category shells. Phone upgrade grids target five square items per row.
