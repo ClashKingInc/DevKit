@@ -103,6 +103,9 @@ Uniformity contract:
 - Home Village and Builder Base expose the shared village completion breakdown
   from an info action in the hero header. Reuse the existing completion-date and
   resource-cost summary; do not duplicate it inside tab content.
+  The breakdown uses one near-black dialog surface with flat section rows and
+  quiet dividers. Do not nest grey section cards inside a grey modal; resource
+  costs remain inline with their real assets.
 - Calendar opens directly on its timeline with a 60-day horizon. Its date row
   remains pinned while lanes scroll vertically, and it shares the timeline's
   horizontal coordinate space so dates stay aligned with upgrade bars.
