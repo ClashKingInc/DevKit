@@ -104,6 +104,17 @@ Uniformity contract:
 - Upgrade category grids should match Player Info: one quiet rounded section
   panel per category, strong square artwork tiles, and no glass on ordinary
   list content. Preserve lazy sliver construction for long grids.
+- Village rows are parent navigation surfaces: keep them visible while open,
+  make them wider than their inset category children, and never remove their
+  surface into the page background on expansion.
+- Compact category headers use the 44dp interaction minimum without extra
+  vertical card padding. This density applies to Upgrade and Collection
+  category shells. Phone upgrade grids target five square items per row.
+- Tracker tab content uses one horizontal content gutter for search/filter rows,
+  village parents, and section shells; do not introduce per-tab 14/18/22px
+  variants.
+- Lazy section expansion must animate sliver paint extent with the shared
+  motion duration and curve; do not insert or remove a full grid in one frame.
 - Align resource icon, amount, and label on one text baseline. At 100 percent,
   section progress uses `CKUpgradeColors.completion`; incomplete progress keeps
   the normal tracker accent.
