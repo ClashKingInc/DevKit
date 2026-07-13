@@ -10,6 +10,8 @@
   --ck-color-capital-purple: #8d63d9;
   --ck-color-builder-blue: #2a9fd6;
   --ck-color-donation-green: #14a37f;
+  --ck-color-legend-blue: #4e7df2;
+  --ck-color-discord-blurple: #5865f2;
 
   /* Web/admin semantic dark theme. */
   --ck-color-bg: #08111f;
@@ -63,10 +65,15 @@
 
   --ck-radius-control: 12px;
   --ck-radius-chip: 16px;
+  --ck-radius-tile: 20px;
   --ck-radius-panel: 28px;
   --ck-radius-pill: 999px;
 
-  --ck-shadow-panel: 0 24px 80px rgba(0, 0, 0, 0.34);
+  /* Kept deliberately soft — the shipped app renders every card/panel at
+     elevation 0 (border + surface alpha only, no drop shadow). Web/admin
+     surfaces get a faint lift for legibility against a flat page background,
+     never the heavy floating-card shadow a marketing site would use. */
+  --ck-shadow-panel: 0 8px 24px rgba(0, 0, 0, 0.2);
   --ck-shadow-accent: 0 10px 28px rgba(245, 158, 11, 0.24);
 
   --ck-backdrop-blur: blur(18px);

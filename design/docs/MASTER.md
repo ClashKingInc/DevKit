@@ -11,6 +11,15 @@
 **Category:** Gaming / stats companion (Clash of Clans)
 **Updated:** 2026-07-03 — rewritten to match the actual shipped app (see `lib/core/app/my_app.dart`); the previous auto-generated version described an unrelated web/CSS design system and should be disregarded.
 
+> **Newer, more detailed reference:** `clashking-app/docs/design_system.md` is
+> the app's living design doc and is more current than this file for
+> component-level guidance (layout patterns, the full widget catalog,
+> known gaps). Treat this Master file as the cross-client token/philosophy
+> summary and that doc as the Flutter implementation detail. The one-line
+> philosophy that doc leads with applies here too and to any web/admin
+> surface: **one flat surface with rounded rows — never a card inside a
+> card.**
+
 ---
 
 ## Global Rules

@@ -1,10 +1,10 @@
 .ck-app-surface {
   min-height: 100vh;
   color: var(--ck-color-text);
+  /* One faint glow, not a stack of brand gradients — the shipped app's
+     scaffold background is a flat color with no decorative gradient. */
   background:
-    linear-gradient(180deg, rgba(217, 7, 9, 0.12), transparent 20rem),
-    radial-gradient(circle at top left, rgba(2, 108, 194, 0.2), transparent 32rem),
-    radial-gradient(circle at 80% 10%, rgba(217, 7, 9, 0.16), transparent 26rem),
+    radial-gradient(circle at top left, rgba(2, 108, 194, 0.08), transparent 40rem),
     var(--ck-color-bg);
   font-family: var(--ck-font-family);
 }
@@ -24,6 +24,16 @@
   backdrop-filter: var(--ck-backdrop-blur);
 }
 
+/* Quiet nested-content surface — for list rows/items living *inside* a
+   .ck-card section. No border, no shadow: the enclosing .ck-card already
+   supplies the section's frame, so a second bordered box here would read as
+   a card nested inside a card. Mirrors the app's CKUpgradeRow treatment
+   (tinted fill only, radius `tile`, zero elevation). */
+.ck-row {
+  border-radius: var(--ck-radius-tile);
+  background: var(--ck-color-surface-muted);
+}
+
 .ck-button {
   min-height: 44px;
   padding: 0 var(--ck-space-4);
@@ -36,6 +46,7 @@
   color: var(--ck-color-text);
   background: rgba(15, 23, 42, 0.78);
   font: inherit;
+  text-decoration: none;
   cursor: pointer;
 }
 
@@ -112,18 +123,18 @@
   height: 24px;
   display: block;
   border-radius: var(--ck-radius-pill);
-  background: #dbeafe;
+  background: var(--ck-color-surface-solid);
   transition: transform var(--ck-transition-fast);
 }
 
 .ck-toggle-on {
-  background: rgba(20, 163, 127, 0.28);
+  background: var(--ck-color-success-bg);
   border-color: rgba(20, 163, 127, 0.36);
 }
 
 .ck-toggle-on span {
   transform: translateX(22px);
-  background: #bbf7d0;
+  background: var(--ck-color-success-text);
 }
 
 .ck-icon-tile {
@@ -133,13 +144,17 @@
   place-items: center;
   border-radius: var(--ck-radius-chip);
   color: #fff;
-  background: linear-gradient(135deg, var(--ck-color-primary-red), var(--ck-color-secondary-blue));
+  /* Set --ck-icon-tile-bg per instance (a single flat/semantic tone) instead
+     of relying on DOM position — a fixed two-color diagonal gradient does
+     not communicate which stat an icon belongs to. */
+  background: var(--ck-icon-tile-bg, var(--ck-color-secondary-blue));
 }
 
 .ck-table-wrap {
+  /* No border/radius: a table nested inside a .ck-card section relies on
+     the section for its frame; the header shading + row dividers already
+     read as a flat list, so a second bordered box would double-frame it. */
   overflow-x: auto;
-  border: 1px solid var(--ck-color-border);
-  border-radius: 20px;
 }
 
 .ck-table {

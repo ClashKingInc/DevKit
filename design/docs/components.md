@@ -191,13 +191,30 @@ state labels remain owned by the localized client.
 
 The CSS package exposes:
 
-- `.ck-card`
-- `.ck-card-flat`
-- `.ck-button`
-- `.ck-badge`
-- `.ck-toggle`
-- `.ck-icon-tile`
-- `.ck-table`
+- `.ck-card` / `.ck-card-flat` — section-level framed surface (radius
+  `panel` = 28, hairline border). `.ck-card` adds the shared soft
+  `--ck-shadow-panel` lift; `.ck-card-flat` omits it. Reach for
+  `.ck-card-flat` first — the shipped app renders every panel at elevation 0
+  (border + surface alpha, no drop shadow); `.ck-card`'s shadow exists for
+  the rare case a surface genuinely needs to lift off a busy background, not
+  as the default.
+- `.ck-row` — quiet nested-content surface for list rows/items living
+  *inside* a `.ck-card`/`.ck-card-flat` section (radius `tile` = 20, tinted
+  fill, no border, no shadow). Use this for every item nested one level
+  inside a section instead of giving it its own `.ck-card`. Mirrors the
+  app's `CKUpgradeRow` treatment.
+- `.ck-button`, `.ck-button-primary`, `.ck-button-secondary`
+- `.ck-badge` + tone modifiers `.ck-badge-success` / `-warning` / `-danger` /
+  `-info` (tone names match `--ck-color-success` etc.; there is no `-good`
+  variant)
+- `.ck-toggle` / `.ck-toggle-on`
+- `.ck-icon-tile` — square icon chip (radius `chip` = 16). Set the
+  `--ck-icon-tile-bg` custom property per instance to a single semantic
+  tone; don't rely on DOM position (`:nth-child`) to imply which stat an
+  icon represents.
+- `.ck-table` / `.ck-table-wrap` — `.ck-table-wrap` only handles horizontal
+  overflow and intentionally carries no border/radius of its own, since a
+  table is normally the direct child of a `.ck-card` section.
 
 CSS primitives may use web-specific affordances such as hover and table
 overflow. Do not copy those assumptions into native mobile components.
@@ -208,4 +225,16 @@ overflow. Do not copy those assumptions into native mobile components.
 - New radius values outside `12 / 16 / 20 / 28 / 999`.
 - Icon-only actions without labels or tooltips.
 - Emoji as structural icons.
-- Nested framed cards when one section panel would work.
+- Nested framed cards when one section panel would work — concretely, a
+  `.ck-card` (or hand-rolled bordered/shadowed row) placed inside another
+  `.ck-card`. Use `.ck-row` for the inner content instead.
+- Heavy drop shadows on routine product surfaces. The shipped app uses
+  elevation 0 everywhere (border + alpha only); keep `--ck-shadow-panel`
+  soft and don't stack additional shadows on top of it.
+- Decorative multi-gradient page backgrounds behind ordinary product UI —
+  `.ck-app-surface` keeps a single faint glow for this reason; don't layer
+  more gradients on top of it per-page.
+- Redeclaring a shared `.ck-*` primitive locally in a consuming app instead
+  of importing it — forks the visual language and silently drifts (found
+  and fixed in `clashking-admin-panel`: a local `.ck-badge-good` override
+  never matched the `success` tone the component actually rendered).
