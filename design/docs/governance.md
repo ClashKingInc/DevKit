@@ -21,6 +21,15 @@ Add to DevKit when a decision or component is reused across ClashKing surfaces:
 Keep in product repos when the UI is product-specific or depends on local data,
 navigation, image loading, or platform services.
 
+Feature-flavored primitives (for example the upgrade-tracker widgets
+`CKUpgradeRow`, `CKResourceCost`, `CKCollectionTile`, `CKProgressBadge`) belong
+here instead when they encode a reusable visual vocabulary rather than a
+single screen's layout: no dependency on tracker-specific data models,
+navigation, or business logic, and a second consumer plausible on another
+surface. If a widget only makes sense on one screen, or reaches into
+product-specific state, it stays in the product repo even if it looks
+reusable.
+
 ## Contribution checklist
 
 Every public token or component change should include:

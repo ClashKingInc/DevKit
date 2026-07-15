@@ -778,15 +778,18 @@ class CKSegmentedControl<T> extends StatelessWidget {
     required this.labels,
     required this.selected,
     required this.onChanged,
+    this.icons,
     this.height,
     this.density = CKControlDensity.standard,
     this.color,
-  }) : assert(values.length == labels.length);
+  }) : assert(values.length == labels.length),
+       assert(icons == null || icons.length == labels.length);
 
   final List<T> values;
   final List<String> labels;
   final T selected;
   final ValueChanged<T> onChanged;
+  final List<Widget>? icons;
   final double? height;
   final CKControlDensity density;
   final Color? color;
@@ -881,6 +884,25 @@ class CKSegmentedControl<T> extends StatelessWidget {
                                   mainAxisSize: MainAxisSize.min,
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
+                                    if (icons != null) ...[
+                                      IconTheme(
+                                        data: IconThemeData(
+                                          size: 16,
+                                          color: index == selectedIndex
+                                              ? colorScheme.onSurface
+                                              : colorScheme.onSurface
+                                                    .withValues(alpha: 0.76),
+                                        ),
+                                        child: SizedBox.square(
+                                          dimension: 16,
+                                          child: FittedBox(
+                                            fit: BoxFit.contain,
+                                            child: icons![index],
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: CKSpacing.xs),
+                                    ],
                                     Flexible(
                                       child: Text(
                                         labels[index],

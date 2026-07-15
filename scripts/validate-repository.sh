@@ -24,3 +24,10 @@ echo "Validating Flutter design package..."
   flutter analyze
   flutter test
 )
+
+echo "Running design drift check against ClashKingApp (warning mode, informational only)..."
+if [ -d "clashking-app-drift-check" ]; then
+  npm --prefix design run drift:app -- --target "$repo_root/clashking-app-drift-check" || true
+else
+  npm --prefix design run drift:app || true
+fi

@@ -15,6 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Checkout ClashKingApp for design drift check
+        uses: actions/checkout@v4
+        with:
+          repository: ClashKingInc/ClashKingApp
+          path: clashking-app-drift-check
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: database/migrations/go.mod

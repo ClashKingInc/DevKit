@@ -3,5 +3,6 @@ dist
 .DS_Store
 *.tsbuildinfo
 .dart_tool
+build
 .flutter-plugins-dependencies
 pubspec.lock

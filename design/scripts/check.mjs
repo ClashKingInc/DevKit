@@ -28,6 +28,8 @@ const tokens = read('packages/css/tokens.css');
 for (const token of [
   '--ck-color-primary-red',
   '--ck-color-secondary-blue',
+  '--ck-color-legend-blue',
+  '--ck-color-discord-blurple',
   '--ck-radius-control',
   '--ck-radius-panel',
 ]) {
