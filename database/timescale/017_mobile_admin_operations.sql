@@ -110,9 +110,8 @@ CREATE TABLE IF NOT EXISTS public.admin_posts (
     CONSTRAINT admin_posts_story_version_check CHECK (story_version >= 1)
 );
 
--- Keeps local databases created during development compatible while this
--- still-unreleased migration is repeatedly squashed and replayed.
 ALTER TABLE public.admin_posts
+    ADD COLUMN IF NOT EXISTS translations jsonb DEFAULT '{}'::jsonb NOT NULL,
     ADD COLUMN IF NOT EXISTS revision_number integer DEFAULT 1 NOT NULL;
 
 CREATE TABLE IF NOT EXISTS public.admin_post_revisions (
@@ -167,6 +166,36 @@ CREATE TABLE IF NOT EXISTS public.admin_notification_campaigns (
     CONSTRAINT admin_notification_campaign_send_time_check CHECK (send_time IS NULL OR send_time ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'),
     CONSTRAINT admin_notification_campaign_locales_check CHECK (target_locales IS NOT NULL)
 );
+
+ALTER TABLE public.admin_notification_campaigns
+    ADD COLUMN IF NOT EXISTS target_locales text[] DEFAULT '{}'::text[] NOT NULL,
+    ADD COLUMN IF NOT EXISTS translations jsonb DEFAULT '{}'::jsonb NOT NULL,
+    ADD COLUMN IF NOT EXISTS send_time text DEFAULT '09:00'::text;
+
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'admin_notification_campaign_send_time_check'
+          AND conrelid = 'public.admin_notification_campaigns'::regclass
+    ) THEN
+        ALTER TABLE public.admin_notification_campaigns
+            ADD CONSTRAINT admin_notification_campaign_send_time_check
+            CHECK (send_time IS NULL OR send_time ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$');
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'admin_notification_campaign_locales_check'
+          AND conrelid = 'public.admin_notification_campaigns'::regclass
+    ) THEN
+        ALTER TABLE public.admin_notification_campaigns
+            ADD CONSTRAINT admin_notification_campaign_locales_check
+            CHECK (target_locales IS NOT NULL);
+    END IF;
+END $$;
+-- +goose StatementEnd
 
 CREATE TABLE IF NOT EXISTS public.admin_feature_flags (
     flag_key text NOT NULL PRIMARY KEY,
@@ -250,6 +279,49 @@ CREATE TABLE IF NOT EXISTS public.admin_campaign_delivery_attempts (
     attempted_at timestamp with time zone DEFAULT now() NOT NULL,
     UNIQUE (campaign_id, scheduled_for)
 );
+
+-- Migration 009 introduced the original announcement model. All current
+-- consumers use admin_posts, so preserve legacy rows before retiring it.
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF to_regclass('public.app_announcements') IS NOT NULL THEN
+        INSERT INTO public.admin_posts (
+            id, slug, title, summary, hero_image_url, body_blocks,
+            presentation_type, story_url, show_on_home, platforms, status,
+            starts_at, ends_at, published_at, created_at, updated_at
+        )
+        SELECT
+            id,
+            'legacy-announcement-' || id::text,
+            title,
+            subtitle,
+            banner_image_url,
+            CASE
+                WHEN btrim(body) = '' THEN '[]'::jsonb
+                ELSE jsonb_build_array(jsonb_build_object('type', 'paragraph', 'text', body))
+            END,
+            CASE WHEN html_url LIKE 'https://%' THEN 'story' ELSE 'article' END,
+            CASE WHEN html_url LIKE 'https://%' THEN html_url ELSE NULL END,
+            true,
+            CASE WHEN target = 'all' THEN ARRAY['ios', 'android', 'web']::text[] ELSE ARRAY[target]::text[] END,
+            CASE
+                WHEN status = 'published' AND ends_at IS NOT NULL AND ends_at <= now() THEN 'expired'
+                WHEN status = 'published' THEN 'live'
+                ELSE status
+            END,
+            starts_at,
+            ends_at,
+            CASE WHEN status = 'published' THEN starts_at ELSE NULL END,
+            created_at,
+            updated_at
+        FROM public.app_announcements
+        ON CONFLICT (id) DO NOTHING;
+
+        DROP TABLE public.app_announcements;
+    END IF;
+END $$;
+-- +goose StatementEnd
 
 INSERT INTO public.admin_notification_campaigns
     (campaign_key, title, body, target_route, platforms, status, trigger_type, day_of_month, send_time, last_sent_at, created_by)
