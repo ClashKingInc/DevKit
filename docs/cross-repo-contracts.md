@@ -33,6 +33,11 @@ Shared contracts must be updated from their source of truth outward.
 not a compatibility surface. API, bot, app, and dashboard code must use the
 explicit subject contract instead of inventing an identity-normalization layer.
 
+Home upgrade data is keyed only by the globally unique `player_links.tag`.
+`player_upgrades.data` and `player_upgrade_preferences.preferences` are separate
+whole-document JSON objects, and deleting the player link deletes both records.
+`player_links.last_login` remains null until an app launch updates a verified link.
+
 ### Recent searches
 
 Recent-search API behavior depends on the Timescale hypertable and 90-day

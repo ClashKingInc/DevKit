@@ -102,6 +102,16 @@ and capital league ID.
 split active and inactive budgets from this timestamp without storing script-specific cadence
 state in SQL. Other scripts can update it from war, capital, or membership activity.
 
+## Home Player Data
+
+`player_links.last_login` is nullable and records the most recent app launch reported for a
+verified linked player. Existing links remain `NULL` until the app launch flow updates them.
+
+`player_upgrades` stores one whole upgrade-data JSON object per globally unique player tag.
+`player_upgrade_preferences` stores that player's separate preferences object. Both tables use
+`player_links.tag` as their only identity, timestamp writes with the database clock, and cascade
+on unlink; neither table carries a user or account identifier.
+
 ## Mobile Push State
 
 Mobile push state is current-state SQL data, not a hypertable. `mobile_push_devices`
