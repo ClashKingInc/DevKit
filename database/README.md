@@ -39,7 +39,7 @@ Services:
 
 | Service | URL / address |
 | --- | --- |
-| Timescale/Postgres | `postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${HOST_BIND_IP}:${TIMESCALE_PORT}/${POSTGRES_DB}?sslmode=disable` |
+| Timescale/Postgres | `postgres://${TIMESCALE_USER}:${TIMESCALE_PASSWORD}@${HOST_BIND_IP}:${TIMESCALE_PORT}/${TIMESCALE_DB}?sslmode=disable` |
 | Valkey | `${HOST_BIND_IP}:${VALKEY_PORT}` |
 
 Set `HOST_BIND_IP` to `127.0.0.1` when only same-host access is needed. Use an
@@ -53,14 +53,14 @@ Use goose when you want migration semantics:
 ```bash
 go run github.com/pressly/goose/v3/cmd/goose@latest \
   -dir timescale \
-  postgres "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${HOST_BIND_IP}:${TIMESCALE_PORT}/${POSTGRES_DB}?sslmode=disable" \
+  postgres "postgres://${TIMESCALE_USER}:${TIMESCALE_PASSWORD}@${HOST_BIND_IP}:${TIMESCALE_PORT}/${TIMESCALE_DB}?sslmode=disable" \
   up
 ```
 
 For a throwaway fresh database where only the initial schema is needed:
 
 ```bash
-psql "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${HOST_BIND_IP}:${TIMESCALE_PORT}/${POSTGRES_DB}?sslmode=disable" \
+psql "postgres://${TIMESCALE_USER}:${TIMESCALE_PASSWORD}@${HOST_BIND_IP}:${TIMESCALE_PORT}/${TIMESCALE_DB}?sslmode=disable" \
   -f timescale/001_initial.sql
 ```
 
@@ -119,7 +119,7 @@ Goose, backfill, remote-run, and validation workflow.
 When running `clashking_tracking` from the host, use:
 
 ```bash
-TIMESCALE_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${HOST_BIND_IP}:${TIMESCALE_PORT}/${POSTGRES_DB}?sslmode=disable"
+TIMESCALE_URL="postgres://${TIMESCALE_USER}:${TIMESCALE_PASSWORD}@${HOST_BIND_IP}:${TIMESCALE_PORT}/${TIMESCALE_DB}?sslmode=disable"
 VALKEY_ADDR="${HOST_BIND_IP}:${VALKEY_PORT}"
 VALKEY_PASSWORD="${VALKEY_PASSWORD}"
 ```
