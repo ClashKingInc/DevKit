@@ -39,9 +39,6 @@ func runBotServerSettings(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 
-	if err := migrateBotSettings(ctx, cfg, cp, pool, staticClient.Database("bot").Collection("settings")); err != nil {
-		return err
-	}
 	if err := migrateUserSettings(ctx, cfg, cp, pool, staticClient.Database("usafam").Collection("user_settings")); err != nil {
 		return err
 	}
@@ -64,33 +61,6 @@ func runBotServerSettings(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 	return nil
-}
-
-func migrateBotSettings(ctx context.Context, cfg migrateutil.Config, cp *migrateutil.Checkpoint, pool interface {
-	Begin(context.Context) (pgx.Tx, error)
-}, collection *mongo.Collection) error {
-	rows := make([][]any, 0, 1)
-	flush := func() error {
-		err := flushRows(ctx, pool, "bot_settings", []string{"type", "data"}, rows, `
-			INSERT INTO bot_settings (type, data)
-			SELECT type, data::jsonb FROM _ck_rows
-			ON CONFLICT (type) DO UPDATE SET data = EXCLUDED.data, updated_at = now()
-		`)
-		if err == nil {
-			rows = rows[:0]
-		}
-		return err
-	}
-	seen, err := migrateutil.StreamByObjectID(ctx, cfg, cp, "bot_settings_id", collection, func(doc bson.M) (bool, error) {
-		settingType := migrateutil.String(doc["type"])
-		if settingType == "" {
-			settingType = "bot"
-		}
-		rows = append(rows, []any{settingType, migrateutil.RawJSON(doc)})
-		return len(rows) >= cfg.BatchSize, nil
-	}, flush)
-	fmt.Printf("settings.bot_settings: scanned_docs=%d\n", seen)
-	return err
 }
 
 func migrateUserSettings(ctx context.Context, cfg migrateutil.Config, cp *migrateutil.Checkpoint, pool interface {
@@ -137,8 +107,8 @@ func migrateCustomEmbeds(ctx context.Context, cfg migrateutil.Config, cp *migrat
 }, collection *mongo.Collection) error {
 	rows := make([][]any, 0, cfg.BatchSize)
 	flush := func() error {
-		err := flushRows(ctx, pool, "custom_embeds", []string{"server_id", "name", "data"}, rows, `
-			INSERT INTO custom_embeds (server_id, name, data)
+		err := flushRows(ctx, pool, "server_custom_embeds", []string{"server_id", "name", "data"}, rows, `
+			INSERT INTO server_custom_embeds (server_id, name, data)
 			SELECT server_id, name, data::jsonb FROM _ck_rows
 			WHERE server_id <> '' AND name <> ''
 			ON CONFLICT (server_id, name) DO UPDATE SET data = EXCLUDED.data
@@ -275,25 +245,48 @@ func migrateGiveaways(ctx context.Context, cfg migrateutil.Config, cp *migrateut
 		err := flushRows(ctx, pool, "giveaways", []string{
 			"id", "server_id", "prize", "channel_id", "status", "start_time", "end_time", "winners",
 			"mentions", "text_above_embed", "text_in_embed", "text_on_end", "image_url",
-			"profile_picture_required", "coc_account_required", "roles_mode", "roles", "boosters", "entries", "winners_list", "message_id", "data",
+			"profile_picture_required", "coc_account_required", "roles_mode", "roles", "boosters", "entries", "winners_list",
+			"updated", "message_id", "event_pending", "event_pending_at", "created_at", "updated_at",
 		}, rows, `
 			INSERT INTO giveaways (
 				id, server_id, prize, channel_id, status, start_time, end_time, winners,
 				mentions, text_above_embed, text_in_embed, text_on_end, image_url,
-				profile_picture_required, coc_account_required, roles_mode, roles, boosters, entries, winners_list, message_id, data
+				profile_picture_required, coc_account_required, roles_mode, roles, boosters, entries, winners_list,
+				updated, message_id, event_pending, event_pending_at, created_at, updated_at
 			)
 			SELECT id, server_id, prize, NULLIF(channel_id, ''), status, start_time, end_time, winners,
 				mentions, text_above_embed, text_in_embed, text_on_end, NULLIF(image_url, ''),
-				profile_picture_required, coc_account_required, roles_mode, roles, boosters::jsonb, entries::jsonb, winners_list::jsonb, NULLIF(message_id, ''), data::jsonb
+				profile_picture_required, coc_account_required, roles_mode, roles, boosters::jsonb, entries::jsonb, winners_list::jsonb,
+				updated, NULLIF(message_id, ''), NULLIF(event_pending, ''), event_pending_at,
+				COALESCE(created_at, now()), COALESCE(updated_at, now())
 			FROM _ck_rows
 			WHERE id <> '' AND server_id <> ''
 			ON CONFLICT (id) DO UPDATE SET
 				server_id = EXCLUDED.server_id,
 				prize = EXCLUDED.prize,
+				channel_id = EXCLUDED.channel_id,
 				status = EXCLUDED.status,
+				start_time = EXCLUDED.start_time,
+				end_time = EXCLUDED.end_time,
+				winners = EXCLUDED.winners,
+				mentions = EXCLUDED.mentions,
+				text_above_embed = EXCLUDED.text_above_embed,
+				text_in_embed = EXCLUDED.text_in_embed,
+				text_on_end = EXCLUDED.text_on_end,
+				image_url = EXCLUDED.image_url,
+				profile_picture_required = EXCLUDED.profile_picture_required,
+				coc_account_required = EXCLUDED.coc_account_required,
+				roles_mode = EXCLUDED.roles_mode,
+				roles = EXCLUDED.roles,
+				boosters = EXCLUDED.boosters,
 				entries = EXCLUDED.entries,
 				winners_list = EXCLUDED.winners_list,
-				data = EXCLUDED.data
+				updated = EXCLUDED.updated,
+				message_id = EXCLUDED.message_id,
+				event_pending = EXCLUDED.event_pending,
+				event_pending_at = EXCLUDED.event_pending_at,
+				created_at = EXCLUDED.created_at,
+				updated_at = EXCLUDED.updated_at
 		`)
 		if err == nil {
 			rows = rows[:0]
@@ -327,13 +320,24 @@ func migrateGiveaways(ctx context.Context, cfg migrateutil.Config, cp *migrateut
 			migrateutil.RawJSON(doc["boosters"]),
 			migrateutil.RawJSON(doc["entries"]),
 			migrateutil.RawJSON(doc["winners_list"]),
+			migrateutil.Bool(doc["updated"]),
 			migrateutil.String(doc["message_id"]),
-			migrateutil.RawJSON(doc),
+			migrateutil.String(doc["event_pending"]),
+			giveawayOptionalTime(doc["event_pending_at"]),
+			giveawayOptionalTime(doc["created_at"]),
+			giveawayOptionalTime(doc["updated_at"]),
 		})
 		return len(rows) >= cfg.BatchSize, nil
 	}, flush)
 	fmt.Printf("settings.giveaways: scanned_docs=%d\n", seen)
 	return err
+}
+
+func giveawayOptionalTime(value any) any {
+	if parsed, ok := migrateutil.Time(value); ok {
+		return parsed
+	}
+	return nil
 }
 
 func migrateShortLinks(ctx context.Context, cfg migrateutil.Config, cp *migrateutil.Checkpoint, pool interface {
@@ -379,7 +383,8 @@ func flushRows(ctx context.Context, pool interface {
 		defs = []string{
 			"id text", "server_id text", "prize text", "channel_id text", "status text", "start_time timestamptz", "end_time timestamptz", "winners int",
 			"mentions text[]", "text_above_embed text", "text_in_embed text", "text_on_end text", "image_url text",
-			"profile_picture_required bool", "coc_account_required bool", "roles_mode text", "roles text[]", "boosters text", "entries text", "winners_list text", "message_id text", "data text",
+			"profile_picture_required bool", "coc_account_required bool", "roles_mode text", "roles text[]", "boosters text", "entries text", "winners_list text",
+			"updated bool", "message_id text", "event_pending text", "event_pending_at timestamptz", "created_at timestamptz", "updated_at timestamptz",
 		}
 	}
 	if table == "rosters" {

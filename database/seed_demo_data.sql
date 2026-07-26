@@ -13,7 +13,6 @@ DECLARE
     i integer;
     demo_uuid uuid;
     panel_uuid uuid;
-    embed_uuid uuid;
     roster_uuid uuid;
     roster_group_uuid uuid;
     v_server_id text;
@@ -89,14 +88,8 @@ BEGIN
         VALUES (v_players[i], v_player_names[i], 29000022 + i, v_primary_clan, 17, 5000 + i * 100)
         ON CONFLICT (tag) DO NOTHING;
 
-        INSERT INTO auth_users (
-            user_id, discord_user_id, username, display_name, verified, profile, data
-        ) VALUES (
-            v_users[i], format('demo-discord-%02s', i), format('demo_user_%s', i),
-            format('Demo User %s', i), true,
-            jsonb_build_object('avatar', format('demo-avatar-%s', i), 'locale', 'en-US'),
-            jsonb_build_object('fixture', true)
-        )
+        INSERT INTO auth_users (user_id, discord_user_id)
+        VALUES (v_users[i], format('demo-discord-%02s', i))
         ON CONFLICT (user_id) DO NOTHING;
 
         INSERT INTO app_announcements (
@@ -122,16 +115,6 @@ BEGIN
         )
         ON CONFLICT (id) DO NOTHING;
 
-        INSERT INTO auth_password_reset_tokens (
-            id, email_hash, reset_code_hash, user_id, used, expires_at, data
-        ) VALUES (
-            md5(format('demo:password-reset:%s', i))::uuid,
-            md5(format('demo-email-%s@example.invalid', i)),
-            md5(format('demo-reset-code-%s', i)), v_users[i], i = 1,
-            now() + make_interval(hours => i), jsonb_build_object('fixture', true)
-        )
-        ON CONFLICT (id) DO NOTHING;
-
         INSERT INTO autoboards (
             id, identifier, server_id, type, board_type, channel_id, webhook_id,
             interval_minutes, next_run_at, enabled, button_id, days, locale, data
@@ -147,11 +130,23 @@ BEGIN
         ON CONFLICT (id) DO NOTHING;
 
         INSERT INTO bases (
-            id, message_id, base_link, downloads, upvotes, downvotes, downloaders, whitelisted_role_id
+            id, message_id, base_link, downloaders, server_id, channel_id,
+            images, description, upvoter_ids, downvoter_ids
         ) VALUES (
             md5(format('demo:base:%s', i))::uuid,
             format('demo-base-message-%s', i), format('https://link.clashofclans.com/demo-base-%s', i),
-            i * 12, i * 3, i - 1, ARRAY[format('demo-discord-%s', i)], format('demo-role-%s', i)
+            ARRAY[format('demo-discord-%s', i)],
+            v_server_id, format('demo-base-channel-%s', i),
+            ARRAY[format('https://cdn.example.invalid/demo-base-%s.png', i)],
+            format('Demo base layout %s', i),
+            CASE
+                WHEN i % 2 = 1 THEN ARRAY[format('demo-discord-%s', i)]
+                ELSE '{}'::text[]
+            END,
+            CASE
+                WHEN i % 2 = 0 THEN ARRAY[format('demo-discord-%s', i)]
+                ELSE '{}'::text[]
+            END
         )
         ON CONFLICT (id) DO NOTHING;
 
@@ -169,32 +164,6 @@ BEGIN
             format('demo-army-share-%s', i)
         )
         ON CONFLICT (battle_id, "timestamp") DO NOTHING;
-
-        INSERT INTO bot_settings (type, data)
-        VALUES (
-            format('demo_setting_%s', i),
-            jsonb_build_object('enabled', true, 'value', i, 'description', 'Example bot-wide setting')
-        )
-        ON CONFLICT (type) DO NOTHING;
-
-        INSERT INTO capital_raid_cache (clan_tag, start_time, end_time, state, data, raw)
-        VALUES (
-            v_clans[i], date_trunc('week', now()) - make_interval(weeks => i),
-            date_trunc('week', now()) - make_interval(weeks => i) + interval '3 days',
-            'ended', jsonb_build_object('capitalTotalLoot', 100000 * i, 'fixture', true),
-            jsonb_build_object('state', 'ended', 'clanTag', v_clans[i], 'attackLog', jsonb_build_array())
-        )
-        ON CONFLICT (clan_tag) DO NOTHING;
-
-        INSERT INTO capital_raid_members (
-            clan_tag, start_time, player_tag, player_name, attack_count, attack_limit,
-            bonus_attack_limit, capital_resources_looted, data
-        ) VALUES (
-            v_primary_clan, date_trunc('week', now()) - interval '1 week', v_players[i],
-            v_player_names[i], 5 + (i % 2), 5, 1, 10000 + i * 1250,
-            jsonb_build_object('fixture', true, 'rank', i)
-        )
-        ON CONFLICT (clan_tag, start_time, player_tag) DO NOTHING;
 
         demo_uuid := md5(format('demo:clan-category:%s', i))::uuid;
         INSERT INTO clan_categories (id, server_id, name)
@@ -218,52 +187,59 @@ BEGIN
         VALUES (
             md5(format('demo:clan-position-role:%s', i))::uuid,
             v_server_id, v_clans[i], 'clan_role',
-            (ARRAY['member', 'elder', 'coleader', 'leader', 'member'])[i],
+            (ARRAY['member', 'elder', 'co_leader', 'leader', 'member'])[i],
             format('demo-position-role-%s', i), 'both'
         )
         ON CONFLICT (id) DO NOTHING;
 
-        INSERT INTO clan_rankings_current (
-            clan_tag, country_code, country_name, rank, global_rank, local_rank, data
-        ) VALUES (
-            format('#DEMORANK%s', i), 'US', 'United States', i, i * 100, i,
-            jsonb_build_object('name', format('Demo Ranked Clan %s', i), 'points', 50000 - i * 100)
-        )
-        ON CONFLICT (clan_tag) DO NOTHING;
+        UPDATE basic_clan
+        SET builder_base_points = CASE
+                WHEN builder_base_points = 0 THEN 45000 - i * 100
+                ELSE builder_base_points
+            END,
+            capital_points = CASE
+                WHEN capital_points = 0 THEN 2500 - i * 10
+                ELSE capital_points
+            END
+        WHERE tag = v_clans[i];
 
-        INSERT INTO clan_season_stats (clan_tag, season, donations, clan_games, activity, data)
-        VALUES (
-            v_clans[i], to_char(current_date, 'YYYY-MM'),
-            jsonb_build_object('donated', 10000 * i, 'received', 8000 * i),
-            jsonb_build_object('points', 5000 * i, 'participants', 30 + i),
-            jsonb_build_object('messages', 100 * i, 'lastOnline', now()),
-            jsonb_build_object('fixture', true, 'server_id', v_server_id)
+        INSERT INTO clan_rankings_current (
+            clan_tag, ranking_type, location_id, rank, points
         )
-        ON CONFLICT (clan_tag, season) DO NOTHING;
+        SELECT clan.tag, ranking.ranking_type, 'global', i, ranking.points
+        FROM basic_clan AS clan
+        CROSS JOIN LATERAL (
+            VALUES
+                ('home'::text, clan.clan_points),
+                ('builder_base'::text, clan.builder_base_points),
+                ('capital'::text, clan.capital_points)
+        ) AS ranking(ranking_type, points)
+        WHERE clan.tag = v_clans[i]
+        ON CONFLICT (clan_tag, ranking_type, location_id) DO NOTHING;
+
+        INSERT INTO clan_rankings_current (
+            clan_tag, ranking_type, location_id, rank, points
+        )
+        SELECT clan.tag, 'home', clan.location_id::text, i, clan.clan_points
+        FROM basic_clan AS clan
+        WHERE clan.tag = v_clans[i]
+          AND clan.location_id IS NOT NULL
+        ON CONFLICT (clan_tag, ranking_type, location_id) DO NOTHING;
 
         INSERT INTO current_war_timers (
-            player_tag, war_id, clan_tag, opponent_tag, end_time, data
+            player_tag, war_id, clan_tag, opponent_tag, end_time
         ) VALUES (
             v_players[i], coalesce(v_war_ids[i], format('demo-war-%s', i)), v_primary_clan,
-            format('#DEMOOPP%s', i), now() + make_interval(hours => i),
-            jsonb_build_object('attacksRemaining', 2 - (i % 2), 'fixture', true)
+            format('#DEMOOPP%s', i), now() + make_interval(hours => i)
         )
         ON CONFLICT (player_tag) DO NOTHING;
 
-        INSERT INTO custom_embeds (server_id, name, data)
+        INSERT INTO server_custom_embeds (server_id, name, data)
         VALUES (
             v_server_id, format('Demo Embed %s', i),
             jsonb_build_object('title', format('Demo Embed %s', i), 'description', 'Reusable embed fixture', 'color', 4886754)
         )
         ON CONFLICT (server_id, name) DO NOTHING;
-
-        INSERT INTO cwl_groups (cwl_id, season, cwl_league_id, clan_tags, rounds, data)
-        VALUES (
-            format('demo-cwl-%s', i), to_char(current_date, 'YYYY-MM'), 48000010 + i,
-            v_clans, jsonb_build_array(jsonb_build_object('warTags', ARRAY[format('#DEMO-WAR-%s', i)])),
-            jsonb_build_object('state', 'ended', 'fixture', true)
-        )
-        ON CONFLICT (cwl_id) DO NOTHING;
 
         INSERT INTO dashboard_role_grants (
             server_id, role_id, section, access_level, created_by_user_id
@@ -274,18 +250,17 @@ BEGIN
         )
         ON CONFLICT (server_id, role_id, section) DO NOTHING;
 
-        embed_uuid := md5(format('demo:embed:%s', i))::uuid;
-        INSERT INTO embeds (id, server_id, name, data)
+        INSERT INTO server_custom_embeds (server_id, name, data)
         VALUES (
-            embed_uuid, v_server_id, format('Demo Ticket Embed %s', i),
+            v_server_id, format('Demo Ticket Embed %s', i),
             jsonb_build_object('title', format('Apply to %s', v_clans[i]), 'description', 'Ticket panel example')
         )
-        ON CONFLICT (id) DO NOTHING;
+        ON CONFLICT (server_id, name) DO NOTHING;
 
         INSERT INTO giveaways (
             id, server_id, prize, channel_id, status, start_time, end_time, winners,
             mentions, text_above_embed, text_in_embed, text_on_end, roles_mode,
-            roles, entries, winners_list, message_id, data
+            roles, entries, winners_list, message_id
         ) VALUES (
             format('demo-giveaway-%s', i), v_server_id, format('%s gem pack', i),
             format('demo-giveaway-channel-%s', i),
@@ -295,7 +270,7 @@ BEGIN
             'required', ARRAY[format('demo-role-%s', i)],
             jsonb_build_array(jsonb_build_object('user_id', v_users[i], 'entries', i)),
             CASE WHEN i >= 4 THEN jsonb_build_array(v_users[i]) ELSE '[]'::jsonb END,
-            format('demo-giveaway-message-%s', i), jsonb_build_object('fixture', true)
+            format('demo-giveaway-message-%s', i)
         )
         ON CONFLICT (id) DO NOTHING;
 
@@ -534,7 +509,8 @@ BEGIN
         VALUES (
             md5(format('demo:role-binding:%s', i))::uuid, v_server_id,
             (ARRAY['family', 'family', 'achievement', 'status', 'builder_league'])[i],
-            format('demo-key-%s', i), format('demo-bound-role-%s', i), 'both'
+            (ARRAY['family', 'not_family', 'demo-key-3', 'demo-key-4', 'demo-key-5'])[i],
+            format('demo-bound-role-%s', i), 'both'
         )
         ON CONFLICT (id) DO NOTHING;
 
@@ -620,18 +596,19 @@ BEGIN
         panel_uuid := md5(format('demo:ticket-panel:%s', i))::uuid;
         INSERT INTO ticket_panel (
             id, server_id, name, description, parent_channel_id, open_category_id,
-            closed_category_id, log_channel_id, naming_convention, embed_id
+            closed_category_id, log_channel_id, naming_convention, embed_server_id, embed_name
         ) VALUES (
             panel_uuid, v_server_id, format('Demo Application Panel %s', i),
             format('Applications for configured clan %s', v_clans[i]),
             format('demo-parent-%s', i), format('demo-open-category-%s', i),
             format('demo-closed-category-%s', i), format('demo-log-channel-%s', i),
-            'ticket-{number}-{user}', embed_uuid
+            'ticket-{number}-{user}', v_server_id, format('Demo Ticket Embed %s', i)
         )
         ON CONFLICT (id) DO NOTHING;
 
         INSERT INTO ticket_panel_buttons (
-            id, panel_id, open_message_embed_id, questions, staff_roles,
+            id, panel_id, server_id, open_message_embed_server_id,
+            open_message_embed_name, questions, staff_roles,
             roles_add_on_open, roles_remove_on_open, roles_add_on_close,
             roles_remove_on_close, allow_account_apply, min_townhall_level,
             max_townhall_level, staff_private_thread, send_player_info_to_channel,
@@ -639,7 +616,8 @@ BEGIN
             parent_channel_id, open_category_id, closed_category_id, log_channel_id,
             naming_convention
         ) VALUES (
-            md5(format('demo:ticket-button:%s', i))::uuid, panel_uuid, embed_uuid,
+            md5(format('demo:ticket-button:%s', i))::uuid, panel_uuid, v_server_id,
+            v_server_id, format('Demo Ticket Embed %s', i),
             ARRAY['Why do you want to join?', 'What is your timezone?']::varchar[],
             ARRAY[format('demo-staff-role-%s', i)], ARRAY['demo-applicant-role'], ARRAY[]::text[],
             ARRAY['demo-member-role'], ARRAY['demo-applicant-role'], 1, 12, 17,

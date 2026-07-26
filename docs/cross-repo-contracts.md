@@ -46,9 +46,10 @@ database retention.
 
 ### App announcements
 
-`database/timescale/017_mobile_admin_operations.sql` defines the shared
-`admin_posts` persistence surface. Migration 009 is retained only as immutable
-history; migration 017 moves its rows and retires the legacy table.
+`database/timescale/002_initial_settings.sql` defines both the shared
+`admin_posts` persistence surface and the supported `app_announcements`
+surface. New app archive content uses `admin_posts`; the legacy announcement
+API keeps its own table until its callers are migrated.
 
 ## Validation checklist
 

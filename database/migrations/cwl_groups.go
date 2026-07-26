@@ -5,22 +5,21 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"time"
 
 	"clashking_devkit_database_migrations/migrateutil"
 	"github.com/jackc/pgx/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+const maxCWLGroupBatchSize = 1000
+
 func main() {
 	migrateutil.Main("cwl_groups", runCWLGroups)
 }
 
 func runCWLGroups(ctx context.Context, cfg migrateutil.Config) error {
-	mongoClient, err := migrateutil.StatsClient(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	defer mongoClient.Disconnect(ctx)
 	pool, err := migrateutil.TimescalePool(ctx, cfg)
 	if err != nil {
 		return err
@@ -30,53 +29,188 @@ func runCWLGroups(ctx context.Context, cfg migrateutil.Config) error {
 	if err != nil {
 		return err
 	}
-	rows := make([][]any, 0, cfg.BatchSize)
-	flush := func() error {
-		if len(rows) == 0 {
-			return nil
-		}
-		err := flushCWLGroupRows(ctx, pool, rows)
-		rows = rows[:0]
+	if cp.Get("cwl_group_id") != "" {
+		return fmt.Errorf("one-shot CWL import found an existing checkpoint; clear the CWL tables and checkpoint before restarting")
+	}
+	var targetHasRows bool
+	if err := pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM cwl_groups LIMIT 1)
+		    OR EXISTS (SELECT 1 FROM cwl_group_clans LIMIT 1)
+		    OR EXISTS (SELECT 1 FROM cwl_group_members LIMIT 1)
+		    OR EXISTS (SELECT 1 FROM cwl_standings LIMIT 1)
+	`).Scan(&targetHasRows); err != nil {
 		return err
 	}
-	seen, err := migrateutil.StreamByObjectID(ctx, cfg, cp, "cwl_group_id", mongoClient.Database("looper").Collection("cwl_group"), func(doc bson.M) (bool, error) {
+	if targetHasRows {
+		return fmt.Errorf("one-shot CWL import requires empty CWL tables")
+	}
+	mongoClient, err := migrateutil.StatsClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer mongoClient.Disconnect(ctx)
+	batchSize := min(cfg.BatchSize, maxCWLGroupBatchSize)
+	streamCfg := cfg
+	streamCfg.BatchSize = batchSize
+	groups := make([][]any, 0, batchSize)
+	clans := make([][]any, 0, batchSize*8)
+	members := make([][]any, 0, batchSize*120)
+	groupPositions := make(map[string]int, batchSize)
+	clanPositions := make(map[string]int, batchSize*8)
+	memberPositions := make(map[string]int, batchSize*120)
+	docsInBatch := 0
+	flush := func() error {
+		if len(groups) == 0 {
+			return nil
+		}
+		startedAt := time.Now()
+		fmt.Fprintf(
+			os.Stderr,
+			"\nflushing cwl_groups=%d cwl_group_clans=%d cwl_group_members=%d ...",
+			len(groups),
+			len(clans),
+			len(members),
+		)
+		err := flushCWLGroupRows(ctx, pool, groups, clans, members)
+		if err == nil {
+			fmt.Fprintf(os.Stderr, " done in %s\n", time.Since(startedAt).Round(time.Millisecond))
+		}
+		groups = groups[:0]
+		clans = clans[:0]
+		members = members[:0]
+		clear(groupPositions)
+		clear(clanPositions)
+		clear(memberPositions)
+		docsInBatch = 0
+		return err
+	}
+	seen, err := migrateutil.StreamByObjectID(ctx, streamCfg, cp, "cwl_group_id", mongoClient.Database("looper").Collection("cwl_group"), func(doc bson.M) (bool, error) {
 		data := migrateutil.Map(doc["data"])
 		if data == nil {
 			return false, nil
 		}
-		cwlID := migrateutil.String(firstCWL(doc["cwl_id"], data["cwl_id"]))
-		if cwlID == "" {
+		legacyCWLID := migrateutil.String(firstCWL(doc["cwl_id"], data["cwl_id"]))
+		if legacyCWLID == "" {
 			return false, nil
 		}
-		clans := migrateutil.Slice(data["clans"])
-		clanTags := make([]string, 0, len(clans))
-		for _, raw := range clans {
+		cwlID := migrateutil.StableCWLID(legacyCWLID)
+		for _, raw := range migrateutil.Slice(data["clans"]) {
 			clan := migrateutil.Map(raw)
-			if tag := migrateutil.String(clan["tag"]); tag != "" {
-				clanTags = append(clanTags, tag)
+			tag := migrateutil.String(clan["tag"])
+			if tag == "" {
+				continue
+			}
+			badgeURLs := migrateutil.Map(clan["badgeUrls"])
+			row := []any{
+				cwlID,
+				tag,
+				migrateutil.String(clan["name"]),
+				migrateutil.Int(clan["clanLevel"]),
+				migrateutil.BadgeToken(clan["badgeToken"], clan["badge_token"], badgeURLs["medium"], badgeURLs["small"], badgeURLs["large"]),
+			}
+			key := cwlID + "\x00" + tag
+			if position, ok := clanPositions[key]; ok {
+				clans[position] = row
+			} else {
+				clanPositions[key] = len(clans)
+				clans = append(clans, row)
+			}
+			for _, rawMember := range migrateutil.Slice(clan["members"]) {
+				member := migrateutil.Map(rawMember)
+				memberTag := migrateutil.String(member["tag"])
+				if memberTag == "" {
+					continue
+				}
+				memberRow := []any{
+					cwlID,
+					tag,
+					migrateutil.String(member["name"]),
+					memberTag,
+					migrateutil.Int(member["townHallLevel"]),
+				}
+				memberKey := cwlID + "\x00" + memberTag
+				if position, ok := memberPositions[memberKey]; ok {
+					members[position] = memberRow
+				} else {
+					memberPositions[memberKey] = len(members)
+					members = append(members, memberRow)
+				}
 			}
 		}
-		rounds := make([][]string, 0)
-		for _, raw := range migrateutil.Slice(data["rounds"]) {
-			round := migrateutil.Map(raw)
-			var tags []string
-			for _, tag := range migrateutil.Slice(round["warTags"]) {
-				tags = append(tags, migrateutil.String(tag))
-			}
-			rounds = append(rounds, tags)
-		}
-		rows = append(rows, []any{
+		row := []any{
 			cwlID,
 			migrateutil.String(data["season"]),
-			firstCWLInt(data["cwlLeagueId"], data["cwl_league_id"], doc["cwl_league_id"]),
-			clanTags,
-			migrateutil.RawJSON(rounds),
-			migrateutil.RawJSON(data),
-		})
-		return len(rows) >= cfg.BatchSize, nil
+			firstCWLNullableInt(data["cwlLeagueId"], data["cwl_league_id"], doc["cwl_league_id"]),
+			cwlGroupState(migrateutil.String(data["state"])),
+			migrateutil.RawJSON(migrateutil.Slice(data["rounds"])),
+		}
+		if position, ok := groupPositions[cwlID]; ok {
+			groups[position] = row
+		} else {
+			groupPositions[cwlID] = len(groups)
+			groups = append(groups, row)
+		}
+		docsInBatch++
+		return docsInBatch >= batchSize, nil
 	}, flush)
 	if err != nil {
 		return err
+	}
+	for _, index := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "cwl_groups_pkey",
+			sql:  "ALTER TABLE cwl_groups ADD CONSTRAINT cwl_groups_pkey PRIMARY KEY (cwl_id)",
+		},
+		{
+			name: "cwl_group_clans_pkey",
+			sql:  "ALTER TABLE cwl_group_clans ADD CONSTRAINT cwl_group_clans_pkey PRIMARY KEY (cwl_id, clan_tag)",
+		},
+		{
+			name: "cwl_group_clans_cwl_id_fkey",
+			sql:  "ALTER TABLE cwl_group_clans ADD CONSTRAINT cwl_group_clans_cwl_id_fkey FOREIGN KEY (cwl_id) REFERENCES cwl_groups(cwl_id) ON DELETE CASCADE",
+		},
+		{
+			name: "cwl_group_members_pkey",
+			sql:  "ALTER TABLE cwl_group_members ADD CONSTRAINT cwl_group_members_pkey PRIMARY KEY (cwl_id, tag)",
+		},
+		{
+			name: "cwl_group_members_group_clan_fkey",
+			sql:  "ALTER TABLE cwl_group_members ADD CONSTRAINT cwl_group_members_group_clan_fkey FOREIGN KEY (cwl_id, clan_tag) REFERENCES cwl_group_clans(cwl_id, clan_tag) ON DELETE CASCADE",
+		},
+		{
+			name: "cwl_standings_group_clan_fkey",
+			sql:  "ALTER TABLE cwl_standings ADD CONSTRAINT cwl_standings_group_clan_fkey FOREIGN KEY (cwl_id, clan_tag) REFERENCES cwl_group_clans(cwl_id, clan_tag) ON DELETE CASCADE",
+		},
+		{
+			name: "idx_cwl_groups_season_league",
+			sql:  "CREATE INDEX IF NOT EXISTS idx_cwl_groups_season_league ON cwl_groups (season, cwl_league_id)",
+		},
+		{
+			name: "idx_cwl_groups_season_league_size",
+			sql:  "CREATE INDEX IF NOT EXISTS idx_cwl_groups_season_league_size ON cwl_groups (season, cwl_league_id, war_size)",
+		},
+		{
+			name: "idx_cwl_group_clans_clan_cwl",
+			sql:  "CREATE INDEX IF NOT EXISTS idx_cwl_group_clans_clan_cwl ON cwl_group_clans (clan_tag, cwl_id DESC)",
+		},
+		{
+			name: "idx_cwl_group_members_player_tag",
+			sql:  "CREATE INDEX IF NOT EXISTS idx_cwl_group_members_player_tag ON cwl_group_members (tag, cwl_id)",
+		},
+		{
+			name: "idx_cwl_group_members_group_clan",
+			sql:  "CREATE INDEX IF NOT EXISTS idx_cwl_group_members_group_clan ON cwl_group_members (cwl_id, clan_tag)",
+		},
+	} {
+		startedAt := time.Now()
+		fmt.Fprintf(os.Stderr, "building %s ...", index.name)
+		if _, err := pool.Exec(ctx, index.sql); err != nil {
+			return fmt.Errorf("build %s: %w", index.name, err)
+		}
+		fmt.Fprintf(os.Stderr, " done in %s\n", time.Since(startedAt).Round(time.Millisecond))
 	}
 	fmt.Printf("cwl_groups: scanned_docs=%d\n", seen)
 	return nil
@@ -84,7 +218,7 @@ func runCWLGroups(ctx context.Context, cfg migrateutil.Config) error {
 
 func flushCWLGroupRows(ctx context.Context, pool interface {
 	Begin(context.Context) (pgx.Tx, error)
-}, rows [][]any) error {
+}, groups, clans, members [][]any) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -92,28 +226,58 @@ func flushCWLGroupRows(ctx context.Context, pool interface {
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `
 		CREATE TEMP TABLE _ck_cwl_groups (
-			cwl_id text, season text, cwl_league_id int, clan_tags text[], rounds text, data text
+			cwl_id text, season text, cwl_league_id int, state text, rounds text
+		) ON COMMIT DROP;
+		CREATE TEMP TABLE _ck_cwl_group_clans (
+			cwl_id text, clan_tag text, name text, clan_level int, badge_token text
+		) ON COMMIT DROP;
+		CREATE TEMP TABLE _ck_cwl_group_members (
+			cwl_id text, clan_tag text, name text, tag text, town_hall int
 		) ON COMMIT DROP
 	`); err != nil {
 		return err
 	}
 	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"_ck_cwl_groups"}, []string{
-		"cwl_id", "season", "cwl_league_id", "clan_tags", "rounds", "data",
-	}, pgx.CopyFromRows(rows)); err != nil {
+		"cwl_id", "season", "cwl_league_id", "state", "rounds",
+	}, pgx.CopyFromRows(groups)); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO cwl_groups (cwl_id, season, cwl_league_id, clan_tags, rounds, data)
-		SELECT cwl_id, season, cwl_league_id, clan_tags, rounds::jsonb, data::jsonb
+		INSERT INTO cwl_groups (cwl_id, season, cwl_league_id, state, rounds)
+		SELECT cwl_id, season, cwl_league_id, state, rounds::jsonb
 		FROM _ck_cwl_groups
 		WHERE cwl_id <> '' AND season <> ''
-		ON CONFLICT (cwl_id) DO UPDATE SET
-			season = EXCLUDED.season,
-			cwl_league_id = EXCLUDED.cwl_league_id,
-			clan_tags = EXCLUDED.clan_tags,
-			rounds = EXCLUDED.rounds,
-			data = EXCLUDED.data,
-			updated_at = now()
+	`); err != nil {
+		return err
+	}
+	if len(clans) == 0 {
+		return tx.Commit(ctx)
+	}
+	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"_ck_cwl_group_clans"}, []string{
+		"cwl_id", "clan_tag", "name", "clan_level", "badge_token",
+	}, pgx.CopyFromRows(clans)); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO cwl_group_clans (cwl_id, clan_tag, name, clan_level, badge_token)
+		SELECT cwl_id, clan_tag, name, clan_level, badge_token
+		FROM _ck_cwl_group_clans
+		WHERE cwl_id <> '' AND clan_tag <> ''
+	`); err != nil {
+		return err
+	}
+	if len(members) > 0 {
+		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"_ck_cwl_group_members"}, []string{
+			"cwl_id", "clan_tag", "name", "tag", "town_hall",
+		}, pgx.CopyFromRows(members)); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO cwl_group_members (cwl_id, clan_tag, name, tag, town_hall)
+		SELECT cwl_id, clan_tag, name, tag, town_hall
+		FROM _ck_cwl_group_members
+		WHERE cwl_id <> '' AND clan_tag <> '' AND tag <> ''
 	`); err != nil {
 		return err
 	}
@@ -129,11 +293,20 @@ func firstCWL(values ...any) any {
 	return nil
 }
 
-func firstCWLInt(values ...any) int {
+func firstCWLNullableInt(values ...any) any {
 	for _, value := range values {
 		if out := migrateutil.Int(value); out != 0 {
 			return out
 		}
 	}
-	return 0
+	return nil
+}
+
+func cwlGroupState(value string) string {
+	switch value {
+	case "notInWar", "preparation", "inWar", "ended":
+		return value
+	default:
+		return "preparation"
+	}
 }

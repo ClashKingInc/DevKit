@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,7 +64,7 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	env, err := LoadEnv(filepath.Join(root, ".env"))
+	env, err := LoadEnv(migrationEnvPath(root))
 	if err != nil {
 		return Config{}, err
 	}
@@ -85,6 +87,17 @@ func LoadConfig() (Config, error) {
 		cfg.BatchSize = defaultBatchSize
 	}
 	return cfg, nil
+}
+
+func migrationEnvPath(databaseRoot string) string {
+	// Migration programs run from database/migrations, but repository secrets
+	// intentionally live at the repository root. Keep database/.env as a
+	// compatibility fallback for older local setups.
+	repositoryEnv := filepath.Join(filepath.Dir(databaseRoot), ".env")
+	if _, err := os.Stat(repositoryEnv); err == nil {
+		return repositoryEnv
+	}
+	return filepath.Join(databaseRoot, ".env")
 }
 
 func LoadEnv(path string) (map[string]string, error) {
@@ -551,6 +564,11 @@ func Time(value any) (time.Time, bool) {
 
 func SeasonFromDate(value time.Time) string {
 	return value.UTC().Format("2006-01")
+}
+
+func StableCWLID(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return base64.RawURLEncoding.EncodeToString(sum[:9])
 }
 
 func BadgeToken(values ...any) string {

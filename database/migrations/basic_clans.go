@@ -61,6 +61,10 @@ func runBasicClans(ctx context.Context, cfg migrateutil.Config) error {
 		{Key: "warWins", Value: 1},
 		{Key: "warWinStreak", Value: 1},
 		{Key: "clanPoints", Value: 1},
+		{Key: "clanBuilderBasePoints", Value: 1},
+		{Key: "builderBasePoints", Value: 1},
+		{Key: "clanCapitalPoints", Value: 1},
+		{Key: "capitalPoints", Value: 1},
 		{Key: "members", Value: 1},
 		{Key: "member_count", Value: 1},
 		{Key: "badgeUrls", Value: 1},
@@ -98,6 +102,8 @@ func runBasicClans(ctx context.Context, cfg migrateutil.Config) error {
 				migrateutil.Int(doc["warWins"]),
 				migrateutil.Int(doc["warWinStreak"]),
 				migrateutil.Int(doc["clanPoints"]),
+				firstInt(doc["clanBuilderBasePoints"], doc["builderBasePoints"]),
+				firstInt(doc["clanCapitalPoints"], doc["capitalPoints"]),
 				firstInt(doc["members"], doc["member_count"]),
 				migrateutil.BadgeToken(doc["badge_url"], badge["large"], badge["medium"], badge["small"]),
 				0,
@@ -127,8 +133,9 @@ func flushBasicClans(ctx context.Context, pool interface {
 		CREATE TEMP TABLE _ck_basic_clan (
 			tag text, name text, description text, clan_level int, location_id int,
 			cwl_league_id int, capital_league_id int, public_war_log bool,
-			war_wins int, war_win_streak int, clan_points int, member_count int,
-			badge_token text, troops_donated int, troops_received int, members text
+			war_wins int, war_win_streak int, clan_points int, builder_base_points int,
+			capital_points int, member_count int, badge_token text, troops_donated int,
+			troops_received int, members text
 		) ON COMMIT DROP;
 	`); err != nil {
 		return err
@@ -140,20 +147,20 @@ func flushBasicClans(ctx context.Context, pool interface {
 	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"_ck_basic_clan"}, []string{
 		"tag", "name", "description", "clan_level", "location_id", "cwl_league_id",
 		"capital_league_id", "public_war_log", "war_wins", "war_win_streak",
-		"clan_points", "member_count", "badge_token", "troops_donated", "troops_received",
-		"members",
+		"clan_points", "builder_base_points", "capital_points", "member_count",
+		"badge_token", "troops_donated", "troops_received", "members",
 	}, pgx.CopyFromRows(rows)); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO basic_clan (
 			tag, name, description, clan_level, location_id, cwl_league_id, capital_league_id,
-			public_war_log, war_wins, war_win_streak, clan_points, member_count,
-			badge_token, troops_donated, troops_received, members
+			public_war_log, war_wins, war_win_streak, clan_points, builder_base_points,
+			capital_points, member_count, badge_token, troops_donated, troops_received, members
 		)
 		SELECT tag, name, description, clan_level, location_id, cwl_league_id, capital_league_id,
-			public_war_log, war_wins, war_win_streak, clan_points, member_count,
-			badge_token, troops_donated, troops_received, members::jsonb
+			public_war_log, war_wins, war_win_streak, clan_points, builder_base_points,
+			capital_points, member_count, badge_token, troops_donated, troops_received, members::jsonb
 		FROM _ck_basic_clan
 		WHERE tag <> '' AND name <> ''
 		ON CONFLICT (tag) DO NOTHING

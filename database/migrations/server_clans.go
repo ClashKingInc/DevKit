@@ -166,13 +166,13 @@ func writeServerClanDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 			return err
 		}
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM countdowns WHERE server_id = $1 AND clan_tag = $2`, serverID, clanTag); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM server_countdowns WHERE server_id = $1 AND clan_tag = $2`, serverID, clanTag); err != nil {
 		return err
 	}
 	countdowns := map[string]any{"war_score": doc["warCountdown"], "war_timer": doc["warTimerCountdown"]}
 	for countdownType, value := range countdowns {
 		if channelID := migrateutil.String(value); channelID != "" {
-			if _, err := tx.Exec(ctx, `INSERT INTO countdowns (server_id, clan_tag, type, channel_id) VALUES ($1, $2, $3, $4)`, serverID, clanTag, countdownType, channelID); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO server_countdowns (server_id, clan_tag, type, channel_id) VALUES ($1, $2, $3, $4)`, serverID, clanTag, countdownType, channelID); err != nil {
 				return err
 			}
 		}

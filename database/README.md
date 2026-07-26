@@ -16,8 +16,10 @@ cd database
 
 Set the environment variables in Coolify, copy `.env.example` to `.env`, or
 export the variables in your shell before starting services. Migration tools
-also resolve `.env` and `migration_state.json` from this directory. The shared
-checkpoint loader can still read legacy `.migration_state/<script>.json` files.
+resolve `migration_state.json` from this directory. Migration connection
+settings are read from the repository-root `.env` (with `database/.env` kept
+as a compatibility fallback). The shared checkpoint loader can still read
+legacy `.migration_state/<script>.json` files.
 
 ## Start
 
@@ -57,13 +59,6 @@ go run github.com/pressly/goose/v3/cmd/goose@latest \
   up
 ```
 
-For a throwaway fresh database where only the initial schema is needed:
-
-```bash
-psql "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${HOST_BIND_IP}:${TIMESCALE_PORT}/${POSTGRES_DB}?sslmode=disable" \
-  -f timescale/001_initial.sql
-```
-
 Do not mount the `timescale/` folder directly into Postgres
 `/docker-entrypoint-initdb.d`; these files are goose migrations and may contain
 rollback sections.
@@ -84,8 +79,8 @@ Each tool documents its required environment keys in code and fails closed when
 required values are absent. Never commit the local `.env` file or migration
 checkpoint data.
 
-For the server settings cutover, apply Goose migrations `019` through `024`.
-Then run the four imports in this order:
+The two-file Goose baseline includes the normalized server settings schema.
+After it is applied, run the four imports in this order:
 
 ```bash
 cd migrations
@@ -95,19 +90,10 @@ go run rosters.go
 go run bot_server_settings.go
 ```
 
-Migration `019` copies existing Timescale settings into normalized tables before
-it removes the old JSON columns and retired tables. Migration `020` replaces the
-aggregate server and clan log tables with one `server_logs` row for each server,
-optional clan, and log type. It stores the webhook ID and optional thread ID. It
-does not store the Discord channel because the webhook identifies the channel.
-Migration `021` adds a disabled state so a log can stop without losing its
-webhook or thread setup. Migration `022` removes server-clan links that have no
-`basic_clan` row and adds a cascading foreign key so they cannot return.
-Migration `023` renames `role_rules` to `server_roles`, changes the combined
-role mode from `sync` to `both`, and removes ignored, exclusive-family, and
-duplicate server-level member roles.
-Migration `024` prevents those removed family-role options from being created
-again.
+The baseline copies existing Timescale settings into normalized tables before
+it removes old JSON columns and retired tables. It unifies server logs, adds the
+disabled state, links server clans to `basic_clan`, renames `role_rules` to
+`server_roles`, and enforces the current role options.
 The four imports then copy the current Mongo documents into those tables. The
 migrations and importers do not truncate or update `player_links`.
 
