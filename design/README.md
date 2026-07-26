@@ -8,6 +8,7 @@ This repo is the source of truth for:
 - design tokens
 - CSS primitives for web/admin surfaces
 - Flutter token constants and first reusable mobile primitives
+- the bundled ClashKing SemiBold font for Flutter and web surfaces
 
 ## Packages
 

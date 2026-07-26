@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added the ClashKing SemiBold Inter-derived font to the CSS and Flutter
+  packages, with `CKFont.family` as the package-qualified Flutter family name.
 - Added the shared danger-button variant and disabled toggle state.
 - Added operations-theme control surfaces and focus treatment so admin products
   do not need to override DevKit primitives locally.

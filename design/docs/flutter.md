@@ -73,6 +73,12 @@ The package now includes the first reusable mobile primitives:
 
 ## Typography and Dynamic Type
 
+Set the app theme's `fontFamily` to `CKFont.family` to use the bundled
+ClashKing SemiBold face from this package. Apps that bundle `clashking.ttf`
+directly may use the unqualified family name `ClashKing` instead. The current
+font release covers Basic Latin plus common smart quotes and dashes, so keep a
+platform sans fallback available for localized characters.
+
 Use `CKTypography.of(context, role)` rather than local size/weight overrides.
 The available roles are `heroMetric`, `screenTitle`, `sectionTitle`,
 `rowTitle`, `body`, `metadata`, and `compactLabel`. Roles derive from the

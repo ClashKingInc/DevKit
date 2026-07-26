@@ -316,7 +316,6 @@
   color: var(--ck-color-text-muted);
   background: rgba(148, 163, 184, 0.06);
   font-size: 0.78rem;
-  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 

@@ -17,7 +17,8 @@
     "index.css",
     "tokens.css",
     "components.css",
-    "index.d.ts"
+    "index.d.ts",
+    "fonts"
   ],
   "types": "./index.d.ts"
 }

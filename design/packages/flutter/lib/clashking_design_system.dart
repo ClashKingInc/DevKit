@@ -2,6 +2,13 @@ library clashking_design_system;
 
 import 'package:flutter/material.dart';
 
+class CKFont {
+  CKFont._();
+
+  /// Package-qualified family name for the bundled ClashKing SemiBold face.
+  static const String family = 'packages/clashking_design_system/ClashKing';
+}
+
 class CKColors {
   CKColors._();
 
@@ -108,11 +115,7 @@ class CKTypography {
     return switch (role) {
       CKTextRole.heroMetric =>
         (theme.displaySmall ?? theme.headlineLarge ?? const TextStyle())
-            .copyWith(
-              fontWeight: FontWeight.w800,
-              height: 0.98,
-              letterSpacing: -0.5,
-            ),
+            .copyWith(fontWeight: FontWeight.w800, height: 0.98),
       CKTextRole.screenTitle =>
         (theme.headlineSmall ?? theme.titleLarge ?? const TextStyle()).copyWith(
           fontWeight: FontWeight.w700,
@@ -139,7 +142,6 @@ class CKTypography {
         (theme.labelSmall ?? const TextStyle()).copyWith(
           fontWeight: FontWeight.w600,
           height: 1.2,
-          letterSpacing: 0.1,
         ),
     };
   }

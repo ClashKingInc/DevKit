@@ -8,6 +8,11 @@ environment:
 
 flutter:
   uses-material-design: false
+  fonts:
+    - family: ClashKing
+      fonts:
+        - asset: fonts/clashking.ttf
+          weight: 600
 
 dependencies:
   flutter:

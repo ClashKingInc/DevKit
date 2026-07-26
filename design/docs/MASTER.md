@@ -41,7 +41,8 @@ Both themes are fully and symmetrically defined in `lib/core/app/my_app.dart` vi
 
 ### Typography
 
-- **Font:** Roboto (system font, hardcoded string `'Roboto'` in `ThemeData`) — **not** a Google Fonts dependency.
+- **Font:** ClashKing SemiBold, a static Inter-derived UI face bundled by the shared design packages. Use the family name `ClashKing`; unsupported characters fall back through Inter/Roboto/system sans because this first release covers Basic Latin plus common smart quotes and dashes.
+- **Letter spacing:** Always use the font's natural spacing. Do not apply tracking or custom letter spacing, including negative headline tracking and expanded uppercase-label tracking. Build hierarchy with size, color, weight, spacing, dividers, or small semantic markers instead.
 - **Type scale:** Standard Material `TextTheme`, all weights `FontWeight.w500`:
   - Title: 24 / 20 / 18
   - Body: 16 / 14 / 12
