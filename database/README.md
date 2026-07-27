@@ -79,7 +79,8 @@ Each tool documents its required environment keys in code and fails closed when
 required values are absent. Never commit the local `.env` file or migration
 checkpoint data.
 
-The two-file Goose baseline includes the normalized server settings schema.
+The two-file Goose baseline includes the consolidated canonical `servers`
+configuration schema.
 After it is applied, run the four imports in this order:
 
 ```bash
@@ -90,12 +91,14 @@ go run rosters.go
 go run bot_server_settings.go
 ```
 
-The baseline copies existing Timescale settings into normalized tables before
-it removes old JSON columns and retired tables. It unifies server logs, adds the
+The baseline copies existing Timescale settings into typed tables before it
+removes old JSON columns and retired tables. Migration 003 then consolidates
+server configuration into `servers`. It also unifies server logs, adds the
 disabled state, links server clans to `basic_clan`, renames `role_rules` to
-`server_roles`, and enforces the current role options.
-The four imports then copy the current Mongo documents into those tables. The
-migrations and importers do not truncate or update `player_links`.
+`server_roles`, and enforces the current role options. The four imports copy
+the current Mongo documents into the final tables; `server_settings.go` is the
+source-oriented importer name but writes canonical `servers`. The migrations
+and importers do not truncate or update `player_links`.
 
 See [`../docs/database-workflows.md`](../docs/database-workflows.md) for the
 Goose, backfill, remote-run, and validation workflow.
