@@ -38,14 +38,12 @@ func runPlayerStats(ctx context.Context, cfg migrateutil.Config) error {
 	if err != nil {
 		return err
 	}
-	currentRows := make([][]any, 0, cfg.BatchSize)
 	seasonRows := map[string]seasonStat{}
 	flush := func() error {
-		if len(currentRows) == 0 && len(seasonRows) == 0 {
+		if len(seasonRows) == 0 {
 			return nil
 		}
-		err := flushPlayerStats(ctx, pool, currentRows, seasonRows)
-		currentRows = currentRows[:0]
+		err := flushPlayerStats(ctx, pool, seasonRows)
 		seasonRows = map[string]seasonStat{}
 		return err
 	}
@@ -54,24 +52,8 @@ func runPlayerStats(ctx context.Context, cfg migrateutil.Config) error {
 		if tag == "" {
 			return false, nil
 		}
-		lastOnline, _ := migrateutil.Time(doc["last_online"])
-		var lastOnlineValue any
-		if !lastOnline.IsZero() {
-			lastOnlineValue = lastOnline
-		}
-		currentRows = append(currentRows, []any{
-			tag,
-			migrateutil.String(doc["clan_tag"]),
-			migrateutil.String(doc["name"]),
-			migrateutil.OptionalInt(doc["townhall"]),
-			lastOnlineValue,
-			migrateutil.RawJSON(doc["legends"]),
-			migrateutil.RawJSON(doc["donations"]),
-			migrateutil.RawJSON(doc["activity"]),
-			migrateutil.RawJSON(doc),
-		})
 		addSeasonStats(tag, doc, seasonRows)
-		return len(currentRows) >= cfg.BatchSize, nil
+		return len(seasonRows) >= cfg.BatchSize, nil
 	}, flush)
 	if err != nil {
 		return err
@@ -137,17 +119,13 @@ func addSeasonStats(tag string, doc bson.M, rows map[string]seasonStat) {
 
 func flushPlayerStats(ctx context.Context, pool interface {
 	Begin(context.Context) (pgx.Tx, error)
-}, current [][]any, seasons map[string]seasonStat) error {
+}, seasons map[string]seasonStat) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `
-		CREATE TEMP TABLE _ck_player_current_stats (
-			player_tag text, clan_tag text, name text, townhall_level int, last_online_at timestamptz,
-			legends text, donations text, activity text, data text
-		) ON COMMIT DROP;
 		CREATE TEMP TABLE _ck_player_season_stats (
 			player_tag text, season text, clan_tag text, donated int, received int, capital_gold_donos int,
 			activity_score int, last_online_at timestamptz, name text, townhall_level int,
@@ -155,34 +133,6 @@ func flushPlayerStats(ctx context.Context, pool interface {
 		) ON COMMIT DROP;
 	`); err != nil {
 		return err
-	}
-	if len(current) > 0 {
-		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"_ck_player_current_stats"}, []string{
-			"player_tag", "clan_tag", "name", "townhall_level", "last_online_at", "legends", "donations", "activity", "data",
-		}, pgx.CopyFromRows(current)); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO player_current_stats (
-				player_tag, clan_tag, name, townhall_level, last_online_at, legends, donations, activity, data
-			)
-			SELECT player_tag, NULLIF(clan_tag, ''), name, townhall_level, last_online_at,
-				legends::jsonb, donations::jsonb, activity::jsonb, data::jsonb
-			FROM _ck_player_current_stats
-			WHERE player_tag <> ''
-			ON CONFLICT (player_tag) DO UPDATE SET
-				clan_tag = EXCLUDED.clan_tag,
-				name = EXCLUDED.name,
-				townhall_level = EXCLUDED.townhall_level,
-				last_online_at = EXCLUDED.last_online_at,
-				legends = EXCLUDED.legends,
-				donations = EXCLUDED.donations,
-				activity = EXCLUDED.activity,
-				data = EXCLUDED.data,
-				updated_at = now()
-		`); err != nil {
-			return err
-		}
 	}
 	if len(seasons) > 0 {
 		rows := make([][]any, 0, len(seasons))

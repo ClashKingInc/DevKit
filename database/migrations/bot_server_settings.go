@@ -48,9 +48,6 @@ func runBotServerSettings(ctx context.Context, cfg migrateutil.Config) error {
 	if err := migrateTicketPanels(ctx, cfg, cp, pool, staticClient.Database("usafam").Collection("tickets")); err != nil {
 		return err
 	}
-	if err := migrateOpenTickets(ctx, cfg, cp, pool, staticClient.Database("usafam").Collection("open_tickets")); err != nil {
-		return err
-	}
 	if err := migrateReminders(ctx, cfg, cp, pool, staticClient.Database("usafam").Collection("reminders")); err != nil {
 		return err
 	}
@@ -147,45 +144,6 @@ func migrateTicketPanels(ctx context.Context, cfg migrateutil.Config, cp *migrat
 		return len(rows) >= cfg.BatchSize, nil
 	}, flush)
 	fmt.Printf("settings.ticket_panels: scanned_docs=%d\n", seen)
-	return err
-}
-
-func migrateOpenTickets(ctx context.Context, cfg migrateutil.Config, cp *migrateutil.Checkpoint, pool interface {
-	Begin(context.Context) (pgx.Tx, error)
-}, collection *mongo.Collection) error {
-	rows := make([][]any, 0, cfg.BatchSize)
-	flush := func() error {
-		err := flushRows(ctx, pool, "open_tickets", []string{"server_id", "channel_id", "panel_name", "status", "user_id", "set_clan", "data"}, rows, `
-			INSERT INTO open_tickets (server_id, channel_id, panel_name, status, user_id, set_clan, data)
-			SELECT server_id, channel_id, NULLIF(panel_name, ''), COALESCE(NULLIF(status, ''), 'open'), NULLIF(user_id, ''), NULLIF(set_clan, ''), data::jsonb
-			FROM _ck_rows
-			WHERE server_id <> '' AND channel_id <> ''
-			ON CONFLICT (server_id, channel_id) DO UPDATE SET
-				panel_name = EXCLUDED.panel_name,
-				status = EXCLUDED.status,
-				user_id = EXCLUDED.user_id,
-				set_clan = EXCLUDED.set_clan,
-				data = EXCLUDED.data,
-				updated_at = now()
-		`)
-		if err == nil {
-			rows = rows[:0]
-		}
-		return err
-	}
-	seen, err := migrateutil.StreamByObjectID(ctx, cfg, cp, "open_tickets_id", collection, func(doc bson.M) (bool, error) {
-		rows = append(rows, []any{
-			migrateutil.String(doc["server_id"]),
-			migrateutil.String(doc["channel"]),
-			migrateutil.String(doc["panel_name"]),
-			migrateutil.String(doc["status"]),
-			migrateutil.String(doc["user"]),
-			migrateutil.String(doc["apply_account"]),
-			migrateutil.RawJSON(doc),
-		})
-		return len(rows) >= cfg.BatchSize, nil
-	}, flush)
-	fmt.Printf("settings.open_tickets: scanned_docs=%d\n", seen)
 	return err
 }
 
@@ -345,11 +303,11 @@ func migrateShortLinks(ctx context.Context, cfg migrateutil.Config, cp *migrateu
 }, collection *mongo.Collection) error {
 	rows := make([][]any, 0, cfg.BatchSize)
 	flush := func() error {
-		err := flushRows(ctx, pool, "short_links", []string{"id", "url", "data"}, rows, `
-			INSERT INTO short_links (id, url, data)
-			SELECT id, url, data::jsonb FROM _ck_rows
+		err := flushRows(ctx, pool, "short_links", []string{"id", "url"}, rows, `
+			INSERT INTO short_links (id, url)
+			SELECT id, url FROM _ck_rows
 			WHERE id <> '' AND url <> ''
-			ON CONFLICT (id) DO UPDATE SET url = EXCLUDED.url, data = EXCLUDED.data
+			ON CONFLICT (id) DO UPDATE SET url = EXCLUDED.url
 		`)
 		if err == nil {
 			rows = rows[:0]
@@ -357,7 +315,7 @@ func migrateShortLinks(ctx context.Context, cfg migrateutil.Config, cp *migrateu
 		return err
 	}
 	seen, err := migrateutil.StreamByObjectID(ctx, cfg, cp, "short_links_id", collection, func(doc bson.M) (bool, error) {
-		rows = append(rows, []any{migrateutil.String(doc["_id"]), migrateutil.String(doc["url"]), migrateutil.RawJSON(doc)})
+		rows = append(rows, []any{migrateutil.String(doc["_id"]), migrateutil.String(doc["url"])})
 		return len(rows) >= cfg.BatchSize, nil
 	}, flush)
 	fmt.Printf("settings.short_links: scanned_docs=%d\n", seen)

@@ -174,7 +174,7 @@ func runCWLGroups(ctx context.Context, cfg migrateutil.Config) error {
 		},
 		{
 			name: "cwl_group_members_pkey",
-			sql:  "ALTER TABLE cwl_group_members ADD CONSTRAINT cwl_group_members_pkey PRIMARY KEY (cwl_id, tag)",
+			sql:  "ALTER TABLE cwl_group_members ADD CONSTRAINT cwl_group_members_pkey PRIMARY KEY (tag, cwl_id)",
 		},
 		{
 			name: "cwl_group_members_group_clan_fkey",
@@ -197,12 +197,8 @@ func runCWLGroups(ctx context.Context, cfg migrateutil.Config) error {
 			sql:  "CREATE INDEX IF NOT EXISTS idx_cwl_group_clans_clan_cwl ON cwl_group_clans (clan_tag, cwl_id DESC)",
 		},
 		{
-			name: "idx_cwl_group_members_player_tag",
-			sql:  "CREATE INDEX IF NOT EXISTS idx_cwl_group_members_player_tag ON cwl_group_members (tag, cwl_id)",
-		},
-		{
-			name: "idx_cwl_group_members_group_clan",
-			sql:  "CREATE INDEX IF NOT EXISTS idx_cwl_group_members_group_clan ON cwl_group_members (cwl_id, clan_tag)",
+			name: "idx_cwl_group_members_cwl_id",
+			sql:  "CREATE INDEX IF NOT EXISTS idx_cwl_group_members_cwl_id ON cwl_group_members (cwl_id)",
 		},
 	} {
 		startedAt := time.Now()

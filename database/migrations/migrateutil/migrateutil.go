@@ -278,10 +278,6 @@ func singleValueCheckpointKey(script string) string {
 		return "cwl_group_id"
 	case "join_leave_history":
 		return "join_leave_id"
-	case "legend_history_snapshots":
-		return "legend_history_id"
-	case "player_history_events":
-		return "player_history_id"
 	case "player_online_events":
 		return "last_online_id"
 	case "player_stats":

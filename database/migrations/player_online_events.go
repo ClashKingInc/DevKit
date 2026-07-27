@@ -54,7 +54,6 @@ func runPlayerOnlineEvents(ctx context.Context, cfg migrateutil.Config) error {
 			seenAt,
 			tag,
 			clanTag,
-			migrateutil.Int(firstOnlineAny(meta["townhall_level"], meta["townhall"], meta["th"])),
 		})
 		return len(rows) >= cfg.BatchSize, nil
 	}, flush)
@@ -75,19 +74,19 @@ func flushPlayerOnlineRows(ctx context.Context, pool interface {
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `
 		CREATE TEMP TABLE _ck_player_online_events (
-			seen_at timestamptz, tag text, clan_tag text, townhall_level smallint
+			seen_at timestamptz, tag text, clan_tag text
 		) ON COMMIT DROP
 	`); err != nil {
 		return err
 	}
 	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"_ck_player_online_events"}, []string{
-		"seen_at", "tag", "clan_tag", "townhall_level",
+		"seen_at", "tag", "clan_tag",
 	}, pgx.CopyFromRows(rows)); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO player_online_events (seen_at, tag, clan_tag, townhall_level)
-		SELECT seen_at, tag, clan_tag, townhall_level
+		INSERT INTO player_online_events (seen_at, tag, clan_tag)
+		SELECT seen_at, tag, clan_tag
 		FROM _ck_player_online_events
 		WHERE tag <> '' AND clan_tag <> ''
 	`); err != nil {

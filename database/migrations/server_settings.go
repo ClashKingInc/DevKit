@@ -102,28 +102,25 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		return nil
 	}
 	name := firstString(doc["name"], serverID)
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO servers (id, name, embed_color, updated_at)
-		VALUES ($1, $2, NULLIF($3, ''), now())
-		ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, embed_color = EXCLUDED.embed_color, updated_at = now()
-	`, serverID, name, migrateutil.String(doc["embed_color"])); err != nil {
-		return err
-	}
 	linkParse := migrateutil.Map(doc["link_parse"])
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO server_settings (
-			server_id, nickname_rule, non_family_nickname_rule, change_nickname,
+		INSERT INTO servers (
+			id, name, embed_color,
+			nickname_rule, non_family_nickname_rule, change_nickname,
 			flair_non_family, auto_eval_nickname, autoeval_log_channel_id,
 			autoeval_enabled, full_whitelist_role_id,
-			autoboard_limit, use_api_token, tied_stats_only, banlist_channel_id,
-			strike_log_channel_id, reddit_feed_channel_id, family_label, greeting,
+			autoboard_limit, tied_stats_only,
+			family_label,
 			link_parse_clan, link_parse_army, link_parse_player, link_parse_base,
 			link_parse_show, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-			$13, $14, $15, $16, $17, $18, $19, $20, $21, $22, now()
+			$1, $2, NULLIF($3, ''),
+			$4, $5, $6, $7, $8, $9, $10, $11, $12,
+			$13, $14, $15, $16, $17, $18, $19, now()
 		)
-		ON CONFLICT (server_id) DO UPDATE SET
+		ON CONFLICT (id) DO UPDATE SET
+			name = EXCLUDED.name,
+			embed_color = EXCLUDED.embed_color,
 			nickname_rule = EXCLUDED.nickname_rule,
 			non_family_nickname_rule = EXCLUDED.non_family_nickname_rule,
 			change_nickname = EXCLUDED.change_nickname,
@@ -133,27 +130,22 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 			autoeval_enabled = EXCLUDED.autoeval_enabled,
 			full_whitelist_role_id = EXCLUDED.full_whitelist_role_id,
 			autoboard_limit = EXCLUDED.autoboard_limit,
-			use_api_token = EXCLUDED.use_api_token,
 			tied_stats_only = EXCLUDED.tied_stats_only,
-			banlist_channel_id = EXCLUDED.banlist_channel_id,
-			strike_log_channel_id = EXCLUDED.strike_log_channel_id,
-			reddit_feed_channel_id = EXCLUDED.reddit_feed_channel_id,
 			family_label = EXCLUDED.family_label,
-			greeting = EXCLUDED.greeting,
 			link_parse_clan = EXCLUDED.link_parse_clan,
 			link_parse_army = EXCLUDED.link_parse_army,
 			link_parse_player = EXCLUDED.link_parse_player,
 			link_parse_base = EXCLUDED.link_parse_base,
 			link_parse_show = EXCLUDED.link_parse_show,
 			updated_at = now()
-	`, serverID, nullableString(doc["nickname_rule"]), nullableString(doc["non_family_nickname_rule"]),
+	`, serverID, name, migrateutil.String(doc["embed_color"]),
+		nullableString(doc["nickname_rule"]), nullableString(doc["non_family_nickname_rule"]),
 		boolDefault(doc, "change_nickname", true), boolDefault(doc, "flair_non_family", true),
 		boolDefault(doc, "auto_eval_nickname", false), nullableString(doc["autoeval_log"]),
 		boolDefault(doc, "autoeval", false), nullableString(doc["full_whitelist_role"]),
 		migrateutil.Int(doc["autoboard_limit"]),
-		boolDefault(doc, "api_token", true), boolDefault(doc, "tied", true),
-		nullableString(doc["banlist"]), nullableString(doc["strike_log"]), nullableString(doc["reddit_feed"]),
-		migrateutil.String(doc["family_label"]), nullableString(doc["greeting"]),
+		boolDefault(doc, "tied", true),
+		migrateutil.String(doc["family_label"]),
 		boolMapDefault(linkParse, "clan", true), boolMapDefault(linkParse, "army", true),
 		boolMapDefault(linkParse, "player", true), boolMapDefault(linkParse, "base", true), boolMapDefault(linkParse, "show", true)); err != nil {
 		return err
@@ -182,10 +174,8 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 			}
 		}
 	}
-	for _, table := range []string{"server_autoeval_triggers", "server_blacklisted_roles", "server_link_parse_channels"} {
-		if _, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE server_id = $1`, serverID); err != nil {
-			return err
-		}
+	if _, err := tx.Exec(ctx, `DELETE FROM server_autoeval_triggers WHERE server_id = $1`, serverID); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM server_logs WHERE server_id = $1 AND clan_tag IS NULL`, serverID); err != nil {
 		return err
@@ -196,26 +186,12 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 	if err := insertOrderedStrings(ctx, tx, "server_autoeval_triggers", "trigger", serverID, doc["autoeval_triggers"]); err != nil {
 		return err
 	}
-	for _, value := range migrateutil.Slice(doc["blacklisted_roles"]) {
-		if roleID := migrateutil.String(value); roleID != "" {
-			if _, err := tx.Exec(ctx, `INSERT INTO server_blacklisted_roles (server_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, serverID, roleID); err != nil {
-				return err
-			}
-		}
-	}
 	if _, err := tx.Exec(ctx, `DELETE FROM server_roles WHERE server_id = $1 AND type IN ('clan_category', 'status')`, serverID); err != nil {
 		return err
 	}
 	for category, role := range migrateutil.Map(doc["category_roles"]) {
 		if roleID := migrateutil.String(role); roleID != "" {
 			if _, err := tx.Exec(ctx, `INSERT INTO server_roles (server_id, type, option, role_id, mode) VALUES ($1, 'clan_category', $2, $3, $4) ON CONFLICT DO NOTHING`, serverID, category, roleID, roleMode(doc["role_treatment"])); err != nil {
-				return err
-			}
-		}
-	}
-	for _, value := range migrateutil.Slice(linkParse["channels"]) {
-		if channelID := migrateutil.String(value); channelID != "" {
-			if _, err := tx.Exec(ctx, `INSERT INTO server_link_parse_channels (server_id, channel_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, serverID, channelID); err != nil {
 				return err
 			}
 		}
@@ -237,6 +213,23 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 			}
 		}
 		for _, expandedType := range expandServerLogTypes(logType) {
+			if expandedType == "reddit_feed" {
+				if _, err := tx.Exec(ctx, `
+					INSERT INTO server_logs (server_id, clan_tag, type, webhook_id, thread_id, disabled)
+					VALUES ($1, NULL, $2, $3, $4, $5)
+					ON CONFLICT (server_id, clan_tag, type) DO UPDATE SET
+						webhook_id = EXCLUDED.webhook_id,
+						thread_id = EXCLUDED.thread_id,
+						disabled = EXCLUDED.disabled,
+						updated_at = now()
+				`, serverID, expandedType, webhookID, nullableString(log["thread"]), disabled); err != nil {
+					return err
+				}
+				continue
+			}
+			if expandedType == "ban_alert" && len(clans) == 0 {
+				continue
+			}
 			if len(clans) == 0 {
 				if _, err := tx.Exec(ctx, `
 					INSERT INTO server_logs (server_id, clan_tag, type, webhook_id, thread_id, disabled)
@@ -335,6 +328,8 @@ func canonicalServerLogType(value string) string {
 		"role_change", "troop_upgrade", "super_troop_boost", "th_upgrade",
 		"league_change", "spell_upgrade", "hero_upgrade",
 		"hero_equipment_upgrade", "name_change", "legend_log_attacks", "legend_log_defenses":
+		return value
+	case "ban_alert", "reddit_feed":
 		return value
 	default:
 		return ""

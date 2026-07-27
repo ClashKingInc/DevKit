@@ -83,33 +83,15 @@ func writeServerClanDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO server_clans (tag, server_id, clan_channel_id, name, abbreviation, updated_at)
-		VALUES ($1, $2, NULLIF($3, ''), $4, $5, now())
+		INSERT INTO server_clans (tag, server_id, abbreviation, updated_at)
+		VALUES ($1, $2, $3, now())
 		ON CONFLICT (tag, server_id) DO UPDATE SET
-			clan_channel_id = EXCLUDED.clan_channel_id,
-			name = EXCLUDED.name,
 			abbreviation = EXCLUDED.abbreviation,
 			updated_at = now()
-	`, clanTag, serverID, migrateutil.String(doc["clanChannel"]), migrateutil.String(doc["name"]), migrateutil.String(doc["abbreviation"])); err != nil {
+	`, clanTag, serverID, migrateutil.String(doc["abbreviation"])); err != nil {
 		return err
 	}
 	logs := migrateutil.Map(doc["logs"])
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO server_clan_settings (
-			server_id, clan_tag, greeting, auto_greet_option,
-			ban_alert_channel_id, updated_at
-		) VALUES (
-			$1, $2, $3, $4, $5, now()
-		)
-		ON CONFLICT (server_id, clan_tag) DO UPDATE SET
-			greeting = EXCLUDED.greeting,
-			auto_greet_option = EXCLUDED.auto_greet_option,
-			ban_alert_channel_id = EXCLUDED.ban_alert_channel_id,
-			updated_at = now()
-	`, serverID, clanTag, migrateutil.String(doc["greeting"]),
-		firstClanString(doc["auto_greet_option"], "Never"), nullableClanString(doc["ban_alert_channel"])); err != nil {
-		return err
-	}
 	if category := migrateutil.String(doc["category"]); category != "" {
 		if _, err := tx.Exec(ctx, `
 			WITH selected AS (
@@ -199,6 +181,8 @@ func canonicalClanLogType(value string) string {
 		"role_change", "troop_upgrade", "super_troop_boost", "th_upgrade",
 		"league_change", "spell_upgrade", "hero_upgrade",
 		"hero_equipment_upgrade", "name_change", "legend_log_attacks", "legend_log_defenses":
+		return value
+	case "ban_alert":
 		return value
 	default:
 		return ""
