@@ -25,6 +25,56 @@ ALTER INDEX public.idx_player_profile_changes_type_time
 ALTER INDEX public.player_profile_changes_event_time_idx
     RENAME TO player_change_history_event_time_idx;
 
+DROP TABLE public.player_season_stats;
+
+CREATE TABLE public.player_stat_changes (
+    event_time timestamp with time zone NOT NULL,
+    player_tag text NOT NULL,
+    clan_tag text,
+    stat_type text NOT NULL,
+    previous_value bigint NOT NULL,
+    current_value bigint NOT NULL,
+    delta bigint NOT NULL,
+    CONSTRAINT player_stat_changes_stat_type_check
+        CHECK (
+            stat_type = ANY (
+                ARRAY[
+                    'donated'::text,
+                    'received'::text,
+                    'clan_games'::text,
+                    'capital_gold_donated'::text
+                ]
+            )
+        ),
+    CONSTRAINT player_stat_changes_values_check
+        CHECK (
+            previous_value >= 0
+            AND current_value > previous_value
+            AND delta = current_value - previous_value
+    )
+);
+
+-- Tracking derives the before-state from its compressed Valkey player snapshot.
+-- It reserves a deterministic event_time for retries and update-or-inserts that
+-- exact player/stat observation, so this append-oriented hypertable does not
+-- need a synthetic ID or a uniqueness index beyond its value checks.
+SELECT create_hypertable(
+    'player_stat_changes',
+    'event_time',
+    chunk_time_interval => INTERVAL '7 days',
+    create_default_indexes => FALSE,
+    if_not_exists => TRUE
+);
+
+CREATE INDEX idx_player_stat_changes_player_type_time
+    ON public.player_stat_changes
+    (player_tag, stat_type, event_time DESC);
+
+CREATE INDEX idx_player_stat_changes_clan_type_time
+    ON public.player_stat_changes
+    (clan_tag, stat_type, event_time DESC)
+    WHERE clan_tag IS NOT NULL;
+
 SELECT set_chunk_time_interval(
     'player_online_events',
     INTERVAL '3 months'
@@ -276,66 +326,219 @@ $$;
 DROP TABLE public.server_settings;
 DROP TABLE public.servers_legacy;
 
-ALTER TABLE public.leaderboard_snapshot_items
-    RENAME TO leaderboard_history;
+DROP TABLE public.leaderboard_snapshot_items;
 
-ALTER TABLE public.leaderboard_history
-    RENAME CONSTRAINT leaderboard_snapshot_items_pkey
-    TO leaderboard_history_pkey;
-
-ALTER TABLE public.leaderboard_history
-    RENAME CONSTRAINT leaderboard_snapshot_items_kind_not_null
-    TO leaderboard_history_kind_not_null;
-
-ALTER TABLE public.leaderboard_history
-    RENAME CONSTRAINT leaderboard_snapshot_items_location_id_not_null
-    TO leaderboard_history_location_id_not_null;
-
-ALTER TABLE public.leaderboard_history
-    RENAME CONSTRAINT leaderboard_snapshot_items_snapshot_on_not_null
-    TO leaderboard_history_date_not_null;
-
-ALTER TABLE public.leaderboard_history
-    RENAME CONSTRAINT leaderboard_snapshot_items_tag_not_null
-    TO leaderboard_history_tag_not_null;
-
-ALTER TABLE public.leaderboard_history
-    RENAME CONSTRAINT leaderboard_snapshot_items_name_not_null
-    TO leaderboard_history_name_not_null;
-
-ALTER TABLE public.leaderboard_history
-    RENAME CONSTRAINT leaderboard_snapshot_items_rank_not_null
-    TO leaderboard_history_rank_not_null;
-
-ALTER TABLE public.leaderboard_history
-    RENAME CONSTRAINT leaderboard_snapshot_items_data_not_null
-    TO leaderboard_history_data_not_null;
-
-ALTER INDEX public.idx_leaderboard_snapshot_items_location_rank
-    RENAME TO idx_leaderboard_history_location_rank;
-
-ALTER INDEX public.idx_leaderboard_snapshot_items_tag_history
-    RENAME TO idx_leaderboard_history_tag_history;
-
-TRUNCATE TABLE public.leaderboard_history;
-
-ALTER TABLE public.leaderboard_history
-    ADD CONSTRAINT leaderboard_history_kind_check CHECK (
-        kind IN (
-            'player_home_trophies',
-            'player_builder_base_trophies',
-            'clan_home_points',
-            'clan_builder_base_points',
-            'clan_capital_points'
+CREATE TABLE public.leaderboard_history_player_home (
+    location_id text NOT NULL,
+    date date NOT NULL,
+    player_tag text NOT NULL,
+    player_name text NOT NULL,
+    exp_level integer NOT NULL,
+    trophies integer NOT NULL,
+    attack_wins integer NOT NULL,
+    defense_wins integer NOT NULL,
+    rank integer NOT NULL,
+    previous_rank integer,
+    clan_tag text,
+    clan_name text,
+    clan_badge_token text,
+    league_id integer,
+    CONSTRAINT leaderboard_history_player_home_pkey
+        PRIMARY KEY (location_id, date, player_tag),
+    CONSTRAINT leaderboard_history_player_home_location_id_check
+        CHECK (location_id = 'global' OR location_id ~ '^[0-9]+$'),
+    CONSTRAINT leaderboard_history_player_home_player_name_check
+        CHECK (btrim(player_tag) <> '' AND btrim(player_name) <> ''),
+    CONSTRAINT leaderboard_history_player_home_values_check
+        CHECK (
+            exp_level >= 0
+            AND trophies >= 0
+            AND attack_wins >= 0
+            AND defense_wins >= 0
+            AND rank > 0
+            AND (league_id IS NULL OR league_id > 0)
+        ),
+    CONSTRAINT leaderboard_history_player_home_clan_check
+        CHECK (
+            (clan_tag IS NULL AND clan_name IS NULL AND clan_badge_token IS NULL)
+            OR (
+                clan_tag IS NOT NULL
+                AND clan_name IS NOT NULL
+                AND clan_badge_token IS NOT NULL
+                AND
+                btrim(clan_tag) <> ''
+                AND btrim(clan_name) <> ''
+                AND btrim(clan_badge_token) <> ''
+            )
         )
-    ),
-    ADD CONSTRAINT leaderboard_history_location_id_check CHECK (
-        location_id = 'global' OR location_id ~ '^[0-9]+$'
-    ),
-    ADD CONSTRAINT leaderboard_history_rank_check CHECK (rank > 0),
-    ADD CONSTRAINT leaderboard_history_data_check CHECK (
-        jsonb_typeof(data) = 'object'
-    );
+);
+
+CREATE INDEX idx_leaderboard_history_player_home_location_rank
+    ON public.leaderboard_history_player_home (location_id, date DESC, rank);
+CREATE INDEX idx_leaderboard_history_player_home_player
+    ON public.leaderboard_history_player_home (player_tag, date DESC);
+
+CREATE TABLE public.leaderboard_history_player_builder_base (
+    location_id text NOT NULL,
+    date date NOT NULL,
+    player_tag text NOT NULL,
+    player_name text NOT NULL,
+    exp_level integer NOT NULL,
+    builder_base_trophies integer NOT NULL,
+    builder_base_battle_wins integer,
+    rank integer NOT NULL,
+    previous_rank integer,
+    clan_tag text,
+    clan_name text,
+    clan_badge_token text,
+    league_id integer,
+    CONSTRAINT leaderboard_history_player_builder_base_pkey
+        PRIMARY KEY (location_id, date, player_tag),
+    CONSTRAINT leaderboard_history_player_builder_base_location_id_check
+        CHECK (location_id = 'global' OR location_id ~ '^[0-9]+$'),
+    CONSTRAINT leaderboard_history_player_builder_base_player_name_check
+        CHECK (btrim(player_tag) <> '' AND btrim(player_name) <> ''),
+    CONSTRAINT leaderboard_history_player_builder_base_values_check
+        CHECK (
+            exp_level >= 0
+            AND builder_base_trophies >= 0
+            AND (builder_base_battle_wins IS NULL OR builder_base_battle_wins >= 0)
+            AND rank > 0
+            AND (league_id IS NULL OR league_id > 0)
+        ),
+    CONSTRAINT leaderboard_history_player_builder_base_clan_check
+        CHECK (
+            (clan_tag IS NULL AND clan_name IS NULL AND clan_badge_token IS NULL)
+            OR (
+                clan_tag IS NOT NULL
+                AND clan_name IS NOT NULL
+                AND clan_badge_token IS NOT NULL
+                AND
+                btrim(clan_tag) <> ''
+                AND btrim(clan_name) <> ''
+                AND btrim(clan_badge_token) <> ''
+            )
+        )
+);
+
+CREATE INDEX idx_leaderboard_history_player_builder_base_location_rank
+    ON public.leaderboard_history_player_builder_base (location_id, date DESC, rank);
+CREATE INDEX idx_leaderboard_history_player_builder_base_player
+    ON public.leaderboard_history_player_builder_base (player_tag, date DESC);
+
+CREATE TABLE public.leaderboard_history_clan_home (
+    location_id text NOT NULL,
+    date date NOT NULL,
+    clan_tag text NOT NULL,
+    clan_name text NOT NULL,
+    clan_badge_token text NOT NULL,
+    clan_level integer NOT NULL,
+    clan_points integer NOT NULL,
+    members integer NOT NULL,
+    clan_location_id integer,
+    rank integer NOT NULL,
+    previous_rank integer,
+    CONSTRAINT leaderboard_history_clan_home_pkey
+        PRIMARY KEY (location_id, date, clan_tag),
+    CONSTRAINT leaderboard_history_clan_home_location_id_check
+        CHECK (location_id = 'global' OR location_id ~ '^[0-9]+$'),
+    CONSTRAINT leaderboard_history_clan_home_text_check
+        CHECK (
+            btrim(clan_tag) <> ''
+            AND btrim(clan_name) <> ''
+            AND btrim(clan_badge_token) <> ''
+        ),
+    CONSTRAINT leaderboard_history_clan_home_values_check
+        CHECK (
+            clan_level > 0
+            AND clan_points >= 0
+            AND members >= 0
+            AND members <= 50
+            AND (clan_location_id IS NULL OR clan_location_id > 0)
+            AND rank > 0
+        )
+);
+
+CREATE INDEX idx_leaderboard_history_clan_home_location_rank
+    ON public.leaderboard_history_clan_home (location_id, date DESC, rank);
+CREATE INDEX idx_leaderboard_history_clan_home_clan
+    ON public.leaderboard_history_clan_home (clan_tag, date DESC);
+
+CREATE TABLE public.leaderboard_history_clan_builder_base (
+    location_id text NOT NULL,
+    date date NOT NULL,
+    clan_tag text NOT NULL,
+    clan_name text NOT NULL,
+    clan_badge_token text NOT NULL,
+    clan_level integer NOT NULL,
+    builder_base_points integer NOT NULL,
+    members integer NOT NULL,
+    clan_location_id integer,
+    rank integer NOT NULL,
+    previous_rank integer,
+    CONSTRAINT leaderboard_history_clan_builder_base_pkey
+        PRIMARY KEY (location_id, date, clan_tag),
+    CONSTRAINT leaderboard_history_clan_builder_base_location_id_check
+        CHECK (location_id = 'global' OR location_id ~ '^[0-9]+$'),
+    CONSTRAINT leaderboard_history_clan_builder_base_text_check
+        CHECK (
+            btrim(clan_tag) <> ''
+            AND btrim(clan_name) <> ''
+            AND btrim(clan_badge_token) <> ''
+        ),
+    CONSTRAINT leaderboard_history_clan_builder_base_values_check
+        CHECK (
+            clan_level > 0
+            AND builder_base_points >= 0
+            AND members >= 0
+            AND members <= 50
+            AND (clan_location_id IS NULL OR clan_location_id > 0)
+            AND rank > 0
+        )
+);
+
+CREATE INDEX idx_leaderboard_history_clan_builder_base_location_rank
+    ON public.leaderboard_history_clan_builder_base (location_id, date DESC, rank);
+CREATE INDEX idx_leaderboard_history_clan_builder_base_clan
+    ON public.leaderboard_history_clan_builder_base (clan_tag, date DESC);
+
+CREATE TABLE public.leaderboard_history_clan_capital (
+    location_id text NOT NULL,
+    date date NOT NULL,
+    clan_tag text NOT NULL,
+    clan_name text NOT NULL,
+    clan_badge_token text NOT NULL,
+    clan_level integer NOT NULL,
+    capital_points integer NOT NULL,
+    members integer NOT NULL,
+    clan_location_id integer,
+    rank integer NOT NULL,
+    previous_rank integer,
+    CONSTRAINT leaderboard_history_clan_capital_pkey
+        PRIMARY KEY (location_id, date, clan_tag),
+    CONSTRAINT leaderboard_history_clan_capital_location_id_check
+        CHECK (location_id = 'global' OR location_id ~ '^[0-9]+$'),
+    CONSTRAINT leaderboard_history_clan_capital_text_check
+        CHECK (
+            btrim(clan_tag) <> ''
+            AND btrim(clan_name) <> ''
+            AND btrim(clan_badge_token) <> ''
+        ),
+    CONSTRAINT leaderboard_history_clan_capital_values_check
+        CHECK (
+            clan_level > 0
+            AND capital_points >= 0
+            AND members >= 0
+            AND members <= 50
+            AND (clan_location_id IS NULL OR clan_location_id > 0)
+            AND rank > 0
+        )
+);
+
+CREATE INDEX idx_leaderboard_history_clan_capital_location_rank
+    ON public.leaderboard_history_clan_capital (location_id, date DESC, rank);
+CREATE INDEX idx_leaderboard_history_clan_capital_clan
+    ON public.leaderboard_history_clan_capital (clan_tag, date DESC);
 
 ALTER TABLE public.legend_history_snapshots
     RENAME TO legend_history;
@@ -370,10 +573,47 @@ ALTER INDEX public.idx_legend_history_snapshots_rank
 TRUNCATE TABLE public.legend_history;
 
 ALTER TABLE public.legend_history
-    DROP COLUMN created_at;
+    DROP COLUMN created_at,
+    DROP COLUMN data,
+    ADD COLUMN player_name text NOT NULL,
+    ADD COLUMN exp_level integer NOT NULL,
+    ADD COLUMN attack_wins integer NOT NULL,
+    ADD COLUMN defense_wins integer NOT NULL,
+    ADD COLUMN clan_tag text,
+    ADD COLUMN clan_name text,
+    ADD COLUMN clan_badge_token text,
+    ADD COLUMN league_tier_id integer,
+    ADD CONSTRAINT legend_history_player_name_check
+        CHECK (btrim(player_name) <> ''),
+    ADD CONSTRAINT legend_history_rank_check
+        CHECK (rank > 0),
+    ADD CONSTRAINT legend_history_trophies_check
+        CHECK (trophies >= 0),
+    ADD CONSTRAINT legend_history_exp_level_check
+        CHECK (exp_level >= 0),
+    ADD CONSTRAINT legend_history_attack_wins_check
+        CHECK (attack_wins >= 0),
+    ADD CONSTRAINT legend_history_defense_wins_check
+        CHECK (defense_wins >= 0),
+    ADD CONSTRAINT legend_history_clan_check
+        CHECK (
+            (clan_tag IS NULL AND clan_name IS NULL AND clan_badge_token IS NULL)
+            OR
+            (
+                btrim(clan_tag) <> ''
+                AND btrim(clan_name) <> ''
+                AND btrim(clan_badge_token) <> ''
+            )
+        ),
+    ADD CONSTRAINT legend_history_league_tier_id_check
+        CHECK (league_tier_id IS NULL OR league_tier_id > 0);
 
 CREATE INDEX idx_legend_history_player_season
     ON public.legend_history (player_tag, season DESC);
+
+CREATE INDEX idx_legend_history_clan_rank
+    ON public.legend_history (clan_tag, rank, season DESC)
+    WHERE clan_tag IS NOT NULL;
 
 DROP TABLE public.mobile_live_activities;
 
@@ -547,6 +787,117 @@ CREATE INDEX idx_mobile_push_devices_delivery
 
 DROP TABLE public.one_time_login_tokens;
 
+ALTER TABLE public.ticket_panel
+    ADD COLUMN sleep_category_id text,
+    ADD COLUMN status_change_log_channel_id text,
+    ADD COLUMN button_click_log_channel_id text,
+    ADD COLUMN ticket_close_log_channel_id text;
+
+ALTER TABLE public.ticket_panel_buttons
+    ADD COLUMN custom_id text,
+    ADD COLUMN label text,
+    ADD COLUMN style smallint,
+    ADD COLUMN emoji text,
+    ADD CONSTRAINT ticket_panel_buttons_style_check
+        CHECK (style IS NULL OR style BETWEEN 1 AND 5),
+    ADD CONSTRAINT ticket_panel_buttons_panel_custom_id_key
+        UNIQUE (panel_id, custom_id);
+
+ALTER TABLE public.tickets
+    ADD COLUMN applicant_user_id text,
+    ADD COLUMN thread_id text,
+    ADD COLUMN status text DEFAULT 'open'::text NOT NULL,
+    ADD COLUMN naming_convention text,
+    ADD COLUMN assigned_clan_tag text,
+    ADD COLUMN opted_in_user_ids text[] DEFAULT '{}'::text[] NOT NULL,
+    ADD CONSTRAINT tickets_status_check
+        CHECK (status = ANY (ARRAY['open'::text, 'sleep'::text, 'closed'::text, 'delete'::text]));
+
+INSERT INTO public.ticket_panel (
+    server_id,
+    name,
+    description,
+    naming_convention
+)
+SELECT DISTINCT
+    open_tickets.server_id,
+    COALESCE(NULLIF(open_tickets.panel_name, ''), 'legacy'),
+    '',
+    NULLIF(open_tickets.data ->> 'naming', '')
+FROM public.open_tickets
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM public.ticket_panel
+    WHERE ticket_panel.server_id = open_tickets.server_id
+      AND ticket_panel.name = COALESCE(NULLIF(open_tickets.panel_name, ''), 'legacy')
+);
+
+INSERT INTO public.tickets (
+    server_id,
+    channel_id,
+    is_thread,
+    status_id,
+    number,
+    panel_id,
+    applicant_accounts,
+    applicant_user_id,
+    thread_id,
+    status,
+    naming_convention,
+    assigned_clan_tag,
+    opted_in_user_ids,
+    created_at,
+    closed_at
+)
+SELECT
+    open_tickets.server_id,
+    open_tickets.channel_id,
+    false,
+    0,
+    CASE
+        WHEN open_tickets.data ->> 'number' ~ '^[0-9]+$'
+            THEN (open_tickets.data ->> 'number')::integer
+        ELSE nextval('public.tickets_number_seq')
+    END,
+    panel.id,
+    CASE
+        WHEN NULLIF(open_tickets.data ->> 'apply_account', '') IS NULL THEN '{}'::text[]
+        ELSE ARRAY[open_tickets.data ->> 'apply_account']
+    END,
+    COALESCE(NULLIF(open_tickets.user_id, ''), NULLIF(open_tickets.data ->> 'user', '')),
+    NULLIF(open_tickets.data ->> 'thread', ''),
+    CASE
+        WHEN open_tickets.status = ANY (ARRAY['open'::text, 'sleep'::text, 'closed'::text, 'delete'::text])
+            THEN open_tickets.status
+        ELSE 'open'
+    END,
+    NULLIF(open_tickets.data ->> 'naming', ''),
+    NULLIF(open_tickets.set_clan, ''),
+    COALESCE(
+        ARRAY(
+            SELECT jsonb_array_elements_text(
+                CASE
+                    WHEN jsonb_typeof(open_tickets.data -> 'opted_in') = 'array'
+                        THEN open_tickets.data -> 'opted_in'
+                    ELSE '[]'::jsonb
+                END
+            )
+        ),
+        '{}'::text[]
+    ),
+    open_tickets.created_at,
+    CASE WHEN open_tickets.status = 'closed' THEN open_tickets.updated_at END
+FROM public.open_tickets
+JOIN LATERAL (
+    SELECT id
+    FROM public.ticket_panel
+    WHERE ticket_panel.server_id = open_tickets.server_id
+      AND ticket_panel.name = COALESCE(NULLIF(open_tickets.panel_name, ''), 'legacy')
+    ORDER BY created_at, id
+    LIMIT 1
+) AS panel ON true
+ON CONFLICT (channel_id) DO NOTHING;
+
 DROP TABLE public.open_tickets;
 
 DROP MATERIALIZED VIEW public.api_global_counts;
@@ -580,7 +931,216 @@ DROP TABLE public.ranking_snapshots;
 
 DROP TABLE public.player_history_events;
 
+-- Autoboards are a clean break. Legacy rows and their JSON/button aliases are
+-- intentionally discarded rather than guessed into the new registry-driven
+-- board types, target scopes, and recurring schedules.
+DROP TABLE public.autoboards;
+
+CREATE TABLE public.autoboards (
+    id uuid DEFAULT uuidv7() NOT NULL,
+    server_id text NOT NULL,
+    board_type text NOT NULL,
+    target_scope text NOT NULL,
+    delivery_mode text NOT NULL,
+    webhook_id text NOT NULL,
+    thread_id text,
+    message_id text,
+    enabled boolean DEFAULT true NOT NULL,
+    interval_minutes integer,
+    schedule_kind text,
+    schedule_timezone text,
+    schedule_time time without time zone,
+    schedule_weekdays smallint[],
+    schedule_day_of_month smallint,
+    next_run_at timestamp with time zone,
+    last_run_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT autoboards_pkey PRIMARY KEY (id),
+    CONSTRAINT autoboards_server_id_fkey
+        FOREIGN KEY (server_id)
+        REFERENCES public.servers(id)
+        ON DELETE CASCADE,
+    CONSTRAINT autoboards_board_type_check
+        CHECK (btrim(board_type) <> ''),
+    CONSTRAINT autoboards_target_scope_check
+        CHECK (target_scope = ANY (ARRAY['family'::text, 'custom'::text])),
+    CONSTRAINT autoboards_delivery_mode_check
+        CHECK (delivery_mode = ANY (ARRAY['refresh'::text, 'send'::text])),
+    CONSTRAINT autoboards_webhook_id_check
+        CHECK (btrim(webhook_id) <> ''),
+    CONSTRAINT autoboards_thread_id_check
+        CHECK (thread_id IS NULL OR btrim(thread_id) <> ''),
+    CONSTRAINT autoboards_message_id_check
+        CHECK (message_id IS NULL OR btrim(message_id) <> ''),
+    CONSTRAINT autoboards_due_state_check
+        CHECK (NOT enabled OR next_run_at IS NOT NULL),
+    CONSTRAINT autoboards_schedule_check
+        CHECK (
+            (
+                delivery_mode = 'refresh'
+                AND interval_minutes IS NOT NULL
+                AND interval_minutes > 0
+                AND schedule_kind IS NULL
+                AND schedule_timezone IS NULL
+                AND schedule_time IS NULL
+                AND schedule_weekdays IS NULL
+                AND schedule_day_of_month IS NULL
+            )
+            OR
+            (
+                delivery_mode = 'send'
+                AND interval_minutes IS NULL
+                AND message_id IS NULL
+                AND schedule_kind IS NOT NULL
+                AND schedule_timezone IS NOT NULL
+                AND btrim(schedule_timezone) <> ''
+                AND schedule_time IS NOT NULL
+                AND (
+                    (
+                        schedule_kind = 'daily'
+                        AND schedule_weekdays IS NULL
+                        AND schedule_day_of_month IS NULL
+                    )
+                    OR
+                    (
+                        schedule_kind = 'weekdays'
+                        AND cardinality(schedule_weekdays) BETWEEN 1 AND 7
+                        AND schedule_weekdays <@ ARRAY[1, 2, 3, 4, 5, 6, 7]::smallint[]
+                        AND schedule_day_of_month IS NULL
+                    )
+                    OR
+                    (
+                        schedule_kind = 'day_of_month'
+                        AND schedule_weekdays IS NULL
+                        AND schedule_day_of_month BETWEEN 1 AND 31
+                    )
+                )
+            )
+        )
+);
+
+CREATE TABLE public.autoboard_targets (
+    autoboard_id uuid NOT NULL,
+    position integer NOT NULL,
+    target text NOT NULL,
+    CONSTRAINT autoboard_targets_pkey
+        PRIMARY KEY (autoboard_id, target),
+    CONSTRAINT autoboard_targets_position_key
+        UNIQUE (autoboard_id, position),
+    CONSTRAINT autoboard_targets_autoboard_id_fkey
+        FOREIGN KEY (autoboard_id)
+        REFERENCES public.autoboards(id)
+        ON DELETE CASCADE,
+    CONSTRAINT autoboard_targets_position_check
+        CHECK (position >= 0),
+    CONSTRAINT autoboard_targets_target_check
+        CHECK (btrim(target) <> '')
+);
+
+-- Scope and child rows can change together in one API transaction. Deferred
+-- checks enforce the final committed state without imposing insert order.
+-- +goose StatementBegin
+CREATE FUNCTION public.ck_validate_autoboard_target_scope()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    checked_autoboard_id uuid;
+    checked_scope text;
+    target_count bigint;
+BEGIN
+    IF TG_TABLE_NAME = 'autoboards' THEN
+        checked_autoboard_id := COALESCE(NEW.id, OLD.id);
+    ELSE
+        checked_autoboard_id := COALESCE(NEW.autoboard_id, OLD.autoboard_id);
+    END IF;
+
+    SELECT target_scope
+    INTO checked_scope
+    FROM public.autoboards
+    WHERE id = checked_autoboard_id;
+
+    IF NOT FOUND THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT count(*)
+    INTO target_count
+    FROM public.autoboard_targets
+    WHERE autoboard_id = checked_autoboard_id;
+
+    IF checked_scope = 'family' AND target_count <> 0 THEN
+        RAISE EXCEPTION 'family autoboard % cannot have target rows', checked_autoboard_id
+            USING ERRCODE = 'check_violation';
+    END IF;
+    IF checked_scope = 'custom' AND target_count = 0 THEN
+        RAISE EXCEPTION 'custom autoboard % requires at least one target row', checked_autoboard_id
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    RETURN NULL;
+END
+$$;
+-- +goose StatementEnd
+
+CREATE CONSTRAINT TRIGGER autoboards_target_scope_trigger
+AFTER INSERT OR UPDATE OF target_scope ON public.autoboards
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION public.ck_validate_autoboard_target_scope();
+
+CREATE CONSTRAINT TRIGGER autoboard_targets_scope_trigger
+AFTER INSERT OR UPDATE OR DELETE ON public.autoboard_targets
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION public.ck_validate_autoboard_target_scope();
+
+CREATE INDEX idx_autoboards_server_created
+    ON public.autoboards (server_id, created_at, id);
+
+CREATE INDEX idx_autoboards_refresh_due
+    ON public.autoboards (next_run_at, id)
+    WHERE enabled AND delivery_mode = 'refresh';
+
+CREATE INDEX idx_autoboards_send_due
+    ON public.autoboards (next_run_at, id)
+    WHERE enabled AND delivery_mode = 'send';
+
 -- +goose Down
+
+DROP TABLE public.autoboard_targets;
+DROP TABLE public.autoboards;
+DROP FUNCTION public.ck_validate_autoboard_target_scope();
+
+CREATE TABLE public.autoboards (
+    id uuid DEFAULT uuidv7() NOT NULL,
+    identifier text,
+    server_id text NOT NULL,
+    type text DEFAULT ''::text NOT NULL,
+    channel_id text,
+    webhook_id text,
+    thread_id text,
+    interval_minutes integer,
+    next_run_at timestamp with time zone,
+    enabled boolean DEFAULT true NOT NULL,
+    data jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    board_type text DEFAULT ''::text NOT NULL,
+    button_id text DEFAULT ''::text NOT NULL,
+    days text[] DEFAULT '{}'::text[] NOT NULL,
+    locale text DEFAULT ''::text NOT NULL,
+    CONSTRAINT autoboards_pkey PRIMARY KEY (id),
+    CONSTRAINT autoboards_identifier_key UNIQUE (identifier)
+);
+
+CREATE INDEX idx_autoboards_due
+    ON public.autoboards (next_run_at)
+    WHERE enabled = true;
+
+CREATE INDEX idx_autoboards_server_type
+    ON public.autoboards (server_id, type);
 
 ALTER TABLE public.servers
     RENAME CONSTRAINT servers_pkey TO servers_v3_pkey;
@@ -903,6 +1463,32 @@ ALTER INDEX public.idx_player_change_history_player_time
 ALTER TABLE public.player_change_history
     RENAME TO player_profile_changes;
 
+DROP TABLE public.player_stat_changes;
+
+CREATE TABLE public.player_season_stats (
+    player_tag text NOT NULL,
+    season text NOT NULL,
+    clan_tag text DEFAULT ''::text NOT NULL,
+    donated integer DEFAULT 0 NOT NULL,
+    received integer DEFAULT 0 NOT NULL,
+    capital_gold_donos integer DEFAULT 0 NOT NULL,
+    activity_score integer DEFAULT 0 NOT NULL,
+    last_online_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    name text DEFAULT ''::text NOT NULL,
+    townhall_level integer,
+    donations jsonb DEFAULT '{}'::jsonb NOT NULL,
+    clan_games jsonb DEFAULT '{}'::jsonb NOT NULL,
+    activity jsonb DEFAULT '{}'::jsonb NOT NULL,
+    data jsonb DEFAULT '{}'::jsonb NOT NULL,
+    CONSTRAINT player_season_stats_pkey
+        PRIMARY KEY (player_tag, season, clan_tag)
+);
+
+CREATE INDEX idx_player_season_stats_clan_season
+    ON public.player_season_stats (clan_tag, season);
+
 CREATE TABLE public.player_history_events (
     event_time timestamp with time zone NOT NULL,
     player_tag text NOT NULL,
@@ -1050,6 +1636,69 @@ CREATE TABLE public.open_tickets (
 
 CREATE INDEX idx_open_tickets_server_status
     ON public.open_tickets (server_id, status);
+
+INSERT INTO public.open_tickets (
+    server_id,
+    channel_id,
+    panel_name,
+    status,
+    user_id,
+    set_clan,
+    data,
+    created_at,
+    updated_at
+)
+SELECT
+    tickets.server_id,
+    tickets.channel_id,
+    ticket_panel.name,
+    tickets.status,
+    tickets.applicant_user_id,
+    tickets.assigned_clan_tag,
+    jsonb_build_object(
+        'user', tickets.applicant_user_id,
+        'channel', tickets.channel_id,
+        'thread', tickets.thread_id,
+        'number', tickets.number,
+        'apply_account', CASE
+            WHEN cardinality(tickets.applicant_accounts) > 0 THEN tickets.applicant_accounts[1]
+        END,
+        'naming', tickets.naming_convention,
+        'panel', ticket_panel.name,
+        'status', tickets.status,
+        'set_clan', tickets.assigned_clan_tag,
+        'server', tickets.server_id,
+        'opted_in', tickets.opted_in_user_ids
+    ),
+    tickets.created_at,
+    COALESCE(tickets.closed_at, tickets.created_at)
+FROM public.tickets
+JOIN public.ticket_panel
+  ON ticket_panel.id = tickets.panel_id
+ON CONFLICT (server_id, channel_id) DO NOTHING;
+
+ALTER TABLE public.tickets
+    DROP CONSTRAINT tickets_status_check,
+    DROP COLUMN opted_in_user_ids,
+    DROP COLUMN assigned_clan_tag,
+    DROP COLUMN naming_convention,
+    DROP COLUMN status,
+    DROP COLUMN thread_id,
+    DROP COLUMN applicant_user_id;
+
+ALTER TABLE public.ticket_panel_buttons
+    DROP CONSTRAINT ticket_panel_buttons_panel_custom_id_key,
+    DROP CONSTRAINT ticket_panel_buttons_style_check,
+    DROP COLUMN emoji,
+    DROP COLUMN style,
+    DROP COLUMN label,
+    DROP COLUMN custom_id;
+
+ALTER TABLE public.ticket_panel
+    DROP COLUMN ticket_close_log_channel_id,
+    DROP COLUMN button_click_log_channel_id,
+    DROP COLUMN status_change_log_channel_id,
+    DROP COLUMN sleep_category_id;
 
 CREATE TABLE public.one_time_login_tokens (
     id uuid DEFAULT uuidv7() NOT NULL,
@@ -1426,9 +2075,53 @@ CREATE INDEX idx_mobile_live_activities_war_active
     ON public.mobile_live_activities (war_id, war_tag, status)
     WHERE status = 'active'::text;
 
+DROP INDEX public.idx_legend_history_clan_rank;
 DROP INDEX public.idx_legend_history_player_season;
 
 ALTER TABLE public.legend_history
+    DROP CONSTRAINT legend_history_player_name_check,
+    DROP CONSTRAINT legend_history_rank_check,
+    DROP CONSTRAINT legend_history_trophies_check,
+    DROP CONSTRAINT legend_history_exp_level_check,
+    DROP CONSTRAINT legend_history_attack_wins_check,
+    DROP CONSTRAINT legend_history_defense_wins_check,
+    DROP CONSTRAINT legend_history_clan_check,
+    DROP CONSTRAINT legend_history_league_tier_id_check,
+    ADD COLUMN data jsonb DEFAULT '{}'::jsonb
+        CONSTRAINT legend_history_data_not_null NOT NULL;
+
+UPDATE public.legend_history
+SET data = jsonb_strip_nulls(jsonb_build_object(
+    'tag', player_tag,
+    'name', player_name,
+    'expLevel', exp_level,
+    'trophies', trophies,
+    'attackWins', attack_wins,
+    'defenseWins', defense_wins,
+    'rank', rank,
+    'clan', CASE
+        WHEN clan_tag IS NULL THEN NULL
+        ELSE jsonb_build_object(
+            'tag', clan_tag,
+            'name', clan_name,
+            'badgeToken', clan_badge_token
+        )
+    END,
+    'leagueTier', CASE
+        WHEN league_tier_id IS NULL THEN NULL
+        ELSE jsonb_build_object('id', league_tier_id)
+    END
+));
+
+ALTER TABLE public.legend_history
+    DROP COLUMN player_name,
+    DROP COLUMN exp_level,
+    DROP COLUMN attack_wins,
+    DROP COLUMN defense_wins,
+    DROP COLUMN clan_tag,
+    DROP COLUMN clan_name,
+    DROP COLUMN clan_badge_token,
+    DROP COLUMN league_tier_id,
     ADD COLUMN created_at timestamp with time zone DEFAULT now()
         CONSTRAINT legend_history_snapshots_created_at_not_null NOT NULL;
 
@@ -1462,52 +2155,28 @@ ALTER TABLE public.legend_history
 ALTER TABLE public.legend_history
     RENAME TO legend_history_snapshots;
 
-ALTER TABLE public.leaderboard_history
-    DROP CONSTRAINT leaderboard_history_kind_check,
-    DROP CONSTRAINT leaderboard_history_location_id_check,
-    DROP CONSTRAINT leaderboard_history_rank_check,
-    DROP CONSTRAINT leaderboard_history_data_check;
+DROP TABLE public.leaderboard_history_clan_capital;
+DROP TABLE public.leaderboard_history_clan_builder_base;
+DROP TABLE public.leaderboard_history_clan_home;
+DROP TABLE public.leaderboard_history_player_builder_base;
+DROP TABLE public.leaderboard_history_player_home;
 
-ALTER INDEX public.idx_leaderboard_history_location_rank
-    RENAME TO idx_leaderboard_snapshot_items_location_rank;
+CREATE TABLE public.leaderboard_snapshot_items (
+    kind text NOT NULL,
+    location_id text NOT NULL,
+    date date CONSTRAINT leaderboard_snapshot_items_snapshot_on_not_null NOT NULL,
+    tag text NOT NULL,
+    name text NOT NULL,
+    rank integer NOT NULL,
+    data jsonb NOT NULL,
+    CONSTRAINT leaderboard_snapshot_items_pkey
+        PRIMARY KEY (kind, location_id, date, tag)
+);
 
-ALTER INDEX public.idx_leaderboard_history_tag_history
-    RENAME TO idx_leaderboard_snapshot_items_tag_history;
-
-ALTER TABLE public.leaderboard_history
-    RENAME CONSTRAINT leaderboard_history_pkey
-    TO leaderboard_snapshot_items_pkey;
-
-ALTER TABLE public.leaderboard_history
-    RENAME CONSTRAINT leaderboard_history_kind_not_null
-    TO leaderboard_snapshot_items_kind_not_null;
-
-ALTER TABLE public.leaderboard_history
-    RENAME CONSTRAINT leaderboard_history_location_id_not_null
-    TO leaderboard_snapshot_items_location_id_not_null;
-
-ALTER TABLE public.leaderboard_history
-    RENAME CONSTRAINT leaderboard_history_date_not_null
-    TO leaderboard_snapshot_items_snapshot_on_not_null;
-
-ALTER TABLE public.leaderboard_history
-    RENAME CONSTRAINT leaderboard_history_tag_not_null
-    TO leaderboard_snapshot_items_tag_not_null;
-
-ALTER TABLE public.leaderboard_history
-    RENAME CONSTRAINT leaderboard_history_name_not_null
-    TO leaderboard_snapshot_items_name_not_null;
-
-ALTER TABLE public.leaderboard_history
-    RENAME CONSTRAINT leaderboard_history_rank_not_null
-    TO leaderboard_snapshot_items_rank_not_null;
-
-ALTER TABLE public.leaderboard_history
-    RENAME CONSTRAINT leaderboard_history_data_not_null
-    TO leaderboard_snapshot_items_data_not_null;
-
-ALTER TABLE public.leaderboard_history
-    RENAME TO leaderboard_snapshot_items;
+CREATE INDEX idx_leaderboard_snapshot_items_location_rank
+    ON public.leaderboard_snapshot_items (kind, location_id, date DESC, rank);
+CREATE INDEX idx_leaderboard_snapshot_items_tag_history
+    ON public.leaderboard_snapshot_items (kind, tag, date DESC);
 
 CREATE TABLE public.hall_counts (
     village_type integer NOT NULL,

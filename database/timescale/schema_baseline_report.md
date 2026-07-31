@@ -941,8 +941,9 @@ Downstream decision:
 
 Status: complete for the authorized Bases manager surface, decision 9 clan
 category management, decision 16 typed giveaway caller migration, and the
-migration-003 `open_tickets` Dashboard retirement, including the final
-server-generated create and manager-delete contracts. Task
+migration-003 `open_tickets` retirement, destination follow-ups, and typed
+Autoboards clean break, including the final server-generated create and
+manager-delete contracts. Task
 `019f929f-bd3f-7ca0-ab74-f6ad08ddec1e` is the persistent Dashboard owner for
 this initiative; keep it unarchived and reuse it when a future schema decision
 affects Dashboard.
@@ -1120,6 +1121,204 @@ Validation:
   reference. Remaining `api_token` references belong only to the preserved
   player-link verification contract plus an explicit negative type test.
 - Exact retired capital-raids route search found no Dashboard caller or proxy.
+- Dashboard and shared-report `git diff --check` — passed.
+
+### Migration 003 Logs and Reminder destination Dashboard follow-up
+
+Status: complete in persistent Dashboard task
+`019f929f-bd3f-7ca0-ab74-f6ad08ddec1e`; local and unpublished.
+
+Outcome: Updated the Logs and Reminders destination UI and wire types. Both
+surfaces now treat a destination as a parent `channel_id` plus nullable
+snake_case `thread_id`. Text and announcement/news parents can be used directly
+or with one of their exact child threads; forum parents require a selected
+child post/thread. Changing the parent clears the prior child, and Dashboard
+validation rejects missing forum posts and mismatched parent/thread pairs
+before the API repeats its authoritative guild membership and parent-child
+validation. At the time of this follow-up, forum acceptance was limited to
+Logs and Reminders. The later typed Autoboards clean break separately adopted
+the same parent/thread destination contract; ticketing, panels, giveaways,
+rosters, embeds, and every other channel selector remain unchanged.
+
+Logs now load forum parents and active child threads with the initial page
+data, so the migrated guild `923764211845312533` row using webhook
+`1128181917582364703`, forum parent `1127708751479197806`, and a stored child
+thread resolves as configured instead of showing the false “channel no longer
+exists” issue. Parent and child are saved atomically through the unchanged PUT
+shape `{channel_id, thread_id, log_types, clan_tag?}`. The existing Server tab
+and server/clan scope behavior are unchanged. Active Logs now counts every
+configured, enabled row across all family clans plus server-scoped rows,
+independent of the selected clan. Issues uses the same family-wide scope and
+counts enabled rows with a missing/unsupported parent, required forum child,
+or invalid parent-child relationship. Both cards explicitly localize that
+complete-family scope.
+
+Reminder reads consume nullable `thread_id`; create and update send parent
+`channel_id` plus nullable `thread_id`. Existing reminder cards show the
+parent/thread destination and open the child in Discord when present.
+
+Exact Dashboard files:
+
+- `app/[locale]/dashboard/[guildId]/logs/page.tsx`
+- `app/[locale]/dashboard/[guildId]/logs/page.test.tsx`
+- `app/[locale]/dashboard/[guildId]/reminders/page.tsx`
+- `app/[locale]/dashboard/[guildId]/reminders/page.test.tsx`
+- `lib/discord-destinations.ts`
+- `lib/discord-destinations.test.ts`
+- `messages/en.json`
+- `messages/fr.json`
+- `messages/nl.json`
+
+Validated contract: Logs PUT remains `{channel_id, thread_id?, log_types,
+clan_tag?}`. GET reminder rows expose `thread_id: string | null`; reminder POST
+and PUT accept `channel_id` plus nullable `thread_id`. Discord parent types are
+text `0`, announcement/news `5`, and forum `15`/`forum`; `/threads` supplies
+active children with `parent_channel_id`. The existing Next proxies forward
+request bodies and API errors unchanged, so no proxy file required
+modification. API destination validation returns HTTP 400 with
+`code: "validation_failed"`, `message: "Invalid Discord destination"`,
+`request_id`, and field-level `details`; Discord lookup failures other than a
+missing destination return HTTP 502 with `code: "upstream_unavailable"`.
+
+Validation:
+
+- `npx vitest run 'app/[locale]/dashboard/[guildId]/logs/page.test.tsx'
+  'app/[locale]/dashboard/[guildId]/reminders/page.test.tsx'
+  lib/discord-destinations.test.ts` — passed, 3 files and 14 tests. Coverage
+  includes the exact migrated forum parent/webhook display, required forum
+  posts, optional text/news threads, atomic parent/thread payloads, parent
+  switching clearing the child, exact parent-child validation, unchanged
+  server/clan log scope, and family-wide Active Logs/Issues counts.
+- `npm test -- --run` — passed, 52 files and 340 tests.
+- `npm run lint` — passed with no findings.
+- `npx tsc --noEmit --pretty false` — passed.
+- `npm run build` — passed; Next.js 16.2.10 compiled, type-checked, generated
+  all 23 static pages, and retained the Logs and Reminder pages plus their
+  log/reminder/thread proxy routes in the production manifest.
+- Dashboard `git diff --check` — passed.
+
+Delivery boundary: Bot work remains explicitly out of scope. Tracking/Bot must
+still carry and consume `thread_id` when dispatching reminder events before
+child-thread delivery can be called end-to-end compatible; this Dashboard task
+does not claim that deferred runtime delivery work.
+
+### Migration 003 typed Autoboards Dashboard clean break
+
+Status: complete in persistent Dashboard task
+`019f929f-bd3f-7ca0-ab74-f6ad08ddec1e`; local, uncommitted, and unpublished.
+No App or Bot work was added, and the Dashboard did not modify migration or
+seed SQL.
+
+Outcome: Replaced the legacy hardcoded Autoboards catalog and its
+post/refresh/button/day/locale contract outright. The Dashboard now renders
+only board types returned by the manager-authorized registry endpoint and
+supports an intentionally empty registry without inventing the future board
+catalog. The UI uses the API term `targets` exclusively. Registry metadata
+drives target kind, family/custom scope availability, custom target minimum
+and maximum cardinality (including an exact-one location rule), delivery mode
+availability, and refresh interval bounds. Family scope always sends an empty
+target list; custom target values remain opaque strings for the API to
+interpret and normalize by `targetKind`.
+
+The shared API checkout also contains five explicitly sample-prefixed registry
+definitions requested for demonstration: family overview, clan activity,
+player leaderboard, location rankings, and war summary. They exercise
+family/custom scope, clan/player/location/war target kinds and cardinalities,
+and refresh/send constraints. Their `sample-*` identifiers and labels make
+their non-permanent status explicit while the final catalog remains undecided.
+
+Contracts and operational behavior:
+
+- `GET /v2/server/{serverId}/autoboards/capabilities` consumes
+  `{boardTypes:[{boardType,label,targetKind,minTargets,maxTargets,
+  allowedScopes,allowedModes,refreshInterval,uiCapabilities}]}`. The parser
+  accepts the API's legitimate `{boardTypes:[]}` empty-registry response; no
+  Dashboard board-type catalog or compatibility alias remains.
+- `GET /v2/server/{serverId}/autoboards` consumes the typed `items`, `total`,
+  `refreshCount`, `sendCount`, and `limit` response. The page shows target
+  scope/history, destination, schedule/interval, enabled state, next run, and
+  the read-only current `messageId` for refresh boards when present.
+- `POST /v2/server/{serverId}/autoboards` and full-replacement `PUT
+  /v2/server/{serverId}/autoboards/{autoboardId}` send exactly `boardType`,
+  `targetScope`, `targets`, `deliveryMode`, `channelId`, nullable `threadId`,
+  `enabled`, nullable `intervalMinutes`, and nullable typed
+  `schedule`. The retired PATCH route and partial-update behavior were removed.
+- Refresh mode sends a registry-bounded `intervalMinutes` and no schedule.
+  Dashboard never includes `messageId` in POST or PUT. API creation stores it
+  null and full replacement clears it so the future executor exclusively owns
+  establishing refresh-message state. Send mode sends a null interval plus a
+  daily, selected-ISO-weekday, or day-of-month schedule with IANA timezone and
+  `HH:MM` time.
+- Destination selection sends the parent channel and nullable child atomically.
+  Text and announcement/news parents may deliver directly or to an exact child
+  thread; forum parents require an exact child post. Parent changes clear the
+  selected child, and Dashboard validation rejects missing forum posts and
+  mismatched parent/thread pairs before API validation.
+- The page now uses the same centered `max-w-7xl` content shell and responsive
+  `p-4`/`p-6`/`p-8` gutters as the surrounding management surfaces. Header,
+  alerts, metrics, filters, and the empty state have consistent responsive
+  spacing, and a load failure no longer renders a contradictory empty-registry
+  notice underneath it. The metric cards no longer use the shared
+  header-oriented `CardContent` primitive, whose `pt-0` rule crowded their
+  labels against the top edge; each now has one balanced, vertically centered
+  `p-5` body.
+- API capability serialization preserves empty `uiCapabilities` as `[]`
+  rather than Go `null`, including the five demonstrable sample definitions.
+  Dashboard also continues to accept a legitimate future
+  `{boardTypes:[]}` response without inventing a local catalog.
+- `DELETE /v2/server/{serverId}/autoboards/{autoboardId}` remains available to
+  managers. API error envelopes and response messages are preserved for
+  validation, missing/conflicting records, Discord failures, and persistence
+  failures.
+- Movable Clash-event triggers were not added. SQL scheduler execution in Bot
+  remains outside this Dashboard task and is a disclosed deferred integration
+  boundary; there is no App/saved-board behavior.
+
+Exact Dashboard files:
+
+- `app/[locale]/dashboard/[guildId]/autoboards/page.tsx`
+- `app/[locale]/dashboard/[guildId]/autoboards/page.test.tsx`
+- `app/[locale]/dashboard/[guildId]/autoboards/autoboards.ts`
+- `app/[locale]/dashboard/[guildId]/autoboards/autoboards.test.ts`
+- `app/api/v2/server/[server_id]/autoboards/route.ts`
+- `app/api/v2/server/[server_id]/autoboards/route.test.ts`
+- `app/api/v2/server/[server_id]/autoboards/[autoboard_id]/route.ts`
+- `app/api/v2/server/[server_id]/autoboards/[autoboard_id]/route.test.ts`
+- `app/api/v2/server/[server_id]/autoboards/capabilities/route.ts`
+- `app/api/v2/server/[server_id]/autoboards/capabilities/route.test.ts`
+- `messages/en.json`
+- `messages/fr.json`
+- `messages/nl.json`
+
+Exact API sample-registry files:
+
+- `internal/routes/server/autoboards.go`
+- `internal/routes/server/autoboards_test.go`
+
+Validation:
+
+- `npm test -- --run 'app/[locale]/dashboard/[guildId]/autoboards/autoboards.test.ts' 'app/[locale]/dashboard/[guildId]/autoboards/page.test.tsx' 'app/api/v2/server/[server_id]/autoboards/route.test.ts' 'app/api/v2/server/[server_id]/autoboards/[autoboard_id]/route.test.ts' 'app/api/v2/server/[server_id]/autoboards/capabilities/route.test.ts'`
+  — passed, 5 files and 13 tests. Coverage includes empty/live registry
+  parsing, exact-one custom target cardinality, family targets, refresh bounds,
+  every typed schedule shape, complete write-payload omission of `messageId`,
+  forum-required child selection, optional direct text delivery, atomic
+  parent/thread writes, parent switching, full PUT, delete, and API error
+  forwarding.
+- Scoped ESLint over all Autoboards page/helper/proxy source and tests — passed
+  with no findings.
+- `npm test` — passed, 57 files and 353 tests.
+- `npm run lint` — passed with no findings.
+- `npx tsc --noEmit` — passed.
+- `npm run build` — passed with Next.js 16.2.10; the production manifest emits
+  the Autoboards page and collection, item, and capabilities proxy routes.
+- Focused API Autoboard route, registration, model, destination, transaction,
+  sample-registry serialization, and empty-array tests passed.
+- `env GOCACHE=/tmp/clashking-api-go-cache go vet ./...` and `go build ./...`
+  in ClashKing API — passed.
+- `env GOCACHE=/tmp/clashking-api-go-cache go test ./test/api -run
+  TestAutoboardOpenAPIUsesTypedCleanBreakContract` — passed after the
+  persistent API owner regenerated Swagger for the final camelCase contract.
+  The documented create/full-PUT request omits response-only `messageId`.
 - Dashboard and shared-report `git diff --check` — passed.
 
 ### Authorized Bases Dashboard
@@ -2147,20 +2346,18 @@ Decision 17 completion status:
   Mongo data was contacted.
 - **Local verification:** `cwl_groups`, `cwl_group_clans`,
   `cwl_group_members`, and `cwl_standings` each contain zero rows after the
-  authorized reset. The ignored importer checkpoint is absent, so the next
-  approved import begins at the first Mongo document. Before import, the three
+  authorized reset. The next approved one-shot import always begins at the
+  first Mongo document. Before import, the three
   loaded CWL tables have zero indexes and no primary/foreign-key constraints.
 - **Importer:** created, compiled, and run by the user against the earlier
   roster-JSON shape before the reset. From
   `database/migrations`, run `go run cwl_groups.go` only when the user wants to
-  import Mongo snapshots. It checkpoints through the existing
-  `migration_state.json` mechanism, reads `looper.cwl_group`, and writes only
-  Timescale group/snapshot rows. Legacy rows without a source league ID stay
-  NULL; it never creates standings. Its checkpoint was cleared after the table
-  reset, so the next run starts from the first Mongo document. This script
-  refuses an existing checkpoint or any nonempty CWL target table;
-  interruption recovery is to truncate the CWL tables, clear the checkpoint,
-  and restart from zero.
+  import Mongo snapshots. It has no checkpoint or resume path, reads
+  `looper.cwl_group`, and writes only Timescale group/snapshot rows. Legacy
+  rows without a source league ID stay NULL; it never creates standings. Every
+  invocation drops the loader-owned constraints/indexes, truncates only the
+  four CWL tables, and starts from the first Mongo document. Interruption
+  recovery is simply to run the same command again.
 - **Tracking:** complete in persistent task
   `019f94ba-972b-7171-ad08-0f4f86796eef`. Live CWL writes now target the new
   group and clan-snapshot tables, retain real official league IDs, derive war
@@ -2182,8 +2379,8 @@ Importer environment-path correction:
 
 - `database/migrations/migrateutil.LoadConfig` now resolves connection settings
   from the repository-root `.env`, while retaining `database/.env` only as a
-  compatibility fallback. Checkpoint files remain under `database/`, although
-  this specific import intentionally does not resume. This fixes
+  compatibility fallback. Only `clan_wars.go` uses the repository-root
+  `migration_state.json`; CWL intentionally does not resume. This fixes
   `go run cwl_groups.go` from `database/migrations` without moving or copying
   the root `.env`.
 - `migrateutil_test.go` covers root-file preference, database-directory
@@ -2193,7 +2390,7 @@ Importer environment-path correction:
   when the generic `MIGRATION_BATCH_SIZE` remains 50,000. Each CWL document
   fans out into group-clan and typed member rows, so the original generic batch
   deferred a very large transaction before the first visible
-  commit/checkpoint. The bounded batch keeps memory, commit latency, progress,
+  commit. The bounded batch keeps memory, commit latency, progress,
   and visibility predictable. A lower explicitly configured generic batch is
   still honored.
 - Duplicate group/snapshot/member keys inside one Mongo batch collapse before
@@ -2201,7 +2398,7 @@ Importer environment-path correction:
   explicitly. There is no conflict-update or resume path.
 - The consolidated `002_initial_settings.sql` baseline leaves the loaded CWL
   tables without indexes, primary keys, or dependent foreign keys while data
-  loads. After the final successful batch/checkpoint, the importer creates all
+  loads. After the final successful batch, the importer creates all
   three primary keys, restores the group-clan/member/standings foreign keys,
   and builds
   `idx_cwl_groups_season_league`,
@@ -2284,156 +2481,290 @@ Importer environment-path correction:
 
 ## Active migration 003 — leaderboard history rebuild
 
-- `public.leaderboard_snapshot_items` is renamed to
-  `public.leaderboard_history` and truncated because every existing row is
-  explicitly rejected as junk. No row is copied, transformed, or reimported.
-- The retained columns are exactly `kind text`, `location_id text`,
-  `date date`, `tag text`, `name text`, `rank integer`, and `data jsonb`, all
-  non-null. `data` is the complete official leaderboard response item rather
-  than a partial projection.
-- Canonical `kind` values are constrained to
-  `player_home_trophies`, `player_builder_base_trophies`,
-  `clan_home_points`, `clan_builder_base_points`, and
-  `clan_capital_points`. Locations are constrained to `global` or an official
-  numeric location ID encoded as text; ranks must be positive and `data` must
-  be a JSON object.
-- `leaderboard_history_pkey(kind, location_id, date, tag)` preserves one row
-  per official item per daily leaderboard. The renamed
-  `idx_leaderboard_history_location_rank(kind, location_id, date DESC, rank)`
-  serves complete snapshot reconstruction, while
-  `idx_leaderboard_history_tag_history(kind, tag, date DESC)` serves
-  entity-specific history.
-- Down removes the new checks and restores the exact prior table, primary-key,
-  and index names. It may retain newly written canonical rows but does not
-  attempt to reconstruct discarded legacy rows.
-- The dedicated ignored `database/migrations/ranking_history.go` Mongo
-  importer is deleted, so it cannot refill this table with rejected legacy
-  ranking-history data. No Mongo data is read, changed, or deleted.
+- Migration 003 drops the rejected generic
+  `leaderboard_snapshot_items(kind,...,data jsonb)` table and creates five
+  source-specific typed tables. There is no shared discriminator and no JSONB:
+  `leaderboard_history_player_home`, `leaderboard_history_player_builder_base`,
+  `leaderboard_history_clan_home`, `leaderboard_history_clan_builder_base`, and
+  `leaderboard_history_clan_capital`.
+- Every table retains the official leaderboard scope as `location_id text`
+  (`global` or a positive numeric ID), the UTC snapshot `date`, the entity
+  identity/name, `rank`, and nullable `previous_rank`. Player tables retain
+  experience, their typed trophy/win fields, nullable all-or-none clan
+  tag/name/badge-token snapshots, and one nullable `league_id`. Home-player
+  rows prefer newer `leagueTier.id` and fall back to legacy `league.id`;
+  observed families include `105...` and `290...`, which lets API static-data
+  reconstruction choose the correct catalog. Builder Base rows use
+  `builderBaseLeague.id` and normalize legacy
+  `versusTrophies`/`versusBattleWins` into the current typed columns.
+- Clan tables retain tag/name/badge token, clan level, members, nullable
+  official `clan_location_id`, and exactly one typed score:
+  `clan_points`, `builder_base_points`, or `capital_points`. Location names,
+  country fields, badge URLs, and league objects are reconstructible static
+  metadata and are not duplicated.
+- Each primary key is `(location_id,date,player_tag)` or
+  `(location_id,date,clan_tag)`. Each table has a
+  `(location_id,date DESC,rank)` snapshot index and an
+  `(player_tag|clan_tag,date DESC)` entity-history index. Checks reject invalid
+  scopes, blank required identities, negative counters, impossible member
+  counts, partial player-clan snapshots, and invalid positive IDs/ranks.
+- Down drops the five typed tables and recreates the exact prior
+  `leaderboard_snapshot_items` columns, primary key, and two indexes. Discarded
+  generic or newly imported typed rows are intentionally not reconstructed.
+- `database/migrations/leaderboard_history.go` is the dedicated one-shot,
+  read-only Mongo importer. Low-impact source estimates on 2026-07-30 found
+  approximately 211,672 `player_trophies`, 211,673
+  `player_versus_trophies`, 226,816 `clan_trophies`, 212,992
+  `clan_versus_trophies`, and 212,992 `capital` snapshot documents in the
+  `ranking_history` database. They map one-to-one to the five typed tables.
+  Each `data.items` object is projected into typed columns; badge URLs become
+  one stable filename token, league/location objects become authoritative
+  IDs, and derived names/icons/URLs are omitted.
+- Capital history retains only source documents dated Tuesday and stores each
+  accepted snapshot under the immediately preceding Monday date. Other
+  Capital days are skipped. `ranking_history.legends` and
+  `ranking_history.league_history` remain explicitly ignored. The separate
+  `player_leaderboard` and `clan_leaderboard` collections are also not loaded:
+  their documents contain seasonal `{rank, season, tag, type, value}` facts
+  but no snapshot date, location, or full official response item, so they
+  cannot truthfully satisfy this table's contract.
+- The importer is intentionally not resumable. On every start it drops all ten
+  secondary indexes and truncates only these five typed destinations, then
+  streams and bulk-upserts each source with `COPY`-backed batches. It rebuilds
+  indexes only after all five sources succeed. Interruption leaves partial
+  typed tables without secondary indexes; rerunning clears and restarts them.
+  It never changes Mongo.
 - Persistent Tracking task `019f94ba-972b-7171-ad08-0f4f86796eef` owns the
-  authoritative daily writes for the five official categories across global
-  and official numeric locations. Persistent API task
+  authoritative typed daily writes for the five official categories across
+  global and official numeric locations. Persistent API task
   `019f92a8-f4b8-74a2-ab70-cf25481fd6d1` owns all renamed SQL readers and
-  response-specific history/reconstruction contracts. Tracking is complete
-  and remains local/uncommitted.
+  response-specific typed reconstruction contracts. API and Tracking are
+  complete in their existing persistent tasks. No new tasks were created.
 - **Tracking complete:** `models/runtime_scripts.go`, `scripts/scheduled.go`,
-  and `scripts/scheduled_test.go` now target only
-  `leaderboard_history(kind, location_id, date, tag, name, rank, data)`.
-  The existing daily `scheduled` cycle discovers every unique nonzero official
-  numeric location and appends `global`, then calls exactly the five canonical
-  player/clan endpoints for every scope. Each successful response becomes one
-  UTC-date group containing one row per returned item and the complete
-  official item JSON object. A PostgreSQL transaction bulk-copies all
-  successful groups into temporary item/group stages, upserts on the final
-  primary key, and deletes stale tags only where `kind`, `location_id`, and
-  `date` all match; an authoritative empty response clears only its exact
-  group. Failed or invalid groups remain absent from the stage, keep their
-  previous rows, and return a cycle error so the next scheduled cycle retries,
-  while successful groups still commit. Validation rejects noncanonical kinds,
-  invalid scopes, nonpositive ranks, duplicate groups, and duplicate tags.
-  Focused coverage proves all five kinds across global and numeric scopes,
-  complete JSON preservation, idempotent/scoped replacement, authoritative
-  empty clearing, partial-success retry behavior, final SQL/PK usage, and
-  rejection of every stale kind.
-- **API complete:** `GET
-  /v2/leaderboard/history/{leaderboard_type}/{location_id}/{date}` reconstructs
-  a complete stored snapshot as `{type,locationId,date,items}`.
-  Entity-specific `GET
-  /v2/player/{player_tag}/leaderboard-history/{leaderboard_type}` and the
-  equivalent clan route return typed camelCase wrappers with
-  `{date,locationId,name,rank,details}` items. Player routes accept only the two
-  player kinds and clan routes only the three clan kinds; type, scope,
-  location, date, and limits are validated strictly, full official JSON is
-  preserved, and empty history is HTTP 200 with `items:[]`. Old synthetic
-  league/Town Hall history, stale trophy-bucket history, and the obsolete
-  Top-200 SQL dependency are removed. Focused route/model/Swagger tests,
-  generated OpenAPI, full `go vet ./...`, full `go test ./... -count=1`, stale
-  SQL audit, and `git diff --check` pass. Dashboard has no caller; the
-  persistent App task removed its active callers of the retired synthetic
-  history routes without adding aliases, while preserving current Town Hall
-  and Ranked League rankings as current-only boards.
-- **Migration validation:** a disposable database with rejected legacy rows
-  applied 001–003 and confirmed that Up leaves `leaderboard_history` empty,
-  retains the exact seven typed non-null columns, enforces every new check,
-  and gives each reconstruction/history query its intended B-tree index.
-  Down restored the exact old table, primary-key, secondary-index, and named
-  NOT NULL constraint names without recreating discarded rows. Goose
-  validation, Go migration tests/importer builds, stale importer
-  audit, and `git diff --check` pass; both disposable databases were removed.
-  The real local database now has migration 003 and this final table shape
-  applied.
+  and `scripts/scheduled_test.go` now contain five explicit row models and
+  write only the five typed tables/column lists above. In particular,
+  `typedLeaderboardHistorySpecs` targets exactly
+  `leaderboard_history_player_home`,
+  `leaderboard_history_player_builder_base`,
+  `leaderboard_history_clan_home`,
+  `leaderboard_history_clan_builder_base`, and
+  `leaderboard_history_clan_capital`; there are no compatibility aliases,
+  views, or fallback table names. The scheduled flow
+  discovers every unique positive official location plus `global`, calls the
+  same five official leaderboard endpoints, and maps each successful response
+  directly to its table. Home players prefer `leagueTier.id` and fall back to
+  legacy `league.id`; Builder Base uses `builderBaseLeague.id`, maps the
+  available Builder/legacy trophy and battle-win values, and leaves optional
+  values NULL when absent. Player/clan badge URLs become only the stable token.
+  Player clan fields are all NULL or all populated, and clan rows retain typed
+  level, members, official location ID, previous rank, and their one
+  table-specific score. No generic `kind`, `data`, JSONB, recursive JSON badge
+  transformer, or standalone `leaderboard_history` table SQL remains.
+
+  All successful `(table,location_id,date)` groups are validated before one
+  PostgreSQL transaction creates five table-specific typed stages. Each stage
+  bulk-copies its rows, upserts on that table's exact
+  `(location_id,date,player_tag|clan_tag)` primary key, and deletes stale
+  entities only for the successful scopes listed in its matching group stage.
+  A failed or invalid official response never enters the group stage and
+  therefore cannot erase its last-good snapshot; successful groups still
+  persist, an authoritative empty response clears only its exact scope, and
+  one table never touches another. Capital is fetched only on Tracking's
+  established Tuesday schedule and is stored under that official Tuesday UTC
+  date. The Mongo importer's Tuesday-to-prior-Monday remap is not applied to
+  live Tracking writes.
+- **API complete:** the three existing routes and five external type values
+  remain unchanged. Snapshot reads return
+  `{type,locationId,date,items}`; player/clan entity reads retain their typed
+  wrappers and `{date,locationId,name,rank,details}` history items. The
+  `items`/`details` payload is now a response-specific camelCase typed union
+  containing only fields applicable to the selected table; arbitrary JSON,
+  internal table kinds, and badge tokens are never exposed.
+- `internal/routes/leaderboard_history.go` maps each external type directly to
+  its final prefixed typed table:
+  `leaderboard_history_player_home`,
+  `leaderboard_history_player_builder_base`,
+  `leaderboard_history_clan_home`,
+  `leaderboard_history_clan_builder_base`, or
+  `leaderboard_history_clan_capital`. Exactly five snapshot and five entity
+  query constants use those names; no aliases or compatibility views exist.
+  Snapshot SQL fixes `(location_id,date)` and orders by rank; entity SQL fixes
+  player/clan tag and orders
+  `date DESC,location_id,rank`. Nullable previous rank, Builder battle wins,
+  clan snapshot, league ID, and clan location ID scan without sentinels.
+  Badges reconstruct as official 70/200/512 URLs. Clan location metadata comes
+  from the canonical official location catalog, with truthful ID-only fallback.
+  Home-player `105000000..105999999` IDs become `leagueTier`, while
+  `29000000..29999999` IDs become legacy `league`; unknown families produce
+  neither object. Builder IDs become `builderBaseLeague`. Static metadata
+  enriches known IDs without inventing missing names or icons.
+- API files are `internal/models/v2/leaderboard_history.go` and its new tests;
+  `internal/routes/leaderboard_history.go` and tests; generated
+  `internal/docs/{docs.go,swagger.json,swagger.yaml}`; and
+  `test/api/swagger_test.go`. The superseded recursive
+  `internal/routes/history_badges.go` is removed. Focused route/model/Swagger
+  tests, full `go test ./...`, `go vet ./...`, clean `go build ./...`,
+  Swagger regeneration and six custom QUERY guards, stale generic SQL/JSON
+  scans, and `git diff --check` pass. The naming-only correction reran focused
+  tests, full `go test ./...`, `go vet ./...`, `go build ./...`, formatting,
+  and diff/stale-name checks; OpenAPI did not change and was not regenerated.
+  Dashboard/App have no active consumer, so neither persistent downstream task
+  was reopened.
+- **Current DevKit validation:** focused importer mapping/index tests pass and
+  confirm all five typed destinations, legacy/current field normalization,
+  league-tier precedence, token-only badges, and Tuesday-to-Monday Capital
+  handling. Migration-module tests, entrypoint compilation, Goose validation,
+  and `git diff --check` pass. A disposable local database applied 001–003 and
+  exposed exactly the five typed column/index sets above; rolling 003 Down
+  restored the exact seven-column JSONB `leaderboard_snapshot_items` shape,
+  primary key, and two indexes. A final naming validation confirmed that every
+  table, primary key, and secondary index uses the shared
+  `leaderboard_history_` prefix. The disposable databases were removed.
+  A second disposable database ran the real importer with
+  `MIGRATION_LIMIT_DOCS=1`: one Mongo document from each source scanned
+  successfully, and the four daily sources each wrote 200 typed rows. The
+  arbitrary first Capital document was not a Tuesday and correctly wrote zero;
+  focused mapping coverage separately proves Tuesday-to-prior-Monday storage.
+  That disposable database was also removed.
+- **Real local application:** after API and Tracking compatibility completed,
+  the user selected a clean naming break. The local version-3 `tracking`
+  database created the five final prefixed tables, then dropped all five
+  superseded typed tables with no aliases/views or row preservation. This
+  intentionally discarded 6,214,431 partial old Home-player import rows; the
+  other four superseded tables were empty. All five final tables are empty and
+  ready for the one-shot Mongo importer. Live inspection confirms their exact
+  column sets, five prefixed primary keys, ten prefixed secondary indexes, and
+  the absence of every superseded typed/generic table. Goose remains version 3
+  and `player_links` remains unchanged at 175,634 rows. No remote or
+  production database was touched.
 
 ## Active migration 003 — Legend History rebuild
 
 - `public.legend_history_snapshots` is renamed to
-  `public.legend_history`, then truncated because its existing local/legacy
-  contents are explicitly rejected. Migration Up preserves no old row and
-  drops `created_at`.
-- The final row is exactly `season text NOT NULL`,
-  `player_tag text NOT NULL`, `rank integer NOT NULL`,
-  `trophies integer NOT NULL DEFAULT 0`, and
-  `data jsonb NOT NULL DEFAULT '{}'::jsonb`. `season` is the official Legend
-  season ID returned by the Clash API (currently `YYYY-MM`); `data` is the full
-  official ranking item rather than a legacy partial projection.
+  `public.legend_history`, then truncated because its existing SQL contents
+  are explicitly rejected. Migration Up preserves no old SQL row and drops
+  `created_at`; the separate one-shot Mongo importer below loads the approved
+  historical `looper.legend_history` source into the final shape.
+- The final row is fully typed with no JSONB: `season`, `player_tag`,
+  `player_name`, `exp_level`, `trophies`, `attack_wins`, `defense_wins`,
+  `rank`, nullable `clan_tag`, `clan_name`, `clan_badge_token`, and nullable
+  `league_tier_id`. Numeric gameplay values are nonnegative, rank is positive,
+  names/tokens are nonblank, and clan snapshot fields are either all null or
+  all populated. Only the league-tier ID is stored because API/static data can
+  reconstruct its name and icons.
+- `season` preserves the authoritative source identifier verbatim. Legacy
+  rows use values such as `2018-07`, while current source rows use values such
+  as `v2-2026-07-06T05:00:00Z`; the importer does not guess a month label from
+  a season-end timestamp.
 - `legend_history_pkey(season, player_tag)` preserves one final-season row per
   player. `idx_legend_history_season_rank(season, rank)` serves full season
   leaderboard reads, and
   `idx_legend_history_player_season(player_tag, season DESC)` serves player
-  history.
-- The dedicated ignored `database/migrations/legend_history_snapshots.go`
-  Mongo importer and its
-  checkpoint-name mapping are deleted, so discarded legacy data cannot refill
-  the table. No Mongo data is read, changed, or deleted.
+  history. The partial
+  `idx_legend_history_clan_rank(clan_tag, rank, season DESC)` serves up to
+  1,000 best historical finish rows for one clan without scanning other clans.
+- `database/migrations/legend_history.go` reads the dedicated
+  `looper.legend_history` collection, whose low-impact estimated count on
+  2026-07-30 was approximately 70,693,940 documents. It accepts nonblank
+  authoritative seasons, player tags/names, positive ranks, and nonnegative
+  typed counters. Clan tag/name and one badge token are extracted from the
+  optional clan snapshot, and only `leagueTier.id` is retained from newer
+  league-tier objects. Mongo `_id`, repeated badge URLs, league-tier
+  name/icons, and every JSON catch-all are discarded.
+- This importer is intentionally a one-shot bulk load rather than a
+  checkpointed migration. Each start drops the three secondary indexes and
+  truncates only `legend_history`, bulk-copies/upserts the source in batches,
+  and recreates the season/rank, player/season, and clan/rank indexes only
+  after the entire collection succeeds. An interruption leaves a partial
+  target without secondary indexes, and rerunning restarts clean. It never
+  changes Mongo.
 - Down restores `legend_history_snapshots`, its original primary-key/index
-  names, and `created_at timestamp with time zone NOT NULL DEFAULT now()`.
-  Newly written canonical rows can survive rollback and receive the rollback
-  time as `created_at`; intentionally discarded rows cannot be reconstructed.
+  names, `data jsonb`, and
+  `created_at timestamp with time zone NOT NULL DEFAULT now()`. It reconstructs
+  the prior JSON item from typed values, using token-only badge/tier-ID
+  objects because removed CDN URLs and tier display metadata are intentionally
+  not stored. Newly written rows survive rollback; intentionally discarded
+  pre-003 rows cannot be reconstructed.
 - Persistent Tracking task `019f94ba-972b-7171-ad08-0f4f86796eef` owns the Go
   final-season writer. Persistent API task
   `019f92a8-f4b8-74a2-ab70-cf25481fd6d1` owns renamed readers and
-  response-specific season/player history contracts. API and Tracking are
-  complete and local/uncommitted; no new tasks were created.
+  response-specific season/player/clan history contracts. Tracking is complete
+  for the superseding typed contract; API compatibility remains with its
+  persistent owner, and no new tasks were created.
 - **Tracking complete:** `models/runtime_scripts.go`, `scripts/scheduled.go`,
   and `scripts/scheduled_test.go` implement completed-season ingestion for
-  official Legend league `29000022`. Each scheduled cycle reads the exact
-  official season IDs, accepts only canonical seven-character `YYYY-MM`
-  values whose official season window has ended, and fetches only seasons not
-  already complete in SQL. Ranking requests use the official season endpoint
-  with `limit=25000` and follow every returned `after` cursor to exhaustion;
-  no API read limit truncates storage. Empty pages with continuation cursors,
-  repeated cursors, transport failures, invalid JSON, empty final results,
-  duplicate tags/ranks, and noncontiguous ranks reject the season without
-  changing its prior rows. Each valid row stores typed authoritative
-  `season`, `player_tag`, `rank`, and `trophies` plus the full raw official
-  ranking-item JSON object. One transaction bulk-copies the complete season,
-  upserts `(season, player_tag)`, deletes stale players only for that season,
-  and commits atomically; failed fetches or writes therefore remain missing
-  and retry on the next cycle. Focused coverage proves missing/completed
-  detection, strict season IDs, 300-row ingestion beyond the API read cap,
-  cursor exhaustion, exact typed/JSON preservation, idempotency,
-  failure-without-partial-write retry, and final table/PK replacement SQL.
-- **API complete:** `GET /v2/legends/history/{season}?limit=25` accepts limits
-  from 1 through 200 and returns `{items}` ordered by rank, while
-  `GET /v2/player/{player_tag}/legend-history` returns descending-season
-  `{items}`. The dedicated camelCase OpenAPI item models `season`, `tag`,
-  `name`, `expLevel`, `trophies`, `attackWins`, `defenseWins`, `rank`,
-  `previousRank`, `clan`, `league`, and `townHallLevel`; custom JSON handling
-  preserves additional official fields, while typed season/tag/rank/trophies
-  always override the stored object as authoritative. Both routes validate
-  season/tag/limit input strictly and return an empty 200 without fake data.
-  The active mobile initialization helper reads `legend_history`; unregistered
-  legacy, bulk, and end-of-season handlers are deleted. Focused
-  route/model/Swagger tests, OpenAPI generation, full `go vet ./...`, full
-  `go test ./... -count=1`, stale SQL audit, and `git diff --check` pass. Bot
-  matches are legacy Mongo only and Dashboard has no caller.
-- **Migration validation:** a disposable database containing a rejected
-  Legend row applied migration 003 and confirmed that Up leaves the final
-  table empty with exactly five retained columns and no `created_at`.
-  PostgreSQL selected the season/rank index for a season leaderboard and the
-  player/season index for a player history read. Down retained newly inserted
-  canonical rows while restoring the exact old table, primary-key,
-  secondary-index, named NOT NULL constraints, `created_at` type/default, and
-  table name. The real local database now has migration 003 and the final
-  `legend_history` shape applied.
+  official Legend league `29000022`. Each scheduled cycle treats every
+  official season ID as opaque. Legacy `YYYY-MM` completion uses the
+  established season-window helper; `v2-<RFC3339>` is parsed only internally,
+  with the embedded timestamp treated as the authoritative season end and
+  completion defined as `embedded_end <= now`. The original identifier is
+  passed unchanged into the official fetch URL and SQL, and only seasons not
+  already complete in SQL are fetched. Ranking requests use the official
+  season endpoint with `limit=25000` and follow every returned `after` cursor
+  to exhaustion; no API read limit truncates storage. Empty pages with
+  continuation cursors, repeated cursors, transport failures, invalid
+  responses, empty final results, duplicate tags/ranks, and noncontiguous
+  ranks reject the season without changing its prior rows.
+
+  Each valid row writes only the twelve normalized columns: opaque season,
+  player tag/name, experience, trophies, attack/defense wins, rank, nullable
+  all-or-none clan tag/name/token, and nullable positive `league_tier_id`.
+  Clan badges use Tracking's existing token-only convention and only
+  `leagueTier.id` is retained; the legacy `league` object is not substituted.
+  Legend has no JSONB write and no history JSON badge-transformer dependency.
+  One transaction bulk-copies the complete season, upserts
+  `(season, player_tag)`, deletes stale players only for that exact opaque
+  season, and commits atomically; failed fetches or writes remain missing and
+  retry on the next cycle. Focused coverage proves legacy no-tier and new
+  league-tier rows, nullable clans, token-only clans, exact legacy/v2 ID
+  preservation, the v2 embedded-end completion boundary, 300-row ingestion
+  beyond the API read cap, cursor exhaustion, idempotency,
+  failure-without-partial-write retry, and the absence of Legend JSONB.
+- **API complete:** every Legend reader selects only the exact twelve typed
+  columns; no `data`, `created_at`, or JSON decoder remains. `season` is an
+  opaque nonblank, path-safe identifier up to 128 characters and is passed to
+  SQL/returned unchanged, including both legacy `YYYY-MM` and newer
+  `v2-<RFC3339>` values.
+- `GET /v2/legends/history/{season}?limit=` remains default 25/max 200 ordered
+  by rank. `GET /v2/player/{player_tag}/legend-history` remains descending
+  season. New
+  `GET /v2/clan/{clan_tag}/legend-history?limit=` returns default 200/max
+  1,000 best historical finishes ordered by rank then descending season,
+  matching the partial clan index. Empty results are HTTP 200
+  `{items:[]}`.
+- The response-specific camelCase item is exactly `season`, `tag`, `name`,
+  `expLevel`, `trophies`, `attackWins`, `defenseWins`, `rank`, nullable
+  `clan`, and nullable `leagueTier`. Clan returns tag/name and reconstructs
+  standard 70/200/512 `badgeUrls` from `clan_badge_token`; the internal token
+  never leaks. League tier always includes the stored authoritative ID and
+  adds name/icon URLs only when canonical Clash `league_tiers` static data
+  contains that ID. Removed JSON-only `previousRank`, `townHallLevel`, old
+  `league`, and arbitrary stored-field preservation are not fabricated. The
+  active mobile helper scans the same typed columns and produces the same
+  normalized item.
+- API focused typed-SQL/model/opaque-season/clan-order/1,000-limit/static-tier/
+  badge/mobile/stale-reader and OpenAPI tests pass, as do full
+  `go test ./...`, `go vet ./...`, `go build ./...`, Swagger regeneration,
+  all six custom QUERY-operation guards, stale JSON/data scans, and
+  `git diff --check`. Dashboard/App have no active caller.
+- **Migration validation:** Goose syntax validation passed. A disposable local
+  database applied migrations 001–003, accepted both `2018-07` and
+  `v2-2026-07-06T05:00:00Z` unchanged, exposed exactly the twelve typed
+  columns and the primary key plus all three secondary indexes, then rolled
+  003 Down. Down restored the exact six-column
+  `legend_history_snapshots` shape and reconstructed name, clan badge token,
+  and league-tier ID in its JSON. The disposable database is removed after
+  final local application. Because the real database was already at Goose
+  version 3, its typed shape is applied separately in place below.
+- **Real local application:** on 2026-07-30, the normalized Legend block was
+  applied atomically in place to the local `tracking` database. Per explicit
+  user authorization, the 400,000 superseded JSON-backed Legend rows were
+  discarded rather than backfilled; `legend_history` is now empty and ready
+  for the one-shot Mongo importer. Live inspection confirms the exact twelve
+  typed columns, primary key, and three secondary indexes. Rollback-only smoke
+  inserts accepted both legacy and v2 opaque season identifiers plus nullable
+  clan/tier shapes. Goose remains version 3 and `player_links` remains
+  unchanged at 175,634 rows. No production or remote database was touched.
 
 ## Active migration 003 — iOS Live Activities removal
 
@@ -2496,8 +2827,50 @@ Importer environment-path correction:
   table-specific schema dumps match a clean version-2 baseline. The real local
   database now has migration 003 applied.
 
-Tracking validation for the three migration-003 slices:
+Tracking validation for the migration-003 slices:
 
+- Final typed-table naming correction:
+  `env GOCACHE=/tmp/clashking-tracking-history-names-focused go test -tags
+  'script_internal_tests platform_internal_tests' ./scripts -run
+  '^(TestLeaderboardHistory.*|TestTypedLeaderboardHistory.*|TestValidateAndFlattenLeaderboardHistory.*|TestMemoryScheduledStoreAuthoritativelyUpsertsLeaderboardHistory|TestCapitalHistoryUsesOfficialTuesdayDateWithoutImporterRemap)$'
+  -count=1` passed. The same final state passed tagged full tests with
+  `/tmp/clashking-tracking-history-names-tagged`, untagged full tests with
+  `/tmp/clashking-tracking-history-names-full`, `go vet ./...` with
+  `/tmp/clashking-tracking-history-names-vet`, and `go build ./...` with
+  `/tmp/clashking-tracking-history-names-build`. An exact stale-name audit
+  found no superseded typed table name in Tracking, the migration, or this
+  report.
+- Typed leaderboard-history follow-up:
+  `env GOCACHE=/tmp/clashking-tracking-typed-history-focused go test -tags
+  'script_internal_tests platform_internal_tests' ./scripts -run
+  '^(TestLeaderboardHistory.*|TestTypedLeaderboardHistory.*|TestValidateAndFlattenLeaderboardHistory.*|TestMemoryScheduledStoreAuthoritativelyUpsertsLeaderboardHistory|TestCapitalHistoryUsesOfficialTuesdayDateWithoutImporterRemap)$'
+  -count=1` passed. Coverage proves all five table mappings across global and
+  numeric scopes, home-league precedence/fallback, Builder league/nullable
+  values, token-only badges, typed clan/location/score fields, exact PK/scoped
+  deletion SQL, partial-success preservation, authoritative empty clearing,
+  cross-table isolation, and Tuesday Capital dates without importer remapping.
+- `env GOCACHE=/tmp/clashking-tracking-typed-history-tagged go test -tags
+  'script_internal_tests platform_internal_tests' ./... -count=1`,
+  `env GOCACHE=/tmp/clashking-tracking-typed-history-full go test ./...
+  -count=1`, `env GOCACHE=/tmp/clashking-tracking-typed-history-vet go vet
+  ./...`, and `env GOCACHE=/tmp/clashking-tracking-typed-history-build go
+  build ./...` passed across all packages.
+- Normalized Legend follow-up:
+  `env GOCACHE=/tmp/clashking-tracking-legend-normalized-focused go test -tags
+  'script_internal_tests platform_internal_tests' ./scripts -run
+  '^(TestMissingCompletedLegendSeasonsUsesExactOfficialIDs|TestLegendHistoryRowsStoreNormalizedTypedFieldsBeyondAPIReadCap|TestFetchAllLegendSeasonRankingPagesPaginatesToExhaustion|TestMemoryScheduledStoreLegendSeasonReplacementIsIdempotent|TestLegendHistoryPartialFailureRemainsMissingAndRetries|TestLegendHistorySQLUsesFinalTableAndTransactionalSeasonReplacement)$'
+  -count=1` passed.
+- `env GOCACHE=/tmp/clashking-tracking-legend-normalized-tagged-all go test
+  -tags 'script_internal_tests platform_internal_tests' ./... -count=1`,
+  `env GOCACHE=/tmp/clashking-tracking-legend-normalized-full go test ./...
+  -count=1`, `env GOCACHE=/tmp/clashking-tracking-legend-normalized-vet go vet
+  ./...`, and `env GOCACHE=/tmp/clashking-tracking-legend-normalized-build go
+  build ./...` passed across all packages after the normalized Legend change.
+- `env GOCACHE=/tmp/clashking-tracking-history-full go test ./... -count=1`
+  passed across all packages after the badge-storage change.
+- `env GOCACHE=/tmp/clashking-tracking-history-vet go vet ./...` passed, and
+  `git diff --check` passed in both ClashKing Tracking and DevKit after the
+  shared-report update.
 - `env GOCACHE=/tmp/clashking-tracking-m003-focused go test -tags
   'script_internal_tests platform_internal_tests' ./scripts -run
   'Test(LeaderboardHistory|MemoryScheduledStoreAuthoritativelyUpsertsLeaderboardHistory|ValidateAndFlattenLeaderboardHistory|MissingCompletedLegendSeasons|LegendHistory|FetchAllLegend|MobileSubscriptions|SubscriptionWants|APNSNotification|LeaderboardMaterialized)'
@@ -2747,16 +3120,32 @@ task was started. App and Bot have no active typed caller of these responses.
   columns, and defaults, but deleted token rows cannot be reconstructed.
   The App audit likewise found no one-time-login route, model, flow,
   documentation, or test, so no compatibility caller was retained or added.
-- `open_tickets` is dropped and its dedicated Mongo-to-SQL import path is
-  removed. Bot references with the same name target the still-active Mongo
-  collection and are not Postgres callers. Canonical `tickets` is deliberately
-  preserved; its normalized status/panel/applicant contract is not a truthful
-  replacement for the retired legacy JSON API. The four legacy API routes and
-  their active Dashboard-only UI are being retired through the existing
-  persistent API/Dashboard owners. Down restores the exact old table, primary
-  key, server/status index, columns, and defaults without restoring rows.
+- `open_tickets` is dropped only after its operational values are copied into
+  the canonical `tickets` system. Canonical tickets now retain the applicant
+  Discord user, optional thread, textual lifecycle status, naming convention,
+  assigned clan, opted-in Discord users, applicant account tags, number,
+  channel, server, and panel identity. Migration Up creates deterministic
+  fallback panel rows for existing SQL rows before copying them; Down rebuilds
+  the legacy row and JSON representation from canonical typed values before
+  removing the added columns.
+- The one-shot `bot_server_settings.go` importer now reads Mongo
+  `usafam.open_tickets` and writes those same typed canonical ticket fields.
+  It also creates stable canonical `ticket_panel` and
+  `ticket_panel_buttons` identities from `usafam.tickets`, including button
+  custom ID/label/style/emoji and the existing typed panel behavior, while
+  continuing to retain the complete source panel document in legacy
+  `ticket_panels` for source fields that do not yet have normalized columns.
+  Existing `usafam.custom_embeds` rows continue to populate
+  `server_custom_embeds`; canonical panel embed references are set only when
+  that scoped template exists, so no cross-server or invented embed reference
+  is created.
+- Mongo open-ticket creation time is taken from an explicit source timestamp
+  when present, otherwise from the Mongo ObjectID timestamp. Documents with
+  neither source use the required SQL insertion-time fallback because the
+  canonical column is non-null; no fake close time is generated.
 - `player_current_stats` is dropped and its current-row Mongo importer path is
-  removed while the separate `player_season_stats` import remains. The
+  removed. `player_season_stats` and its Mongo importer are also retired rather
+  than backfilled. The
   dependent `api_global_counts` materialized view now counts authoritative
   `basic_player` rows. Down restores the prior table, clan and Legends indexes,
   and the old materialized-view source without reconstructing retired rows.
@@ -2790,6 +3179,227 @@ task was started. App and Bot have no active typed caller of these responses.
   API SQL reader is the existing public stats history query. Existing
   persistent Tracking/API owners are updating those literals and stale docs;
   no downstream response contract changes are expected.
+
+### Tracking player-stat delta writer
+
+Migration 003 replaces `player_season_stats` with
+`player_stat_changes(event_time, player_tag, clan_tag, stat_type,
+previous_value, current_value, delta)`. It is a seven-day Timescale hypertable
+with no JSONB, season, profile metadata, or synthetic baseline row. The
+database accepts only `donated`, `received`, `clan_games`, and
+`capital_gold_donated`, requires nonnegative before-values and a strictly
+positive exact delta, and indexes player/type/time plus non-null
+clan/type/time. There is intentionally no primary or unique event key because
+the existing serialized `ps:<tag>` snapshot workflow owns comparison/retry
+sequencing and distinct observations may share a timestamp.
+
+Status: complete and local/uncommitted in persistent Tracking task
+`019f94ba-972b-7171-ad08-0f4f86796eef`. No Bot, API, Dashboard, App,
+migration, Mongo, or `basic_player` baseline-column work was added.
+
+Files:
+
+- `/Users/matthewanderson/PycharmProjects/clashking_tracking/models/bot_players.go`
+- `/Users/matthewanderson/PycharmProjects/clashking_tracking/scripts/bot_players.go`
+- `/Users/matthewanderson/PycharmProjects/clashking_tracking/scripts/bot_players_test.go`
+- `/Users/matthewanderson/PycharmProjects/clashking_tracking/implementation-notes.md`
+
+Writer and snapshot contract:
+
+- `bot_players` no longer has a `PlayerSeasonStatRow`, `SeasonStats`, seasonal
+  aggregation helper, or any `player_season_stats` SQL. Its replacement
+  `PlayerStatChangeRow` contains only `event_time`, `player_tag`, nullable
+  current `clan_tag`, `stat_type`, `previous_value`, `current_value`, and
+  `delta`, matching `public.player_stat_changes` exactly.
+- The only emitted `stat_type` values are `donated`, `received`,
+  `clan_games`, and `capital_gold_donated`. Donations and received values come
+  from the typed player response counters, Clan Games comes from the
+  `Games Champion` achievement value, and Capital Gold comes from
+  `clanCapitalContributions`.
+- The existing Snappy-compressed Valkey `ps:<playerTag>` response remains the
+  only before-state. A missing first snapshot writes the normal basic-player
+  ingest and snapshot but no stat event. Tracking adds no SQL baseline or new
+  `basic_player` counter column.
+- Every later observation compares the typed current counter with the typed
+  value decoded from the prior snapshot. A row is accepted only when both
+  values are nonnegative and `current_value > previous_value`; `delta` is
+  exactly their difference. Equal values and decreases/resets write no stat
+  event. A player without a current clan still emits a valid positive delta
+  with SQL `clan_tag = NULL`.
+- The four possible stat rows share the observation's UTC event time and are
+  inserted in the existing bot-player transaction after the basic-player and
+  profile-change writes. Invalid stat rows fail the transaction instead of
+  being silently skipped. The existing player event must still publish
+  successfully before the compressed snapshot advances, so a failed required
+  SQL/event effect retains the old before-state for retry; equal and reset
+  observations advance the snapshot after the normal successful ingest.
+- Tracking closes the cross-store retry window with one internal Valkey marker
+  at `ps:stat-pending:<playerTag>`. Before opening SQL, it atomically reserves
+  a PostgreSQL-microsecond-safe event time for the SHA-256 hash of the current
+  prior `ps:<playerTag>` snapshot. The stored marker value is
+  `<previous-snapshot-sha256>|<event-time-unix-nanoseconds>`. Repeated attempts
+  against the same prior snapshot reuse that exact event time even when the
+  live counters advance further. A different prior-snapshot hash replaces the
+  marker; the marker deliberately has no TTL so an arbitrarily long SQL/event
+  failure cannot reopen the duplicate window.
+- The SQL transaction takes a per-player advisory transaction lock. For each
+  `(event_time, player_tag, stat_type)` it updates the existing guarded row
+  only when the retried `current_value` is greater, recalculating `delta`;
+  otherwise it inserts only when no guarded row exists. Therefore a committed
+  stat transaction followed by a failed required event publish, process exit,
+  or snapshot write retries the same rows without appending duplicates. If the
+  live counter advanced during the failure, the one pending row grows to the
+  latest current value rather than creating an overlapping delta; a lower or
+  equal retry never shrinks or duplicates it.
+- After SQL commits and the required player event publishes, one Valkey Lua
+  operation atomically writes the new compressed `ps:<playerTag>` snapshot and
+  deletes `ps:stat-pending:<playerTag>`. If that operation fails, neither
+  Valkey change applies and the retry guard remains. A successful snapshot
+  advancement clears the reservation so a later genuine counter cycle can
+  reserve a new event time.
+- The existing profile-change payload and behavior are unchanged; its INSERT
+  now targets the canonical renamed `player_change_history` table. The stat
+  writer adds no season, Town Hall, trophies, loot, activity/activity-score,
+  attack-wins, JSON data, or last-online field. Existing non-stat
+  bot-player activity/TTL behavior remains separate and unchanged.
+
+### ClashKing API player-stat readers
+
+Status: complete and local/uncommitted in persistent API task
+`019f92a8-f4b8-74a2-ab70-cf25481fd6d1`. A later `go run .` compile check
+exposed that removal of the dead clan-season decoder had also removed the
+generic `clanDecodeJSONValue` helper still required by
+`scanBasicClanData` for the surviving typed `basic_clan.members` JSON. The API
+restored that fallback decoder and its `encoding/json` import in
+`internal/routes/legacy_clan.go`; no retired season-stat reader was restored.
+Final validation passed: focused `go test ./internal/routes/...` after a
+permitted rerun of an existing sandbox-blocked IPv6 `httptest` listener, full
+`go test ./...` across every package and generated OpenAPI test, empty
+`gofmt -l`, and `git diff --check`. No migration or database operation was run
+by the API task.
+
+Contract and query behavior:
+
+- `GET /v2/player/{player_tag}/stat-history` accepts optional inclusive Unix
+  `timestamp_start`, exclusive Unix `timestamp_end`, exact optional
+  `stat_type=donated|received|clan_games|capital_gold_donated`, and `limit`
+  with default/max 500. It returns newest-first
+  `{items:[{eventTime,clanTag,statType,previousValue,currentValue,delta}]}`
+  using a response-specific camelCase model, nullable `clanTag`, and a non-nil
+  empty array. Range, type, and limit validation are strict.
+- The stat-type-filtered SQL fixes `player_tag` and `stat_type` before its time
+  range so it matches `idx_player_stat_changes_player_type_time`; the
+  unfiltered query remains player-scoped. Neither shape exposes a season,
+  JSONB payload, trophies, loot, activity/activity score, attack wins, Town
+  Hall, last-online value, or a redundant top-level player tag.
+- Registered
+  `/v2/server/{server_id}/leaderboards/donations` aggregates `sum(delta)` for
+  only `donated` and `received`, while
+  `/v2/server/{server_id}/leaderboards/clan-games` aggregates only
+  `clan_games`. Both use the exact `clashy.GetSeasonByID` start/end window;
+  omitted season uses `clashy.GetSeasonID`, and an invalid season is HTTP 400.
+  Dedicated response models prevent donation and Clan Games fields from
+  leaking into each other's contracts.
+- Capital Gold remains available through raw player stat history as
+  `capital_gold_donated`; no unrequested leaderboard was invented. Registered
+  activity and looting leaderboards and their exports/models/docs were
+  removed, together with dead multi-clan donation, player-summary/top, legacy
+  capital/player-season helpers, and the retired V1 player stats/loot model.
+  Production API code has no `player_season_stats` reference.
+- Dashboard and App have no runtime caller for the two retained server
+  leaderboards, the retired activity/looting routes, or the new raw-history
+  route, so neither persistent client task required implementation. Dashboard
+  still has unused stale wrappers/README examples for routes that were already
+  unregistered; these are not live proxies or UI invocations. Bot remained
+  untouched under the user's explicit ownership boundary.
+
+API files:
+
+- `MIGRATION.md`
+- `internal/models/v1/player.go`
+- `internal/models/v2/leaderboards.go`
+- `internal/models/v2/player_stat_history.go`
+- `internal/models/v2/player_stat_history_test.go`
+- `internal/routes/clan.go`
+- `internal/routes/legacy_clan.go`
+- `internal/routes/player.go`
+- `internal/routes/legacy_admin_stats.go`
+- `internal/routes/player_stat_history.go`
+- `internal/routes/player_stat_history_test.go`
+- `internal/routes/register.go`
+- `internal/routes/register_test.go`
+- `internal/routes/schema_cleanup_decisions_11_12_test.go`
+- `internal/routes/server/leaderboards.go`
+- `internal/routes/server/exports.go`
+- `internal/routes/server/player_stat_leaderboards_test.go`
+- `internal/docs/docs.go`
+- `internal/docs/swagger.json`
+- `internal/docs/swagger.yaml`
+- `test/api/swagger_test.go`
+
+### Mongo importer restart and index lifecycle
+
+Status: implemented locally and uncommitted in DevKit. No Mongo query, importer,
+Goose migration, database mutation, test suite, build, commit, or push was run
+for this pass. Source-level tests were added for the shared one-shot lifecycle;
+only `gofmt`, stale-reference scans, and `git diff --check` were executed.
+
+- `clan_wars.go` is the only resumable importer and the only program allowed to
+  read/write the shared migration checkpoint. It drops its secondary history
+  indexes while importing or resuming and recreates them only after the source
+  stream completes successfully.
+- Every other executable importer is a one-shot rebuild. At startup it removes
+  the rows owned by that importer and drops its delayable secondary indexes;
+  it never recreates those indexes on an interrupted or failed run. A clean
+  restart repeats the reset and starts Mongo from the beginning.
+- Primary keys, unique constraints, and foreign keys are not treated as
+  delayable indexes when they are needed for conflict identity or referential
+  integrity. The CWL loader is the existing intentional exception: migration
+  002 leaves its load-time PK/FK/index set absent, and the importer restores
+  the exact constraints and indexes after the final batch.
+- The safe settings order is `server_settings.go`, `server_clans.go`,
+  `rosters.go`, then `bot_server_settings.go`. `server_settings.go` owns the
+  canonical `servers` rebuild and therefore runs before importers whose rows
+  reference servers. Basic clan data must likewise exist before
+  `server_clans.go`, which deliberately skips untracked clan tags.
+- The retired `player_stats.go` program and its transform package are deleted.
+  Mongo `new_looper.player_stats` is not scanned or backfilled; the new
+  positive-delta series starts only from live Tracking observations.
+
+DevKit files:
+
+- `database/timescale/003_v2_schema_cleanup.sql`
+- `database/migrations/migrateutil/migrateutil.go`
+- `database/migrations/migrateutil/migrateutil_test.go`
+- `database/migrations/basic_clans.go`
+- `database/migrations/bot_server_settings.go`
+- `database/migrations/clan_change_history.go`
+- `database/migrations/clan_records.go`
+- `database/migrations/clan_wars.go`
+- `database/migrations/cwl_groups.go`
+- `database/migrations/join_leave_history.go`
+- `database/migrations/player_links.go`
+- `database/migrations/player_online_events.go`
+- `database/migrations/rosters.go`
+- `database/migrations/server_clans.go`
+- `database/migrations/server_settings.go`
+- `database/migrations/player_stats.go` (removed)
+- `database/README.md`
+
+Static coverage and validation:
+
+- `scripts/bot_players_test.go` adds focused source/behavior coverage for all
+  four exact types and values, full `Games Champion` extraction, nullable
+  current clan, positive-only generation, equal/reset suppression, no
+  first-observation event, post-success reset snapshot advancement, the exact
+  seven-column INSERT, stable retry event-time reservation and atomic cleanup,
+  guarded SQL update-or-insert plus per-player advisory locking, the canonical
+  profile-history table, forbidden-field absence, and stale season-stat
+  runtime symbols.
+- Per explicit authorization, no Go tests, builds, vet commands, or migrations
+  were run. `gofmt` was applied to the three changed Go files,
+  `gofmt -d` returned no output, the runtime stale-reference audit passed, and
+  `git diff --check` passed for Tracking and this shared report.
 
 ## Active migration 003 — player online events
 
@@ -2961,6 +3571,153 @@ task was started. App and Bot have no active typed caller of these responses.
   Dashboard/App work proceeds without compatibility aliases, so Bot follow-up
   is explicitly deferred and required before those paths can be considered
   compatible with the final schema/API.
+
+## Active migration 003 — Logs and Reminder Discord destinations
+
+- Scope is deliberately limited to `server_logs` and `reminders`; ticketing,
+  panels, giveaways, autoboards, rosters, embeds, and every other channel
+  selector are unchanged by this decision.
+- `server_logs` already has the final typed destination shape:
+  `webhook_id text NOT NULL` identifies the bot-owned webhook in the parent
+  channel and nullable `thread_id text` identifies an optional child
+  thread/post. The existing server-log importers, API, and Dashboard already
+  preserve both values, so migration 003 adds no log DDL.
+- `reminders` already has the final typed destination shape:
+  `channel_id text` stores the parent channel and nullable `thread_id text`
+  stores the selected child thread/post. Migration 003 adds no reminder DDL.
+  The DevKit `bot_server_settings` importer now copies Mongo `thread_id` or
+  legacy `thread` into the typed column, preferring `thread_id`, while leaving
+  it null when the source reminder has no child destination.
+- The persistent API task
+  `019f92a8-f4b8-74a2-ab70-cf25481fd6d1` completed the shared destination
+  contract in `internal/routes/server/destinations.go`. Text and announcement
+  parents may be used directly or with an exact child thread; forum parents
+  require an exact child post. Both parent and child must belong to the
+  requested guild and the child must name that exact parent. Validation
+  failures are structured HTTP 400 `validation_failed` responses with field
+  details; Discord non-404/upstream webhook failures remain HTTP 502.
+- API Logs now run that validator before parent-webhook reuse/creation while
+  retaining `server_logs(webhook_id, thread_id)`. Reminder create, update,
+  select, scan, and response paths now persist and expose
+  `reminders(channel_id, thread_id)`. Channel discovery adds only the real
+  `forum` type needed by the destination control; no other selector semantics,
+  DDL, refresh path, or compatibility JSON was added.
+- Exact API files are
+  `internal/routes/server/{destinations.go,destinations_test.go,logs.go,reminders.go,reminders_test.go,discord.go,discord_test.go}`,
+  `internal/models/v2/{logs.go,reminders.go,server_responses.go}`,
+  regenerated `internal/docs/{docs.go,swagger.json,swagger.yaml}`, and
+  `test/api/swagger_test.go`. Focused destination/reminder/log/channel and
+  Swagger tests passed; generated docs retain exactly six custom QUERY
+  operations; full `go test ./...`, `go vet ./...`, `go build ./...`, and
+  `git diff --check` passed. The full suite was rerun successfully outside the
+  sandbox after the first attempt hit only an environment restriction binding
+  an IPv6 `httptest` listener.
+- The persistent Dashboard task
+  `019f929f-bd3f-7ca0-ab74-f6ad08ddec1e` completed Logs and Reminders using
+  one shared destination helper imported only by those two surfaces. Text/news
+  parents support direct delivery or an optional exact child; forum parents
+  require a selected child post. Atomic parent-plus-thread saves, parent
+  changes clearing stale children, and forum-direct or mismatched-child
+  rejection are covered.
+- Dashboard Logs now correctly resolves the migrated
+  guild/webhook/forum-parent configuration documented in the Dashboard
+  section above instead of falsely reporting that its parent disappeared.
+  Active Logs and Issues use family-wide server/clan counts with explicit
+  EN/FR/NL labels. Focused validation passed 3 files/14 tests; the full suite
+  passed 52 files/340 tests, plus lint, TypeScript, the 23-page production
+  build, locale parsing, and diff checks. Forum support remains limited to
+  Logs and Reminders; every other selector remains unchanged.
+- **Deferred delivery compatibility gap:** active Tracking raid-reminder SQL
+  currently reads `channel_id` but not `thread_id` before publishing the
+  reminder event. The active Bot reminder model and send paths resolve only
+  the parent `channel` value and do not consume a typed child thread. The user
+  explicitly prohibited Bot coordination or edits, so the schema/importer/API/
+  Dashboard work does not claim end-to-end thread delivery until a separately
+  authorized Bot/Tracking follow-up carries `thread_id` through the event and
+  sends into that child destination.
+
+## Active migration 003 — typed Autoboards clean break
+
+- Migration 003 intentionally drops the unfinished `autoboards` rows and
+  rebuilds the table without `identifier`, legacy `type`, `channel_id`,
+  `button_id`, `days`, `locale`, or `data jsonb`. No legacy Mongo or SQL
+  backfill, alias, compatibility view, or inferred board type is created.
+  Down faithfully restores the complete pre-003 table, constraints, and
+  indexes empty because the discarded rows cannot be reconstructed.
+- Final `autoboards` identity/configuration is `id`, `server_id`,
+  nonblank registry-owned `board_type`, `target_scope` (`family|custom`),
+  `delivery_mode` (`refresh|send`), `enabled`, and timestamps. The API-owned
+  registry, rather than a hard-coded database enum, defines each configured
+  board type's target kind, minimum/maximum targets, supported modes,
+  type-specific refresh interval bounds, and Dashboard capabilities. The
+  eventual permanent product catalog remains undecided and migration 003 does
+  not invent database enum values. The API currently exposes five clearly
+  `sample-*` definitions—family overview, clan activity, player leaderboard,
+  location rankings, and war summary—solely as demonstrable, non-permanent
+  registry entries across the supported scopes, target kinds, cardinalities,
+  and delivery modes.
+- Canonical Discord state is required nonblank `webhook_id`, nullable
+  `thread_id`, and nullable `message_id`. Dashboard submits a parent
+  channel/thread selection; API validates guild ownership and parent-child
+  semantics, resolves or creates the bot-owned parent webhook, and persists no
+  `channel_id`. Text/announcement parents support direct delivery or an exact
+  child thread; a forum parent requires an exact child post. The public
+  `messageId` field is read-only operational response state and is never
+  accepted from Dashboard
+  POST/PUT payloads. API creation stores it null and full replacement clears it
+  so the future executor owns establishing refresh state; send rows keep it
+  null. This forum/thread extension applies only to Logs, Reminders, and
+  Autoboards; no other selector changes.
+- Refresh scheduling uses positive `interval_minutes` and requires all send
+  schedule columns null. Send scheduling requires an IANA
+  `schedule_timezone`, local `schedule_time`, and exactly one
+  `schedule_kind`: `daily`, `weekdays` with one through seven ISO weekday
+  integers (`1..7`), or `day_of_month` with a value from `1..31`. Send rows
+  cannot have an interval or persistent message. No sub-daily send recurrence,
+  Clash-event trigger, or movable event schedule is represented.
+- Scheduler state is nullable `next_run_at` and `last_run_at`; every enabled
+  row must have `next_run_at`. Separate partial
+  `(next_run_at, id)` indexes serve enabled refresh and send work, while
+  `(server_id, created_at, id)` serves the management list.
+- Ordered custom targets live in
+  `autoboard_targets(autoboard_id, position, target)`. The generic public name
+  is `targets`; there is no tag/tags alias because values may be clan tags,
+  player tags, war tags, or location IDs. The primary key prevents duplicate
+  targets per board, the position key preserves a unique order, and the
+  cascading foreign key removes children with their board. Deferred database
+  constraint triggers enforce the final transaction state: family scope has
+  zero target rows and custom scope has at least one. The API registry applies
+  the more specific kind and cardinality rules.
+- The DevKit settings importer retains the separate server
+  `autoboard_limit`, but deliberately does not scan legacy Mongo
+  `clashking.autoboards`; the old button/data/day shape cannot be mapped
+  truthfully to the undecided registry. A source-level regression test locks
+  that no-backfill boundary and the exact typed schema.
+- Bot execution work is explicitly out of scope. Existing Bot Mongo
+  autoboard refresh/send jobs do not consume this SQL scheduler, registry, or
+  normalized targets, so runtime execution remains a disclosed deferred
+  compatibility gap rather than a compatibility alias in DevKit/API.
+- DevKit validation passed: focused schema/no-import tests and the full
+  migration Go module, Goose validation, formatting, and `git diff --check`.
+  A disposable Timescale database applied migrations 001-003, accepted valid
+  family/send and custom-target/refresh rows, rejected send rows with a
+  persistent message and custom scope without a target, then rolled 003 Down.
+  Down restored all 17 prior autoboard columns, its primary/identifier keys and
+  due/server-type indexes, and removed `autoboard_targets`. The explicitly
+  named disposable database was deleted afterward.
+- On 2026-07-30, the exact Autoboards Up block from the current migration 003
+  was applied atomically in place to the real local `tracking` database because
+  Goose had already recorded version 3 before this clean-break block was added.
+  The five unfinished legacy Autoboards rows were intentionally discarded as
+  approved; no compatibility copy or backfill remains. The live database now
+  has the 19-column typed `autoboards` table, normalized
+  `autoboard_targets`, both deferred scope triggers, and all six expected
+  primary/unique/due/list indexes. Goose remains at version 3.
+- `public.player_links` contained 175,634 rows immediately before the in-place
+  Autoboards transaction and the same 175,634 rows afterward. The applied SQL
+  touched only `autoboards`, its new child table, function, triggers, and
+  indexes; no other relation was rebuilt or modified. No production or remote
+  database was touched.
 
 
 ## Current migration-003 DevKit validation
