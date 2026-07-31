@@ -26,8 +26,20 @@ func runClanChangeHistory(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 	defer pool.Close()
-	cp, err := migrateutil.LoadCheckpoint(cfg, "clan_change_history")
-	if err != nil {
+	plan := migrateutil.OneShotPlan{
+		ResetSQL: []string{`TRUNCATE TABLE public.clan_change_history`},
+		DropIndexes: []string{
+			`DROP INDEX IF EXISTS public.clan_change_history_event_time_idx`,
+			`DROP INDEX IF EXISTS public.idx_clan_change_history_clan_time`,
+			`DROP INDEX IF EXISTS public.idx_clan_change_history_type_time`,
+		},
+		CreateIndexes: []string{
+			`CREATE INDEX clan_change_history_event_time_idx ON public.clan_change_history (event_time DESC)`,
+			`CREATE INDEX idx_clan_change_history_clan_time ON public.clan_change_history (clan_tag, event_time DESC)`,
+			`CREATE INDEX idx_clan_change_history_type_time ON public.clan_change_history (change_type, event_time DESC)`,
+		},
+	}
+	if err := migrateutil.StartOneShot(ctx, pool, plan); err != nil {
 		return err
 	}
 	rows := make([][]any, 0, cfg.BatchSize)
@@ -39,7 +51,7 @@ func runClanChangeHistory(ctx context.Context, cfg migrateutil.Config) error {
 		rows = rows[:0]
 		return err
 	}
-	seen, err := migrateutil.StreamByObjectID(ctx, cfg, cp, "all_clans_changes_id", mongoClient.Database("looper").Collection("all_clans_changes"), func(doc bson.M) (bool, error) {
+	seen, err := migrateutil.StreamAll(ctx, cfg, "all_clans_changes", mongoClient.Database("looper").Collection("all_clans_changes"), func(doc bson.M) (bool, error) {
 		eventTime, ok := migrateutil.Time(doc["time"])
 		if !ok {
 			return false, nil
@@ -58,6 +70,9 @@ func runClanChangeHistory(ctx context.Context, cfg migrateutil.Config) error {
 		return len(rows) >= cfg.BatchSize, nil
 	}, flush)
 	if err != nil {
+		return err
+	}
+	if err := migrateutil.FinishOneShot(ctx, pool, plan); err != nil {
 		return err
 	}
 	fmt.Printf("clan_change_history: scanned_docs=%d\n", seen)

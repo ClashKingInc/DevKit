@@ -64,19 +64,8 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) (err error) {
 			return err
 		}
 	}
-	dropIndexes := envBool(cfg.Env, "CLAN_WARS_DROP_INDEXES")
-	if dropIndexes {
-		if err := dropClanWarIndexes(ctx, pool); err != nil {
-			return err
-		}
-		defer func() {
-			rebuildErr := recreateClanWarIndexes(ctx, pool)
-			if err == nil {
-				err = rebuildErr
-			} else if rebuildErr != nil {
-				err = fmt.Errorf("%w; additionally failed to recreate clan war indexes: %v", err, rebuildErr)
-			}
-		}()
+	if err := dropClanWarIndexes(ctx, pool); err != nil {
+		return err
 	}
 	collection := mongoClient.Database("looper").Collection("clan_war")
 	var wars []warIndexInsert
@@ -107,6 +96,9 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) (err error) {
 		return docsInBatch >= docBatchSize || len(wars)+len(members)+len(missedAttacks)+len(attacks) >= maxRowsInBatch, nil
 	}, flush)
 	if err != nil {
+		return err
+	}
+	if err := recreateClanWarIndexes(ctx, pool); err != nil {
 		return err
 	}
 	fmt.Printf("clan_wars: scanned_docs=%d\n", seen)
@@ -295,7 +287,6 @@ func streamClanWarDocs(
 	opts := options.Find().
 		SetSort(bson.D{{Key: "_id", Value: 1}}).
 		SetBatchSize(int32(minInt(cfg.BatchSize, 10000))).
-		SetNoCursorTimeout(true).
 		SetProjection(projection)
 	cursor, err := collection.Find(ctx, filter, opts)
 	if err != nil {

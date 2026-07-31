@@ -27,14 +27,33 @@ func runServerClans(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 	defer pool.Close()
-	cp, err := migrateutil.LoadCheckpoint(cfg, "server_clans")
-	if err != nil {
+	plan := migrateutil.OneShotPlan{
+		ResetSQL: []string{
+			`DELETE FROM public.server_countdowns WHERE clan_tag IS NOT NULL`,
+			`DELETE FROM public.server_logs WHERE clan_tag IS NOT NULL`,
+			`DELETE FROM public.server_roles WHERE clan_tag IS NOT NULL`,
+			`DELETE FROM public.server_clans`,
+			`DELETE FROM public.clan_categories`,
+		},
+		DropIndexes: []string{
+			`DROP INDEX IF EXISTS public.idx_server_logs_scope`,
+			`DROP INDEX IF EXISTS public.idx_server_logs_webhook`,
+		},
+		CreateIndexes: []string{
+			`CREATE INDEX idx_server_logs_scope ON public.server_logs (server_id, clan_tag, type)`,
+			`CREATE INDEX idx_server_logs_webhook ON public.server_logs (webhook_id)`,
+		},
+	}
+	if err := migrateutil.StartOneShot(ctx, pool, plan); err != nil {
 		return err
 	}
-	return migrateServerClanDocuments(ctx, cfg, cp, pool, client.Database("usafam").Collection("clans"))
+	if err := migrateServerClanDocuments(ctx, cfg, pool, client.Database("usafam").Collection("clans")); err != nil {
+		return err
+	}
+	return migrateutil.FinishOneShot(ctx, pool, plan)
 }
 
-func migrateServerClanDocuments(ctx context.Context, cfg migrateutil.Config, cp *migrateutil.Checkpoint, pool interface {
+func migrateServerClanDocuments(ctx context.Context, cfg migrateutil.Config, pool interface {
 	Begin(context.Context) (pgx.Tx, error)
 }, collection *mongo.Collection) error {
 	batch := make([]bson.M, 0, cfg.BatchSize)
@@ -58,7 +77,7 @@ func migrateServerClanDocuments(ctx context.Context, cfg migrateutil.Config, cp 
 		batch = batch[:0]
 		return nil
 	}
-	seen, err := migrateutil.StreamByObjectID(ctx, cfg, cp, "server_clans_id", collection, func(doc bson.M) (bool, error) {
+	seen, err := migrateutil.StreamAll(ctx, cfg, "server_clans", collection, func(doc bson.M) (bool, error) {
 		batch = append(batch, doc)
 		return len(batch) >= cfg.BatchSize, nil
 	}, flush)

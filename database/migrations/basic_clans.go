@@ -30,11 +30,20 @@ func runBasicClans(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 	defer pool.Close()
-	cp, err := migrateutil.LoadCheckpoint(cfg, "basic_clans")
-	if err != nil {
+	plan := migrateutil.OneShotPlan{
+		ResetSQL: []string{`DELETE FROM public.basic_clan`},
+		DropIndexes: []string{
+			`DROP INDEX IF EXISTS public.idx_basic_clan_last_active`,
+			`DROP INDEX IF EXISTS public.idx_basic_clan_member_count`,
+		},
+		CreateIndexes: []string{
+			`CREATE INDEX idx_basic_clan_last_active ON public.basic_clan (last_active)`,
+			`CREATE INDEX idx_basic_clan_member_count ON public.basic_clan (member_count)`,
+		},
+	}
+	if err := migrateutil.StartOneShot(ctx, pool, plan); err != nil {
 		return err
 	}
-
 	clans := make([]clanRow, 0, cfg.BatchSize)
 	flush := func() error {
 		if len(clans) == 0 {
@@ -70,10 +79,9 @@ func runBasicClans(ctx context.Context, cfg migrateutil.Config) error {
 		{Key: "badgeUrls", Value: 1},
 		{Key: "badge_url", Value: 1},
 	}
-	seen, err := migrateutil.StreamByObjectIDProjected(
+	seen, err := migrateutil.StreamAllProjected(
 		ctx,
 		cfg,
-		cp,
 		"clan_tags_id",
 		mongoClient.Database("looper").Collection("clan_tags"),
 		projection,
@@ -115,6 +123,9 @@ func runBasicClans(ctx context.Context, cfg migrateutil.Config) error {
 		flush,
 	)
 	if err != nil {
+		return err
+	}
+	if err := migrateutil.FinishOneShot(ctx, pool, plan); err != nil {
 		return err
 	}
 	fmt.Printf("basic_clans: scanned_docs=%d\n", seen)

@@ -27,12 +27,22 @@ func runServerSettings(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 	defer pool.Close()
-	cp, err := migrateutil.LoadCheckpoint(cfg, "server_settings")
-	if err != nil {
+	plan := migrateutil.OneShotPlan{
+		ResetSQL: []string{`DELETE FROM public.servers`},
+		DropIndexes: []string{
+			`DROP INDEX IF EXISTS public.idx_server_logs_scope`,
+			`DROP INDEX IF EXISTS public.idx_server_logs_webhook`,
+		},
+		CreateIndexes: []string{
+			`CREATE INDEX idx_server_logs_scope ON public.server_logs (server_id, clan_tag, type)`,
+			`CREATE INDEX idx_server_logs_webhook ON public.server_logs (webhook_id)`,
+		},
+	}
+	if err := migrateutil.StartOneShot(ctx, pool, plan); err != nil {
 		return err
 	}
 	db := client.Database("usafam")
-	roleModes, err := migrateServerDocuments(ctx, cfg, cp, pool, db.Collection("server"))
+	roleModes, err := migrateServerDocuments(ctx, cfg, pool, db.Collection("server"))
 	if err != nil {
 		return err
 	}
@@ -50,17 +60,17 @@ func runServerSettings(ctx context.Context, cfg migrateutil.Config) error {
 		{"achievementroles", "achievement"},
 	}
 	for _, source := range roleCollections {
-		if err := migrateRoleCollection(ctx, cfg, cp, pool, db.Collection(source.collection), source.collection, source.roleType, roleModes); err != nil {
+		if err := migrateRoleCollection(ctx, cfg, pool, db.Collection(source.collection), source.collection, source.roleType, roleModes); err != nil {
 			return err
 		}
 	}
-	if err := migrateStatusRoleCollection(ctx, cfg, cp, pool, db.Collection("statusroles"), roleModes); err != nil {
+	if err := migrateStatusRoleCollection(ctx, cfg, pool, db.Collection("statusroles"), roleModes); err != nil {
 		return err
 	}
-	return nil
+	return migrateutil.FinishOneShot(ctx, pool, plan)
 }
 
-func migrateServerDocuments(ctx context.Context, cfg migrateutil.Config, cp *migrateutil.Checkpoint, pool interface {
+func migrateServerDocuments(ctx context.Context, cfg migrateutil.Config, pool interface {
 	Begin(context.Context) (pgx.Tx, error)
 }, collection *mongo.Collection) (map[string]string, error) {
 	roleModes := map[string]string{}
@@ -85,7 +95,7 @@ func migrateServerDocuments(ctx context.Context, cfg migrateutil.Config, cp *mig
 		batch = batch[:0]
 		return nil
 	}
-	seen, err := migrateutil.StreamByObjectID(ctx, cfg, cp, "server_settings_server_id", collection, func(doc bson.M) (bool, error) {
+	seen, err := migrateutil.StreamAll(ctx, cfg, "server_settings", collection, func(doc bson.M) (bool, error) {
 		if serverID := migrateutil.String(doc["server"]); serverID != "" {
 			roleModes[serverID] = roleMode(doc["role_treatment"])
 		}
@@ -336,9 +346,9 @@ func canonicalServerLogType(value string) string {
 	}
 }
 
-func migrateRoleCollection(ctx context.Context, cfg migrateutil.Config, cp *migrateutil.Checkpoint, pool interface {
+func migrateRoleCollection(ctx context.Context, cfg migrateutil.Config, pool interface {
 	Begin(context.Context) (pgx.Tx, error)
-}, collection *mongo.Collection, checkpointKey, roleType string, roleModes map[string]string) error {
+}, collection *mongo.Collection, labelSuffix, roleType string, roleModes map[string]string) error {
 	rows := make([]bson.M, 0, cfg.BatchSize)
 	flush := func() error {
 		if len(rows) == 0 {
@@ -376,15 +386,15 @@ func migrateRoleCollection(ctx context.Context, cfg migrateutil.Config, cp *migr
 		rows = rows[:0]
 		return nil
 	}
-	seen, err := migrateutil.StreamByObjectID(ctx, cfg, cp, "server_settings_"+checkpointKey+"_id", collection, func(doc bson.M) (bool, error) {
+	seen, err := migrateutil.StreamAll(ctx, cfg, "server_settings_"+labelSuffix, collection, func(doc bson.M) (bool, error) {
 		rows = append(rows, doc)
 		return len(rows) >= cfg.BatchSize, nil
 	}, flush)
-	fmt.Printf("server_settings.%s: scanned_docs=%d\n", checkpointKey, seen)
+	fmt.Printf("server_settings.%s: scanned_docs=%d\n", labelSuffix, seen)
 	return err
 }
 
-func migrateStatusRoleCollection(ctx context.Context, cfg migrateutil.Config, cp *migrateutil.Checkpoint, pool interface {
+func migrateStatusRoleCollection(ctx context.Context, cfg migrateutil.Config, pool interface {
 	Begin(context.Context) (pgx.Tx, error)
 }, collection *mongo.Collection, roleModes map[string]string) error {
 	rows := make([]bson.M, 0, cfg.BatchSize)
@@ -420,7 +430,7 @@ func migrateStatusRoleCollection(ctx context.Context, cfg migrateutil.Config, cp
 		rows = rows[:0]
 		return nil
 	}
-	seen, err := migrateutil.StreamByObjectID(ctx, cfg, cp, "server_settings_statusroles_id", collection, func(doc bson.M) (bool, error) {
+	seen, err := migrateutil.StreamAll(ctx, cfg, "server_settings_statusroles", collection, func(doc bson.M) (bool, error) {
 		rows = append(rows, doc)
 		return len(rows) >= cfg.BatchSize, nil
 	}, flush)

@@ -28,24 +28,58 @@ func runRosters(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 	defer pool.Close()
-	cp, err := migrateutil.LoadCheckpoint(cfg, "rosters")
-	if err != nil {
+	plan := rosterOneShotPlan()
+	if err := migrateutil.StartOneShot(ctx, pool, plan); err != nil {
 		return err
 	}
 	db := client.Database("usafam")
-	if err := migrateRosterDocuments(ctx, cfg, cp, pool, db.Collection("rosters")); err != nil {
+	if err := migrateRosterDocuments(ctx, cfg, pool, db.Collection("rosters")); err != nil {
 		return err
 	}
-	if err := migrateRosterGroups(ctx, cfg, cp, pool, db.Collection("roster_groups")); err != nil {
+	if err := migrateRosterGroups(ctx, cfg, pool, db.Collection("roster_groups")); err != nil {
 		return err
 	}
-	if err := migrateRosterSignupCategories(ctx, cfg, cp, pool, db.Collection("roster_signup_categories")); err != nil {
+	if err := migrateRosterSignupCategories(ctx, cfg, pool, db.Collection("roster_signup_categories")); err != nil {
 		return err
 	}
-	return migrateRosterAutomations(ctx, cfg, cp, pool, db.Collection("roster_automation_rules"))
+	if err := migrateRosterAutomations(ctx, cfg, pool, db.Collection("roster_automation_rules")); err != nil {
+		return err
+	}
+	return migrateutil.FinishOneShot(ctx, pool, plan)
 }
 
-func migrateRosterDocuments(ctx context.Context, cfg migrateutil.Config, cp *migrateutil.Checkpoint, pool interface {
+func rosterOneShotPlan() migrateutil.OneShotPlan {
+	return migrateutil.OneShotPlan{
+		ResetSQL: []string{
+			`TRUNCATE TABLE
+				public.roster_group_allowed_signup_categories,
+				public.roster_allowed_signup_categories,
+				public.roster_display_columns,
+				public.roster_sort_fields,
+				public.roster_members,
+				public.roster_automation_rules,
+				public.roster_signup_categories,
+				public.rosters,
+				public.roster_groups`,
+		},
+		DropIndexes: []string{
+			`DROP INDEX IF EXISTS public.idx_roster_automation_rules_server_group`,
+			`DROP INDEX IF EXISTS public.idx_roster_groups_server`,
+			`DROP INDEX IF EXISTS public.idx_roster_signup_categories_server`,
+			`DROP INDEX IF EXISTS public.idx_rosters_server_clan`,
+			`DROP INDEX IF EXISTS public.idx_rosters_server_group`,
+		},
+		CreateIndexes: []string{
+			`CREATE INDEX idx_roster_automation_rules_server_group ON public.roster_automation_rules (server_id, group_id)`,
+			`CREATE INDEX idx_roster_groups_server ON public.roster_groups (server_id)`,
+			`CREATE INDEX idx_roster_signup_categories_server ON public.roster_signup_categories (server_id, sort_order)`,
+			`CREATE INDEX idx_rosters_server_clan ON public.rosters (server_id, clan_tag)`,
+			`CREATE INDEX idx_rosters_server_group ON public.rosters (server_id, group_id)`,
+		},
+	}
+}
+
+func migrateRosterDocuments(ctx context.Context, cfg migrateutil.Config, pool interface {
 	Begin(context.Context) (pgx.Tx, error)
 }, collection *mongo.Collection) error {
 	batch := make([]bson.M, 0, cfg.BatchSize)
@@ -69,7 +103,7 @@ func migrateRosterDocuments(ctx context.Context, cfg migrateutil.Config, cp *mig
 		batch = batch[:0]
 		return nil
 	}
-	seen, err := migrateutil.StreamByObjectID(ctx, cfg, cp, "rosters_id", collection, func(doc bson.M) (bool, error) {
+	seen, err := migrateutil.StreamAll(ctx, cfg, "rosters", collection, func(doc bson.M) (bool, error) {
 		batch = append(batch, doc)
 		return len(batch) >= cfg.BatchSize, nil
 	}, flush)
@@ -77,10 +111,10 @@ func migrateRosterDocuments(ctx context.Context, cfg migrateutil.Config, cp *mig
 	return err
 }
 
-func migrateRosterGroups(ctx context.Context, cfg migrateutil.Config, cp *migrateutil.Checkpoint, pool interface {
+func migrateRosterGroups(ctx context.Context, cfg migrateutil.Config, pool interface {
 	Begin(context.Context) (pgx.Tx, error)
 }, collection *mongo.Collection) error {
-	return streamRosterCollection(ctx, cfg, cp, pool, collection, "roster_groups_id", "roster_groups", func(ctx context.Context, tx pgx.Tx, doc bson.M) error {
+	return streamRosterCollection(ctx, cfg, pool, collection, "roster_groups", func(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		serverID := firstRosterString(doc["server_id"], doc["server"])
 		groupID := firstRosterString(doc["group_id"], doc["custom_id"], doc["token"], doc["_id"])
 		if serverID == "" || groupID == "" {
@@ -108,21 +142,19 @@ func migrateRosterGroups(ctx context.Context, cfg migrateutil.Config, cp *migrat
 		if _, err := tx.Exec(ctx, `DELETE FROM roster_group_allowed_signup_categories WHERE group_id = $1`, groupID); err != nil {
 			return err
 		}
-		for position, raw := range migrateutil.Slice(doc["allowed_signup_categories"]) {
-			if categoryID := migrateutil.String(raw); categoryID != "" {
-				if _, err := tx.Exec(ctx, `INSERT INTO roster_group_allowed_signup_categories (group_id, category_id, position) VALUES ($1, $2, $3)`, groupID, categoryID, position); err != nil {
-					return err
-				}
+		for position, categoryID := range uniqueRosterStrings(doc["allowed_signup_categories"]) {
+			if _, err := tx.Exec(ctx, `INSERT INTO roster_group_allowed_signup_categories (group_id, category_id, position) VALUES ($1, $2, $3)`, groupID, categoryID, position); err != nil {
+				return err
 			}
 		}
 		return nil
 	})
 }
 
-func migrateRosterSignupCategories(ctx context.Context, cfg migrateutil.Config, cp *migrateutil.Checkpoint, pool interface {
+func migrateRosterSignupCategories(ctx context.Context, cfg migrateutil.Config, pool interface {
 	Begin(context.Context) (pgx.Tx, error)
 }, collection *mongo.Collection) error {
-	return streamRosterCollection(ctx, cfg, cp, pool, collection, "roster_signup_categories_id", "roster_signup_categories", func(ctx context.Context, tx pgx.Tx, doc bson.M) error {
+	return streamRosterCollection(ctx, cfg, pool, collection, "roster_signup_categories", func(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		serverID := firstRosterString(doc["server_id"], doc["server"])
 		customID := firstRosterString(doc["custom_id"], doc["token"], doc["_id"])
 		if serverID == "" || customID == "" {
@@ -143,10 +175,10 @@ func migrateRosterSignupCategories(ctx context.Context, cfg migrateutil.Config, 
 	})
 }
 
-func migrateRosterAutomations(ctx context.Context, cfg migrateutil.Config, cp *migrateutil.Checkpoint, pool interface {
+func migrateRosterAutomations(ctx context.Context, cfg migrateutil.Config, pool interface {
 	Begin(context.Context) (pgx.Tx, error)
 }, collection *mongo.Collection) error {
-	return streamRosterCollection(ctx, cfg, cp, pool, collection, "roster_automation_rules_id", "roster_automation_rules", func(ctx context.Context, tx pgx.Tx, doc bson.M) error {
+	return streamRosterCollection(ctx, cfg, pool, collection, "roster_automation_rules", func(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		serverID := firstRosterString(doc["server_id"], doc["server"])
 		automationID := firstRosterString(doc["automation_id"], doc["custom_id"], doc["_id"])
 		if serverID == "" || automationID == "" {
@@ -178,9 +210,9 @@ func migrateRosterAutomations(ctx context.Context, cfg migrateutil.Config, cp *m
 	})
 }
 
-func streamRosterCollection(ctx context.Context, cfg migrateutil.Config, cp *migrateutil.Checkpoint, pool interface {
+func streamRosterCollection(ctx context.Context, cfg migrateutil.Config, pool interface {
 	Begin(context.Context) (pgx.Tx, error)
-}, collection *mongo.Collection, checkpoint, label string, write func(context.Context, pgx.Tx, bson.M) error) error {
+}, collection *mongo.Collection, label string, write func(context.Context, pgx.Tx, bson.M) error) error {
 	batch := make([]bson.M, 0, cfg.BatchSize)
 	flush := func() error {
 		if len(batch) == 0 {
@@ -202,7 +234,7 @@ func streamRosterCollection(ctx context.Context, cfg migrateutil.Config, cp *mig
 		batch = batch[:0]
 		return nil
 	}
-	seen, err := migrateutil.StreamByObjectID(ctx, cfg, cp, checkpoint, collection, func(doc bson.M) (bool, error) {
+	seen, err := migrateutil.StreamAll(ctx, cfg, label, collection, func(doc bson.M) (bool, error) {
 		batch = append(batch, doc)
 		return len(batch) >= cfg.BatchSize, nil
 	}, flush)
@@ -265,12 +297,8 @@ func writeRosterDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 			return err
 		}
 	}
-	for position, raw := range migrateutil.Slice(doc["members"]) {
-		member := migrateutil.Map(raw)
+	for position, member := range uniqueRosterMembers(doc["members"]) {
 		tag := migrateutil.String(member["tag"])
-		if tag == "" {
-			continue
-		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO roster_members (
 				roster_id, tag, name, townhall, hero_levels, discord_user_id,
@@ -302,17 +330,48 @@ func writeRosterDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		{"roster_sort_fields", "field_name", doc["sort"]},
 	}
 	for _, list := range ordered {
-		for position, raw := range migrateutil.Slice(list.value) {
-			value := migrateutil.String(raw)
-			if value == "" {
-				continue
-			}
+		for position, value := range uniqueRosterStrings(list.value) {
 			if _, err := tx.Exec(ctx, `INSERT INTO `+list.table+` (roster_id, `+list.column+`, position) VALUES ($1, $2, $3)`, rosterID, value, position); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func uniqueRosterMembers(value any) []bson.M {
+	members := make([]bson.M, 0, len(migrateutil.Slice(value)))
+	seen := make(map[string]struct{})
+	for _, raw := range migrateutil.Slice(value) {
+		member := migrateutil.Map(raw)
+		tag := migrateutil.String(member["tag"])
+		if tag == "" {
+			continue
+		}
+		if _, exists := seen[tag]; exists {
+			continue
+		}
+		seen[tag] = struct{}{}
+		members = append(members, member)
+	}
+	return members
+}
+
+func uniqueRosterStrings(value any) []string {
+	values := make([]string, 0, len(migrateutil.Slice(value)))
+	seen := make(map[string]struct{})
+	for _, raw := range migrateutil.Slice(value) {
+		item := migrateutil.String(raw)
+		if item == "" {
+			continue
+		}
+		if _, exists := seen[item]; exists {
+			continue
+		}
+		seen[item] = struct{}{}
+		values = append(values, item)
+	}
+	return values
 }
 
 func firstRosterString(values ...any) string {

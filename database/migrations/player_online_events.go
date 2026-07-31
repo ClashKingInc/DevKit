@@ -26,8 +26,19 @@ func runPlayerOnlineEvents(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 	defer pool.Close()
-	cp, err := migrateutil.LoadCheckpoint(cfg, "player_online_events")
-	if err != nil {
+	plan := migrateutil.OneShotPlan{
+		ResetSQL: []string{`TRUNCATE TABLE public.player_online_events`},
+		DropIndexes: []string{
+			`DROP INDEX IF EXISTS public.idx_player_online_events_clan_time`,
+			`DROP INDEX IF EXISTS public.idx_player_online_events_player_time`,
+			`DROP INDEX IF EXISTS public.player_online_events_seen_at_idx`,
+		},
+		CreateIndexes: []string{
+			`CREATE INDEX idx_player_online_events_clan_time ON public.player_online_events (clan_tag, seen_at DESC)`,
+			`CREATE INDEX idx_player_online_events_player_time ON public.player_online_events (tag, seen_at DESC)`,
+		},
+	}
+	if err := migrateutil.StartOneShot(ctx, pool, plan); err != nil {
 		return err
 	}
 	rows := make([][]any, 0, cfg.BatchSize)
@@ -39,7 +50,7 @@ func runPlayerOnlineEvents(ctx context.Context, cfg migrateutil.Config) error {
 		rows = rows[:0]
 		return err
 	}
-	seen, err := migrateutil.StreamByObjectID(ctx, cfg, cp, "last_online_id", mongoClient.Database("looper").Collection("last_online"), func(doc bson.M) (bool, error) {
+	seen, err := migrateutil.StreamAll(ctx, cfg, "last_online", mongoClient.Database("looper").Collection("last_online"), func(doc bson.M) (bool, error) {
 		meta := migrateutil.Map(doc["meta"])
 		seenAt, ok := migrateutil.Time(doc["timestamp"])
 		if !ok || meta == nil {
@@ -58,6 +69,9 @@ func runPlayerOnlineEvents(ctx context.Context, cfg migrateutil.Config) error {
 		return len(rows) >= cfg.BatchSize, nil
 	}, flush)
 	if err != nil {
+		return err
+	}
+	if err := migrateutil.FinishOneShot(ctx, pool, plan); err != nil {
 		return err
 	}
 	fmt.Printf("player_online_events: scanned_docs=%d\n", seen)

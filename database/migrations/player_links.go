@@ -76,12 +76,28 @@ func runPlayerLinks(ctx context.Context, cfg migrateutil.Config) error {
 	var pool interface {
 		Begin(context.Context) (pgx.Tx, error)
 	}
+	var finishOneShot func() error
 	if !s.DryRun {
 		dbPool, err := migrateutil.TimescalePool(ctx, cfg)
 		if err != nil {
 			return err
 		}
 		defer dbPool.Close()
+		plan := migrateutil.OneShotPlan{
+			ResetSQL: []string{`DELETE FROM public.player_links`},
+			DropIndexes: []string{
+				`DROP INDEX IF EXISTS public.idx_player_links_user_order`,
+			},
+			CreateIndexes: []string{
+				`CREATE INDEX idx_player_links_user_order ON public.player_links (user_id, order_index) WHERE user_id IS NOT NULL`,
+			},
+		}
+		if err := migrateutil.StartOneShot(ctx, dbPool, plan); err != nil {
+			return err
+		}
+		finishOneShot = func() error {
+			return migrateutil.FinishOneShot(ctx, dbPool, plan)
+		}
 		pool = dbPool
 	}
 
@@ -137,6 +153,11 @@ func runPlayerLinks(ctx context.Context, cfg migrateutil.Config) error {
 		}
 	}
 
+	if finishOneShot != nil {
+		if err := finishOneShot(); err != nil {
+			return err
+		}
+	}
 	fmt.Printf("player_links: guilds_scanned=%d members_seen=%d unique_discord_ids=%d link_api_batches=%d rows_%s=%d\n",
 		scannedGuilds, membersSeen, len(seenDiscordIDs), linkBatches, ternary(s.DryRun, "staged", "written"), rowsWritten)
 	return nil

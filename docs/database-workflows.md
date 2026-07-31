@@ -74,7 +74,16 @@ Compile the shared package and each build-ignored entrypoint:
 ```bash
 cd database/migrations
 GOCACHE=/tmp/go-cache go test ./...
-for file in *.go; do GOCACHE=/tmp/go-cache go test "$file"; done
+for file in *.go; do
+  case "$file" in
+    *_test.go) continue ;;
+  esac
+  GOCACHE=/tmp/go-cache go test "$file"
+done
+GOCACHE=/tmp/go-cache go test rosters.go rosters_test.go
+GOCACHE=/tmp/go-cache go test bot_server_settings.go bot_server_settings_test.go
+GOCACHE=/tmp/go-cache go test leaderboard_history.go leaderboard_history_test.go
+GOCACHE=/tmp/go-cache go test legend_history.go legend_history_test.go
 ```
 
 ## Remote database safety

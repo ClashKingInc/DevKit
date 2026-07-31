@@ -67,29 +67,55 @@ rollback sections.
 
 The Go programs in `migrations/` backfill data from legacy stores. Run them from
 this directory or from `migrations/`; both locations resolve this directory as
-the database root. Most long-running backfills use shared checkpoints;
-`player_links.go` intentionally reruns without a checkpoint.
+the database root. Only `clan_wars.go` is checkpointed and resumable. Every
+other importer is a one-shot rebuild: it clears its owned destination data,
+drops its secondary indexes before streaming, and recreates those indexes only
+after the full import succeeds. Primary keys, unique constraints, and foreign
+keys remain in place when the importer needs them for identity or integrity.
 
 ```bash
 cd migrations
-go run player_stats.go
+go run clan_wars.go
 ```
 
 Each tool documents its required environment keys in code and fails closed when
 required values are absent. Never commit the local `.env` file or migration
 checkpoint data.
 
-The two-file Goose baseline includes the consolidated canonical `servers`
+The Goose baseline includes the consolidated canonical `servers`
 configuration schema.
-After it is applied, run the four imports in this order:
+After it is applied, run the settings imports in this order:
 
 ```bash
 cd migrations
-go run server_clans.go
 go run server_settings.go
+go run server_clans.go
 go run rosters.go
 go run bot_server_settings.go
 ```
+
+Historical official leaderboard data has two dedicated one-shot imports:
+
+```bash
+cd migrations
+go run leaderboard_history.go
+go run legend_history.go
+```
+
+`leaderboard_history.go` reads the five canonical full-snapshot collections
+from the `ranking_history` Mongo database. It does not import the incompatible
+seasonal `player_leaderboard`/`clan_leaderboard` collections or the explicitly
+retired `legends`/`league_history` collections. Capital snapshots retain only
+Tuesday source documents and store them under the preceding Monday date.
+`legend_history.go` reads the separate `looper.legend_history` collection.
+Leaderboard history has no JSONB: each of the five source collections writes
+to its own typed table, retaining numeric league/location IDs and one badge
+token where static API metadata can be reconstructed. Legend history likewise
+stores player/ranking, nullable clan snapshot/token, and league-tier ID fields
+as typed columns. API readers rebuild standard 70/200/512 badge URLs and other
+static metadata before public responses. Both scripts truncate only their
+owned destinations when they start, delay secondary-index creation until the
+complete source stream succeeds, and do not use checkpoints.
 
 The baseline copies existing Timescale settings into typed tables before it
 removes old JSON columns and retired tables. Migration 003 then consolidates
