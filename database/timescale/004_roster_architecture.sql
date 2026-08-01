@@ -159,15 +159,48 @@ $$;
 -- +goose StatementEnd
 
 ALTER TABLE public.rosters
-    ADD COLUMN IF NOT EXISTS signup_questions jsonb NOT NULL DEFAULT '[]'::jsonb;
+    ADD COLUMN IF NOT EXISTS signup_questions jsonb NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS questionnaire_version integer NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS public_share_id text,
+    ADD COLUMN IF NOT EXISTS public_enabled boolean NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS public_view_id uuid,
+    ADD COLUMN IF NOT EXISTS last_refreshed_at timestamp with time zone,
+    ADD COLUMN IF NOT EXISTS refresh_started_at timestamp with time zone,
+    ADD COLUMN IF NOT EXISTS roster_role_id text;
 
 ALTER TABLE public.rosters
     DROP CONSTRAINT IF EXISTS rosters_signup_questions_check,
+    DROP CONSTRAINT IF EXISTS rosters_questionnaire_version_check,
+    DROP CONSTRAINT IF EXISTS rosters_public_share_id_check,
+    DROP CONSTRAINT IF EXISTS rosters_public_enabled_check,
+    DROP CONSTRAINT IF EXISTS rosters_roster_role_id_check,
     ADD CONSTRAINT rosters_signup_questions_check
-        CHECK (public.ck_valid_roster_signup_questions(signup_questions));
+        CHECK (public.ck_valid_roster_signup_questions(signup_questions)),
+    ADD CONSTRAINT rosters_questionnaire_version_check
+        CHECK (questionnaire_version > 0),
+    ADD CONSTRAINT rosters_public_share_id_check CHECK (
+        public_share_id IS NULL OR public_share_id ~ '^[A-Za-z0-9_-]{16,64}$'
+    ),
+    ADD CONSTRAINT rosters_public_enabled_check CHECK (
+        NOT public_enabled
+        OR (public_share_id IS NOT NULL AND public_view_id IS NOT NULL)
+    ),
+    ADD CONSTRAINT rosters_roster_role_id_check CHECK (
+        roster_role_id IS NULL OR roster_role_id ~ '^[0-9]+$'
+    );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rosters_public_share_id
+    ON public.rosters (public_share_id)
+    WHERE public_share_id IS NOT NULL;
 
 COMMENT ON COLUMN public.rosters.signup_questions IS
     'At most four configurable question definitions. Each definition has a unique stable id and order plus type, label, required, options, and optional ai_description. The account selector is implicit and must not be stored here.';
+COMMENT ON COLUMN public.rosters.questionnaire_version IS
+    'Monotonic public form version. Increment whenever signup question identity, validation, or ordering changes.';
+COMMENT ON COLUMN public.rosters.public_view_id IS
+    'Saved view used by the public roster response. The API must also prove this view is linked to the roster through roster_view_rosters.';
+COMMENT ON COLUMN public.rosters.refresh_started_at IS
+    'Start of the current or most recent refresh attempt; API refresh transactions use it with last_refreshed_at for the shared cooldown and stale-attempt recovery.';
 
 -- Preserve organizational roster card groups. Remove only the superseded
 -- signup-category model and its roster/group bindings.
@@ -208,6 +241,34 @@ BEGIN
             SET league_name = current_league
             WHERE league_name IS NULL
               AND COALESCE(btrim(current_league), '') <> ''
+        $sql$;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'roster_members'
+          AND column_name = 'last_updated'
+          AND data_type = 'bigint'
+    ) THEN
+        EXECUTE $sql$
+            UPDATE public.rosters AS roster
+            SET last_refreshed_at = source.last_refreshed_at
+            FROM (
+                SELECT
+                    roster_id,
+                    max(CASE
+                        WHEN last_updated > 100000000000
+                            THEN to_timestamp(last_updated::double precision / 1000.0)
+                        ELSE to_timestamp(last_updated::double precision)
+                    END) AS last_refreshed_at
+                FROM public.roster_members
+                WHERE last_updated IS NOT NULL
+                GROUP BY roster_id
+            ) AS source
+            WHERE roster.id = source.roster_id
+              AND roster.last_refreshed_at IS NULL
         $sql$;
     END IF;
 
@@ -359,61 +420,535 @@ CREATE INDEX IF NOT EXISTS idx_roster_view_rosters_roster
 COMMENT ON TABLE public.roster_view_rosters IS
     'Normalized roster references for integrity, reverse lookup, stable ordering, and same-server enforcement; roster IDs are not duplicated inside view specs.';
 
-CREATE TABLE IF NOT EXISTS public.roster_live_posts (
-    id uuid DEFAULT uuidv7() NOT NULL,
-    view_id uuid NOT NULL,
+ALTER TABLE public.rosters
+    DROP CONSTRAINT IF EXISTS rosters_public_view_fkey,
+    ADD CONSTRAINT rosters_public_view_fkey
+        FOREIGN KEY (public_view_id, server_id)
+        REFERENCES public.roster_views(id, server_id) ON DELETE RESTRICT;
+
+CREATE TABLE IF NOT EXISTS public.roster_metric_cache (
+    roster_id uuid NOT NULL,
     server_id text NOT NULL,
-    channel_id text NOT NULL,
-    webhook_id text NOT NULL,
-    webhook_token_ciphertext bytea,
-    webhook_secret_ref text,
-    message_id text NOT NULL,
-    last_render_hash text,
-    update_state text NOT NULL DEFAULT 'pending',
-    last_update_attempt_at timestamp with time zone,
-    last_updated_at timestamp with time zone,
-    last_update_error text,
+    player_tag text NOT NULL,
+    metric_id text NOT NULL,
+    metric_version text NOT NULL,
+    parameters_hash text NOT NULL,
+    parameters jsonb NOT NULL DEFAULT '{}'::jsonb,
+    value jsonb NOT NULL,
+    data_watermark timestamp with time zone,
+    computed_at timestamp with time zone NOT NULL DEFAULT now(),
+    expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT roster_metric_cache_pkey
+        PRIMARY KEY (roster_id, player_tag, metric_id, metric_version, parameters_hash),
+    CONSTRAINT roster_metric_cache_roster_fkey
+        FOREIGN KEY (roster_id, server_id)
+        REFERENCES public.rosters(id, server_id) ON DELETE CASCADE,
+    CONSTRAINT roster_metric_cache_member_fkey
+        FOREIGN KEY (player_tag, roster_id)
+        REFERENCES public.roster_members(tag, roster_id) ON DELETE CASCADE,
+    CONSTRAINT roster_metric_cache_identity_check CHECK (
+        btrim(player_tag) <> ''
+        AND btrim(metric_id) <> ''
+        AND btrim(metric_version) <> ''
+        AND parameters_hash ~ '^[0-9a-f]{64}$'
+    ),
+    CONSTRAINT roster_metric_cache_parameters_check
+        CHECK (jsonb_typeof(parameters) = 'object'),
+    CONSTRAINT roster_metric_cache_expiry_check CHECK (expires_at >= computed_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_roster_metric_cache_expiry
+    ON public.roster_metric_cache (expires_at, roster_id);
+CREATE INDEX IF NOT EXISTS idx_roster_metric_cache_player
+    ON public.roster_metric_cache (player_tag, metric_id, computed_at DESC);
+
+COMMENT ON TABLE public.roster_metric_cache IS
+    'Mutable derived metric cache keyed by roster member, metric/version, and canonical parameter hash. Saved view specs remain the source of requested metrics.';
+
+CREATE TABLE IF NOT EXISTS public.roster_ai_usage (
+    id uuid DEFAULT uuidv7() NOT NULL,
+    server_id text NOT NULL,
+    roster_id uuid,
+    view_id uuid,
+    discord_user_id text NOT NULL,
+    operation text NOT NULL,
+    provider text NOT NULL,
+    model text NOT NULL,
+    provider_request_id text,
+    input_tokens bigint NOT NULL DEFAULT 0,
+    cached_input_tokens bigint NOT NULL DEFAULT 0,
+    output_tokens bigint NOT NULL DEFAULT 0,
+    reasoning_tokens bigint NOT NULL DEFAULT 0,
+    total_tokens bigint NOT NULL DEFAULT 0,
+    input_cost_usd numeric(18, 8) NOT NULL DEFAULT 0,
+    output_cost_usd numeric(18, 8) NOT NULL DEFAULT 0,
+    total_cost_usd numeric(18, 8) NOT NULL DEFAULT 0,
     created_at timestamp with time zone NOT NULL DEFAULT now(),
-    updated_at timestamp with time zone NOT NULL DEFAULT now(),
-    CONSTRAINT roster_live_posts_pkey PRIMARY KEY (id),
-    CONSTRAINT roster_live_posts_message_key UNIQUE (server_id, channel_id, message_id),
-    CONSTRAINT roster_live_posts_view_fkey
+    CONSTRAINT roster_ai_usage_pkey PRIMARY KEY (id),
+    CONSTRAINT roster_ai_usage_server_fkey
+        FOREIGN KEY (server_id) REFERENCES public.servers(id) ON DELETE CASCADE,
+    CONSTRAINT roster_ai_usage_roster_fkey
+        FOREIGN KEY (roster_id, server_id)
+        REFERENCES public.rosters(id, server_id) ON DELETE SET NULL (roster_id),
+    CONSTRAINT roster_ai_usage_view_fkey
         FOREIGN KEY (view_id, server_id)
-        REFERENCES public.roster_views(id, server_id) ON DELETE CASCADE,
-    CONSTRAINT roster_live_posts_ids_check CHECK (
-        btrim(channel_id) <> '' AND btrim(webhook_id) <> '' AND btrim(message_id) <> ''
+        REFERENCES public.roster_views(id, server_id) ON DELETE SET NULL (view_id),
+    CONSTRAINT roster_ai_usage_identity_check CHECK (
+        btrim(discord_user_id) <> ''
+        AND btrim(operation) <> ''
+        AND btrim(provider) <> ''
+        AND btrim(model) <> ''
+        AND (provider_request_id IS NULL OR btrim(provider_request_id) <> '')
     ),
-    CONSTRAINT roster_live_posts_secret_check CHECK (
-        (webhook_token_ciphertext IS NOT NULL AND octet_length(webhook_token_ciphertext) > 0
-         AND webhook_secret_ref IS NULL)
-        OR (webhook_token_ciphertext IS NULL
-            AND COALESCE(btrim(webhook_secret_ref), '') <> '')
+    CONSTRAINT roster_ai_usage_tokens_check CHECK (
+        input_tokens >= 0
+        AND cached_input_tokens BETWEEN 0 AND input_tokens
+        AND output_tokens >= 0
+        AND reasoning_tokens BETWEEN 0 AND output_tokens
+        AND total_tokens = input_tokens + output_tokens
     ),
-    CONSTRAINT roster_live_posts_hash_check CHECK (
-        last_render_hash IS NULL OR last_render_hash ~ '^[0-9a-f]{64}$'
-    ),
-    CONSTRAINT roster_live_posts_update_state_check CHECK (
-        update_state = ANY (ARRAY['pending'::text, 'updating'::text, 'succeeded'::text, 'failed'::text])
-    ),
-    CONSTRAINT roster_live_posts_timestamps_check CHECK (
-        updated_at >= created_at
-        AND (last_updated_at IS NULL OR last_update_attempt_at IS NOT NULL)
-        AND (update_state <> 'succeeded' OR last_updated_at IS NOT NULL)
-        AND (update_state <> 'failed' OR COALESCE(btrim(last_update_error), '') <> '')
+    CONSTRAINT roster_ai_usage_cost_check CHECK (
+        input_cost_usd >= 0
+        AND output_cost_usd >= 0
+        AND total_cost_usd = input_cost_usd + output_cost_usd
     )
 );
 
-CREATE INDEX IF NOT EXISTS idx_roster_live_posts_view
-    ON public.roster_live_posts (view_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_roster_live_posts_update_state
-    ON public.roster_live_posts (update_state, last_update_attempt_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_roster_ai_usage_provider_request
+    ON public.roster_ai_usage (provider, provider_request_id)
+    WHERE provider_request_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_roster_ai_usage_server_created
+    ON public.roster_ai_usage (server_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_roster_ai_usage_user_created
+    ON public.roster_ai_usage (discord_user_id, created_at DESC);
 
-COMMENT ON TABLE public.roster_live_posts IS
-    'Discord live-message bindings for saved roster views. A binding stores either an application-encrypted webhook token envelope or a secret-manager reference, never plaintext.';
-COMMENT ON COLUMN public.roster_live_posts.webhook_token_ciphertext IS
-    'Opaque application-encrypted webhook token envelope. The database cannot prove encryption; API writers must encrypt before insert.';
-COMMENT ON COLUMN public.roster_live_posts.last_render_hash IS
-    'Lowercase hexadecimal SHA-256 of the canonical rendered payload, used to skip unchanged Discord edits.';
+COMMENT ON TABLE public.roster_ai_usage IS
+    'AI request accounting with provider token usage and exact USD cost components. Prompt/response bodies are intentionally not retained.';
+
+CREATE TABLE IF NOT EXISTS public.roster_recent_access (
+    discord_user_id text NOT NULL,
+    roster_id uuid NOT NULL,
+    server_id text NOT NULL,
+    source text NOT NULL,
+    first_accessed_at timestamp with time zone NOT NULL DEFAULT now(),
+    last_accessed_at timestamp with time zone NOT NULL DEFAULT now(),
+    access_count bigint NOT NULL DEFAULT 1,
+    CONSTRAINT roster_recent_access_pkey PRIMARY KEY (discord_user_id, roster_id),
+    CONSTRAINT roster_recent_access_roster_fkey
+        FOREIGN KEY (roster_id, server_id)
+        REFERENCES public.rosters(id, server_id) ON DELETE CASCADE,
+    CONSTRAINT roster_recent_access_identity_check CHECK (
+        btrim(discord_user_id) <> '' AND btrim(source) <> ''
+    ),
+    CONSTRAINT roster_recent_access_count_check CHECK (access_count > 0),
+    CONSTRAINT roster_recent_access_timestamps_check
+        CHECK (last_accessed_at >= first_accessed_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_roster_recent_access_user_recent
+    ON public.roster_recent_access (discord_user_id, last_accessed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_roster_recent_access_roster_recent
+    ON public.roster_recent_access (roster_id, last_accessed_at DESC);
+
+COMMENT ON TABLE public.roster_recent_access IS
+    'Current per-user roster recency for GET /v2/me/rosters/recent. Writers upsert the timestamp, source, and access count; this is not an audit log.';
+
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION public.ck_valid_roster_membership_draft(
+    roster_ids text[],
+    changes jsonb,
+    roster_watermarks jsonb
+)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE
+STRICT
+AS $$
+DECLARE
+    roster_id text;
+    change jsonb;
+    action text;
+    from_roster_id text;
+    to_roster_id text;
+    watermark_count integer;
+    seen_roster_ids text[] := ARRAY[]::text[];
+BEGIN
+    IF cardinality(roster_ids) NOT BETWEEN 1 AND 8
+       OR array_position(roster_ids, NULL) IS NOT NULL
+       OR jsonb_typeof(changes) <> 'array'
+       OR jsonb_array_length(changes) NOT BETWEEN 1 AND 100
+       OR jsonb_typeof(roster_watermarks) <> 'object' THEN
+        RETURN false;
+    END IF;
+
+    SELECT count(*) INTO watermark_count
+    FROM jsonb_object_keys(roster_watermarks);
+    IF watermark_count <> cardinality(roster_ids) THEN
+        RETURN false;
+    END IF;
+
+    FOREACH roster_id IN ARRAY roster_ids
+    LOOP
+        IF btrim(roster_id) = ''
+           OR roster_id = ANY (seen_roster_ids)
+           OR jsonb_typeof(roster_watermarks -> roster_id) IS DISTINCT FROM 'string'
+           OR (roster_watermarks ->> roster_id) !~ '^[0-9a-f]{64}$' THEN
+            RETURN false;
+        END IF;
+        seen_roster_ids := array_append(seen_roster_ids, roster_id);
+    END LOOP;
+
+    FOR roster_id IN SELECT key FROM jsonb_each(roster_watermarks)
+    LOOP
+        IF NOT roster_id = ANY (roster_ids) THEN
+            RETURN false;
+        END IF;
+    END LOOP;
+
+    FOR change IN SELECT item FROM jsonb_array_elements(changes) AS items(item)
+    LOOP
+        IF jsonb_typeof(change) <> 'object'
+           OR (change - ARRAY['action', 'playerTag', 'fromRosterId', 'toRosterId']) <> '{}'::jsonb
+           OR jsonb_typeof(change -> 'action') IS DISTINCT FROM 'string'
+           OR jsonb_typeof(change -> 'playerTag') IS DISTINCT FROM 'string'
+           OR btrim(change ->> 'playerTag') = ''
+           OR (change ? 'fromRosterId'
+               AND jsonb_typeof(change -> 'fromRosterId') IS DISTINCT FROM 'string')
+           OR (change ? 'toRosterId'
+               AND jsonb_typeof(change -> 'toRosterId') IS DISTINCT FROM 'string') THEN
+            RETURN false;
+        END IF;
+
+        action := change ->> 'action';
+        from_roster_id := NULLIF(btrim(change ->> 'fromRosterId'), '');
+        to_roster_id := NULLIF(btrim(change ->> 'toRosterId'), '');
+
+        IF action = 'add' THEN
+            IF from_roster_id IS NOT NULL
+               OR to_roster_id IS NULL
+               OR NOT to_roster_id = ANY (roster_ids) THEN
+                RETURN false;
+            END IF;
+        ELSIF action = 'remove' THEN
+            IF from_roster_id IS NULL
+               OR NOT from_roster_id = ANY (roster_ids)
+               OR to_roster_id IS NOT NULL THEN
+                RETURN false;
+            END IF;
+        ELSIF action = 'move' THEN
+            IF from_roster_id IS NULL
+               OR to_roster_id IS NULL
+               OR from_roster_id = to_roster_id
+               OR NOT from_roster_id = ANY (roster_ids)
+               OR NOT to_roster_id = ANY (roster_ids) THEN
+                RETURN false;
+            END IF;
+        ELSE
+            RETURN false;
+        END IF;
+    END LOOP;
+
+    RETURN true;
+END;
+$$;
+-- +goose StatementEnd
+
+CREATE TABLE IF NOT EXISTS public.roster_membership_drafts (
+    id uuid DEFAULT uuidv7() NOT NULL,
+    server_id text NOT NULL,
+    created_by_discord_user_id text NOT NULL,
+    roster_ids text[] NOT NULL,
+    changes jsonb NOT NULL,
+    roster_watermarks jsonb NOT NULL,
+    approval_token_hash text NOT NULL,
+    status text NOT NULL DEFAULT 'pending',
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    applied_at timestamp with time zone,
+    applied_by_discord_user_id text,
+    CONSTRAINT roster_membership_drafts_pkey PRIMARY KEY (id),
+    CONSTRAINT roster_membership_drafts_server_fkey
+        FOREIGN KEY (server_id) REFERENCES public.servers(id) ON DELETE CASCADE,
+    CONSTRAINT roster_membership_drafts_approval_token_hash_key
+        UNIQUE (approval_token_hash),
+    CONSTRAINT roster_membership_drafts_owner_check
+        CHECK (btrim(created_by_discord_user_id) <> ''),
+    CONSTRAINT roster_membership_drafts_payload_check CHECK (
+        public.ck_valid_roster_membership_draft(
+            roster_ids, changes, roster_watermarks
+        )
+    ),
+    CONSTRAINT roster_membership_drafts_token_check
+        CHECK (approval_token_hash ~ '^[0-9a-f]{64}$'),
+    CONSTRAINT roster_membership_drafts_status_check CHECK (
+        status = ANY (ARRAY[
+            'pending'::text, 'applied'::text, 'denied'::text, 'expired'::text
+        ])
+    ),
+    CONSTRAINT roster_membership_drafts_applied_check CHECK (
+        (status = 'applied'
+         AND applied_at IS NOT NULL
+         AND COALESCE(btrim(applied_by_discord_user_id), '') <> '')
+        OR (status <> 'applied'
+            AND applied_at IS NULL
+            AND applied_by_discord_user_id IS NULL)
+    ),
+    CONSTRAINT roster_membership_drafts_timestamps_check CHECK (
+        expires_at > created_at
+        AND expires_at <= created_at + INTERVAL '30 minutes'
+        AND (applied_at IS NULL OR (
+            applied_at >= created_at AND applied_at <= expires_at
+        ))
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_roster_membership_drafts_server_created
+    ON public.roster_membership_drafts (server_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_roster_membership_drafts_creator_pending
+    ON public.roster_membership_drafts
+    (created_by_discord_user_id, expires_at)
+    WHERE status = 'pending';
+
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION public.ck_transition_roster_membership_draft()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW IS NOT DISTINCT FROM OLD THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.id IS DISTINCT FROM OLD.id
+       OR NEW.server_id IS DISTINCT FROM OLD.server_id
+       OR NEW.created_by_discord_user_id IS DISTINCT FROM OLD.created_by_discord_user_id
+       OR NEW.roster_ids IS DISTINCT FROM OLD.roster_ids
+       OR NEW.changes IS DISTINCT FROM OLD.changes
+       OR NEW.roster_watermarks IS DISTINCT FROM OLD.roster_watermarks
+       OR NEW.approval_token_hash IS DISTINCT FROM OLD.approval_token_hash
+       OR NEW.expires_at IS DISTINCT FROM OLD.expires_at
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+        RAISE EXCEPTION 'roster membership draft payload and ownership are immutable';
+    END IF;
+
+    IF OLD.status <> 'pending'
+       OR NEW.status NOT IN ('applied', 'denied', 'expired') THEN
+        RAISE EXCEPTION 'roster membership draft permits one terminal transition from pending';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+-- +goose StatementEnd
+
+DROP TRIGGER IF EXISTS roster_membership_drafts_transition
+    ON public.roster_membership_drafts;
+CREATE TRIGGER roster_membership_drafts_transition
+BEFORE UPDATE ON public.roster_membership_drafts
+FOR EACH ROW EXECUTE FUNCTION public.ck_transition_roster_membership_draft();
+
+COMMENT ON TABLE public.roster_membership_drafts IS
+    'Opaque server-owned AI membership-change draft. Custom roster IDs, typed changes, and per-roster digests are frozen; the API row-locks and revalidates before one idempotent terminal transition.';
+COMMENT ON COLUMN public.roster_membership_drafts.approval_token_hash IS
+    'Lowercase SHA-256 of the one-time confirmation token. The plaintext token is never stored.';
+
+-- roster_live_posts was a pre-integration draft with no roster identity or
+-- event revision model. Migration 004 was not deployed, so replace it outright
+-- rather than preserving a second binding contract.
+DROP TABLE IF EXISTS public.roster_live_posts;
+
+CREATE TABLE IF NOT EXISTS public.roster_bindings (
+    id uuid DEFAULT uuidv7() NOT NULL,
+    server_id text NOT NULL,
+    roster_id uuid NOT NULL,
+    view_id uuid NOT NULL,
+    mode text NOT NULL,
+    webhook_id text NOT NULL,
+    webhook_token_ciphertext bytea NOT NULL,
+    message_id text NOT NULL,
+    revision bigint NOT NULL DEFAULT 1,
+    applied_revision bigint NOT NULL DEFAULT 0,
+    last_content_hash text,
+    last_applied_at timestamp with time zone,
+    last_error text,
+    enabled boolean NOT NULL DEFAULT true,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    updated_at timestamp with time zone NOT NULL DEFAULT now(),
+    CONSTRAINT roster_bindings_pkey PRIMARY KEY (id),
+    CONSTRAINT roster_bindings_id_server_key UNIQUE (id, server_id),
+    CONSTRAINT roster_bindings_message_key UNIQUE (server_id, webhook_id, message_id),
+    CONSTRAINT roster_bindings_roster_fkey
+        FOREIGN KEY (roster_id, server_id)
+        REFERENCES public.rosters(id, server_id) ON DELETE CASCADE,
+    CONSTRAINT roster_bindings_view_fkey
+        FOREIGN KEY (view_id, server_id)
+        REFERENCES public.roster_views(id, server_id) ON DELETE CASCADE,
+    CONSTRAINT roster_bindings_view_roster_fkey
+        FOREIGN KEY (view_id, roster_id)
+        REFERENCES public.roster_view_rosters(view_id, roster_id) ON DELETE CASCADE,
+    CONSTRAINT roster_bindings_mode_check CHECK (
+        mode = ANY (ARRAY['signup'::text, 'refreshable'::text, 'live'::text])
+    ),
+    CONSTRAINT roster_bindings_ids_check CHECK (
+        webhook_id ~ '^[0-9]+$' AND message_id ~ '^[0-9]+$'
+    ),
+    CONSTRAINT roster_bindings_secret_check CHECK (
+        octet_length(webhook_token_ciphertext) > 0
+    ),
+    CONSTRAINT roster_bindings_revision_check CHECK (
+        revision >= 1 AND applied_revision BETWEEN 0 AND revision
+    ),
+    CONSTRAINT roster_bindings_hash_check CHECK (
+        last_content_hash IS NULL OR last_content_hash ~ '^[0-9a-f]{64}$'
+    ),
+    CONSTRAINT roster_bindings_applied_check CHECK (
+        applied_revision = 0
+        OR (last_content_hash IS NOT NULL AND last_applied_at IS NOT NULL)
+    ),
+    CONSTRAINT roster_bindings_timestamps_check CHECK (
+        updated_at >= created_at
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_roster_bindings_roster
+    ON public.roster_bindings (roster_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_roster_bindings_view
+    ON public.roster_bindings (view_id, updated_at DESC);
+
+COMMENT ON TABLE public.roster_bindings IS
+    'Canonical managed Discord binding for signup, refreshable, and live roster posts. Snapshot posts are ordinary immutable bot messages and have no row here.';
+COMMENT ON COLUMN public.roster_bindings.webhook_token_ciphertext IS
+    'Opaque versioned encryption envelope. Only the bot-authenticated internal execution route may decrypt it just in time; normal SQL/API responses must omit it.';
+COMMENT ON COLUMN public.roster_bindings.revision IS
+    'Latest desired render revision. applied_revision and last_content_hash advance only after the bot records a successful edit or no-op hash match.';
+
+CREATE TABLE IF NOT EXISTS public.roster_binding_events (
+    id bigint GENERATED BY DEFAULT AS IDENTITY NOT NULL,
+    binding_id uuid NOT NULL,
+    revision bigint NOT NULL,
+    reason text NOT NULL,
+    content_hash text,
+    created_at timestamp with time zone NOT NULL DEFAULT now(),
+    CONSTRAINT roster_binding_events_pkey PRIMARY KEY (id),
+    CONSTRAINT roster_binding_events_binding_revision_key
+        UNIQUE (binding_id, revision),
+    CONSTRAINT roster_binding_events_identity_key
+        UNIQUE (id, binding_id, revision),
+    CONSTRAINT roster_binding_events_binding_fkey
+        FOREIGN KEY (binding_id) REFERENCES public.roster_bindings(id) ON DELETE CASCADE,
+    CONSTRAINT roster_binding_events_revision_check CHECK (revision >= 1),
+    CONSTRAINT roster_binding_events_reason_check CHECK (btrim(reason) <> ''),
+    CONSTRAINT roster_binding_events_hash_check CHECK (
+        content_hash IS NULL OR content_hash ~ '^[0-9a-f]{64}$'
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_roster_binding_events_binding_created
+    ON public.roster_binding_events (binding_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS public.roster_binding_pending_events (
+    binding_id uuid NOT NULL,
+    event_id bigint NOT NULL,
+    revision bigint NOT NULL,
+    updated_at timestamp with time zone NOT NULL DEFAULT now(),
+    CONSTRAINT roster_binding_pending_events_pkey PRIMARY KEY (binding_id),
+    CONSTRAINT roster_binding_pending_events_event_key UNIQUE (event_id),
+    CONSTRAINT roster_binding_pending_events_event_fkey
+        FOREIGN KEY (event_id, binding_id, revision)
+        REFERENCES public.roster_binding_events(id, binding_id, revision)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_roster_binding_pending_events_cursor
+    ON public.roster_binding_pending_events (event_id, binding_id);
+
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION public.ck_validate_roster_binding_event()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    current_revision bigint;
+BEGIN
+    SELECT revision INTO current_revision
+    FROM public.roster_bindings
+    WHERE id = NEW.binding_id
+    FOR UPDATE;
+
+    IF NOT FOUND OR NEW.revision <> current_revision THEN
+        RAISE EXCEPTION 'roster binding event revision must equal the binding revision';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION public.ck_coalesce_roster_binding_event()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    INSERT INTO public.roster_binding_pending_events (
+        binding_id, event_id, revision, updated_at
+    ) VALUES (
+        NEW.binding_id, NEW.id, NEW.revision, NEW.created_at
+    )
+    ON CONFLICT (binding_id) DO UPDATE SET
+        event_id = EXCLUDED.event_id,
+        revision = EXCLUDED.revision,
+        updated_at = EXCLUDED.updated_at
+    WHERE EXCLUDED.revision > public.roster_binding_pending_events.revision;
+
+    RETURN NEW;
+END;
+$$;
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION public.ck_apply_roster_binding_revision()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.revision < OLD.revision OR NEW.applied_revision < OLD.applied_revision THEN
+        RAISE EXCEPTION 'roster binding revisions cannot move backwards';
+    END IF;
+
+    IF NEW.applied_revision > OLD.applied_revision THEN
+        DELETE FROM public.roster_binding_pending_events
+        WHERE binding_id = NEW.id
+          AND revision <= NEW.applied_revision;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+-- +goose StatementEnd
+
+DROP TRIGGER IF EXISTS roster_binding_events_validate
+    ON public.roster_binding_events;
+CREATE TRIGGER roster_binding_events_validate
+BEFORE INSERT ON public.roster_binding_events
+FOR EACH ROW EXECUTE FUNCTION public.ck_validate_roster_binding_event();
+
+DROP TRIGGER IF EXISTS roster_binding_events_coalesce
+    ON public.roster_binding_events;
+CREATE TRIGGER roster_binding_events_coalesce
+AFTER INSERT ON public.roster_binding_events
+FOR EACH ROW EXECUTE FUNCTION public.ck_coalesce_roster_binding_event();
+
+DROP TRIGGER IF EXISTS roster_bindings_apply_revision
+    ON public.roster_bindings;
+CREATE TRIGGER roster_bindings_apply_revision
+BEFORE UPDATE OF revision, applied_revision ON public.roster_bindings
+FOR EACH ROW EXECUTE FUNCTION public.ck_apply_roster_binding_revision();
+
+COMMENT ON TABLE public.roster_binding_events IS
+    'Append-only desired-render events. API transactions increment the binding revision and insert one event; refreshable mode emits only after its manual refresh action.';
+COMMENT ON TABLE public.roster_binding_pending_events IS
+    'One highest-revision pending event per binding. The internal poll endpoint pages by event_id and joins binding/roster/view identity; applied acknowledgements remove satisfied rows.';
 
 CREATE TABLE IF NOT EXISTS public.cwl_bonus_award_rules (
     ruleset_version text NOT NULL,
@@ -676,6 +1211,19 @@ COMMENT ON TABLE public.cwl_bonus_award_recipients IS
 --    OR NOT public.ck_valid_roster_heroes(heroes);
 -- SELECT view_id FROM public.roster_view_rosters
 -- GROUP BY view_id HAVING count(*) <> count(DISTINCT roster_id);
+-- SELECT r.id FROM public.rosters r
+-- WHERE r.public_enabled AND NOT EXISTS (
+--   SELECT 1 FROM public.roster_view_rosters vr
+--   WHERE vr.roster_id = r.id AND vr.view_id = r.public_view_id
+-- );
+-- SELECT id FROM public.roster_membership_drafts
+-- WHERE NOT public.ck_valid_roster_membership_draft(
+--   roster_ids, changes, roster_watermarks
+-- );
+-- SELECT pending.binding_id FROM public.roster_binding_pending_events pending
+-- JOIN public.roster_bindings binding ON binding.id = pending.binding_id
+-- WHERE pending.revision <= binding.applied_revision
+--    OR pending.revision > binding.revision;
 -- SELECT s.id, s.award_slot_count, count(r.player_tag) AS recipients
 -- FROM public.cwl_bonus_award_submissions s
 -- LEFT JOIN public.cwl_bonus_award_recipients r ON r.submission_id = s.id

@@ -123,10 +123,25 @@ Roster member rows retain the canonical player, clan, town hall, trophy, and
 Discord identity snapshot alongside structured heroes, official league
 identity, versioned max percentage, last-online time, and refresh state.
 `roster_views` stores the versioned typed display/query spec, while
-`roster_view_rosters` owns same-server roster references and
-`roster_live_posts` owns Discord message state. Live-post writers must store an
-application-encrypted webhook token envelope or a secret-manager reference;
-there is no plaintext token column.
+`roster_view_rosters` owns same-server roster references. Rosters also carry
+the questionnaire version, public share/view state, shared refresh timestamps,
+and optional Discord role ID required by the server-scoped API.
+
+`roster_metric_cache` stores expiring versioned metric results without changing
+saved view specs. `roster_ai_usage` records provider token/cost accounting
+without prompts or responses, and `roster_recent_access` serves the user's
+current recent-roster list. `roster_membership_drafts` freezes a short-lived AI
+add/remove/move change set, custom roster IDs, and per-roster digests behind a
+hashed approval token; only one terminal apply/deny/expiry transition is
+allowed.
+
+`roster_bindings` is the sole durable Discord binding for signup, refreshable,
+and live posts; snapshot messages have no binding. It stores only an opaque
+application-encrypted webhook-token envelope. Desired changes append
+`roster_binding_events`, which coalesce into one highest-revision
+`roster_binding_pending_events` row per binding. The bot-authenticated internal
+execution route may decrypt the token just in time, and applied acknowledgements
+advance `applied_revision` and remove satisfied pending work.
 
 `cwl_bonus_award_rules`, `cwl_bonus_award_submissions`, and
 `cwl_bonus_award_recipients` are roster-independent domain history even when

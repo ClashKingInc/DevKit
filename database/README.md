@@ -124,7 +124,8 @@ disabled state, links server clans to `basic_clan`, renames `role_rules` to
 `server_roles`, and enforces the current role options. Migration 004 replaces
 roster signup categories/substitutes with bounded question/answer JSON,
 complete typed player snapshots, normalized saved-view references, secure live
-post bindings, and an immutable roster-independent CWL bonus award ledger. Do
+post bindings/events, metric and AI accounting, short-lived membership drafts,
+recent access, and an immutable roster-independent CWL bonus award ledger. Do
 not run
 `rosters.go` against version 4 until its legacy category/substitute projection
 is migrated. The other settings imports retain their existing ownership;

@@ -3803,6 +3803,12 @@ remote database.
   question IDs. Cross-row answer-to-definition validation remains in the API
   transaction because a PostgreSQL CHECK cannot safely query the parent row;
   unknown/deleted question IDs must be rejected or pruned there.
+- `questionnaire_version` starts at one and must advance whenever question
+  identity, validation, or order changes. Public sharing is opt-in through a
+  unique URL-safe `public_share_id` and a same-server `public_view_id`; the API
+  must additionally prove that view is linked to the roster through
+  `roster_view_rosters`. `roster_role_id` stores the optional Discord role
+  snowflake used by roster access and signup flows.
 
 ### Player snapshot and refresh boundary
 
@@ -3820,13 +3826,19 @@ remote database.
   `current_league` is copied to `league_name`, while `league_id` remains NULL
   until a source refresh supplies the official ID. `last_updated` and
   `error_details` are replaced by typed refresh fields.
-- No roster refresh queue or cooldown table was added. Current callers expose
-  explicit roster/member refresh operations but no durable worker claim,
-  next-due, or cross-process cooldown query; per-member `refreshed_at` and
-  `refresh_error`, plus live-post update state, cover the proven persistence
-  requirement without inventing a scheduler.
+- No roster refresh queue was added. Roster-level `last_refreshed_at` and
+  `refresh_started_at` provide the shared 15-minute cooldown and stale-attempt
+  recovery required by the API, while member `refreshed_at`/`refresh_error`
+  retain individual snapshot outcomes. Migration backfills the roster-level
+  watermark from the latest legacy member `last_updated` value before dropping
+  that column.
+- The API/bot caller audit found no missing member snapshot columns after the
+  first migration-004 revision: canonical player/clan/TH/trophy identity,
+  official league ID/name, structured heroes, versioned max percentage,
+  Discord username/display/avatar, last-online time, refresh result, and signup
+  answers are all represented.
 
-### Saved views and Discord live posts
+### Saved views, derived state, and Discord bindings
 
 - `roster_views` is server-scoped and stores name, short intent, explicit
   `spec_version`, a typed JSON spec, original prompt, structured provenance,
@@ -3840,12 +3852,34 @@ remote database.
   duplicate `rosterIds` inside the persisted spec. The API may continue to
   accept/return `spec.rosterIds`, but it must extract/reconstruct them at the
   SQL boundary.
-- `roster_live_posts` binds a view to channel, webhook, and message IDs. It
-  requires exactly one opaque encrypted webhook-token envelope or secret
-  manager reference, accepts no plaintext token column, stores a SHA-256 render
-  hash, and tracks pending/updating/succeeded/failed state with attempt,
-  success, and error timestamps. The API must encrypt before insert and must
-  never return the ciphertext or secret reference in public responses.
+- `roster_metric_cache` stores expiring, versioned per-member metric results
+  keyed by canonical parameter SHA-256; saved view specs remain authoritative.
+  `roster_ai_usage` records provider/model token and exact USD cost components
+  without prompt or response content. `roster_recent_access` is mutable current
+  state for `GET /v2/me/rosters/recent`, not an access audit log.
+- `roster_bindings` replaces the never-deployed `roster_live_posts` draft and
+  is the only managed post contract. It binds one roster and normalized saved
+  view to webhook/message identity in `signup`, `refreshable`, or `live` mode;
+  snapshot output is an ordinary immutable bot message. The caller sends no
+  channel ID, so none is persisted. Only an application-encrypted webhook-token
+  envelope is stored, and normal API responses must omit it.
+- Desired renders increment `revision` and append `roster_binding_events`.
+  `roster_binding_pending_events` coalesces each binding to its highest pending
+  revision for cursor polling; successful acknowledgements monotonically
+  advance `applied_revision`, record the render hash, and remove satisfied
+  work. The bot-authenticated execution route decrypts the token just in time.
+
+### AI membership-change drafts
+
+- `roster_membership_drafts` implements the exact API-owned opaque draft
+  contract: server/user ownership, one to eight custom roster IDs, one to 100
+  typed add/remove/move objects, a same-key per-roster digest map, and only a
+  unique lowercase SHA-256 approval-token hash. Drafts expire within 30 minutes.
+- Payload, ownership, token hash, expiry, and creation time are immutable.
+  A pending row permits one transition to applied, denied, or expired; applied
+  rows require actor/time audit fields, and identical updates remain harmless
+  for idempotent retries. The API must row-lock and revalidate watermarks before
+  applying the frozen change set.
 
 ### CWL bonus history
 
@@ -3886,9 +3920,12 @@ remote database.
   signup question/answer and snapshot fields, scan `last_online` as time, and
   update create/get/list/clone/refresh/member mutations atomically. The API has
   no `/v2/roster/views` implementation even though the Dashboard client calls
-  it, so view CRUD/evaluate, live-post binding/render state, and domain-neutral
-  CWL bonus rules/submission/revision endpoints are required before those UI
-  surfaces can ship. Bonus count computation must use the effective
+  it, so view CRUD/evaluate, public-share hydration, binding/event polling,
+  refresh cooldown, recent access, metric cache, AI usage, membership-draft
+  confirmation, and domain-neutral CWL bonus rules/submission/revision endpoints
+  are required before those UI surfaces can ship. Public responses hydrate
+  normalized roster references into the view spec, and membership draft apply
+  must row-lock, revalidate, and remain idempotent. Bonus count computation must use the effective
   league/war-size base plus wins; placement only gates completed evidence.
 - **ClashKing Dashboard:** preserve roster card-group CRUD. Remove signup
   category management, `MembersByCategory`, category drag/drop, compare-page
@@ -3898,15 +3935,21 @@ remote database.
   (`aiDescription` to SQL `ai_description`, question options normalized to an
   empty array, and camel-case view spec retained inside JSON). Its current
   `RosterViewSpec.rosterIds` remains a public request/response convenience but
-  is normalized into `roster_view_rosters` by the API.
+  is normalized into `roster_view_rosters` by the API. Public share controls
+  use `public_share_id`/`public_enabled`/`public_view_id`; signup form changes
+  carry `questionnaire_version`, and the AI membership review confirms a
+  frozen draft rather than resubmitting mutable client changes.
 - **ClashKing Bot:** the current Go bot calls roster refresh and missing-member
   endpoints without decoding the changed snapshot, so those calls can remain
   once the API queries are migrated. Legacy Python roster/reminder code still
   stores Mongo `sub`/group fields and specifically filters substitute members;
   it is not an SQL migration blocker, but it must stop presenting those
-  concepts before the SQL-backed roster path becomes authoritative. Live-post
-  execution should consume the new binding/state contract and must never log a
-  decrypted webhook token.
+  concepts before the SQL-backed roster path becomes authoritative. Managed
+  binding requests use only `signup`, `refreshable`, or `live`, plus roster,
+  view, webhook, and message identity. Polling consumes the coalesced highest
+  revision, a bot-only endpoint supplies the decrypted token just in time, and
+  acknowledgements report revision/content hash; the bot must never log or
+  persist the decrypted token.
 - **Importer:** `database/migrations/rosters.go` still writes the removed
   category/substitute/aggregate fields. Do not run it against version 4 until
   its projection and upsert are updated for signup questions/answers, official
@@ -3924,13 +3967,19 @@ remote database.
   migration reran successfully against the already-migrated schema and returned
   to version 4.
 - A representative fixture accepted a roster question/answer, full player
-  snapshot, cross-table saved view, and secret-reference live post.
-  Expected-failure writes rejected five signup questions, an array-valued
-  answer envelope, a cross-server view reference, and a live post with neither
-  encrypted token nor secret reference. The corrected CWL revision-ledger
-  fixture and rejection cases are recorded after its final validation below.
-  Direct validator checks also returned false for a question without ID, a hero
-  without name, and a view column without metric ID.
+  snapshot, normalized saved view/public share, metric-cache result, AI usage,
+  recent access, and encrypted signup binding. Three event revisions coalesced
+  to the highest pending revision, and acknowledging that revision removed the
+  pending row. Expected failures rejected an invalid public share, snapshot
+  binding mode, event/binding revision mismatch, backwards applied revision,
+  and inconsistent AI token totals. Schema inspection found no plaintext token
+  column and no `roster_live_posts` table.
+- The membership-draft fixture accepted typed add/remove/move changes across two
+  custom roster IDs, exact digest-key matching, a one-time applied transition,
+  and an identical idempotent replay; a second draft transitioned to denied.
+  Expected failures rejected payload mutation, a second terminal transition,
+  an unknown action, mismatched watermark keys, and a two-hour expiry. Schema
+  inspection found no plaintext approval token column.
 - The corrected CWL fixture accepted one effective 2026 ruleset with base three,
   a placement-eight initial submission whose four wins produced seven slots,
   a normalized recipient, and a revision-two correction with an explicit
@@ -3947,14 +3996,15 @@ remote database.
   `last_online` values. Migration 004 preserved the organizational group,
   copied both league names with NULL IDs, converted both epochs to the same
   correct `2023-11-14 22:13:20+00` timestamp, initialized question/answer/hero
-  JSON to valid empty shapes, and removed all three signup tables plus all six
-  superseded member columns.
+  JSON to valid empty shapes, backfilled each roster's refresh watermark from
+  legacy member `last_updated`, initialized questionnaire/public state, and
+  removed all three signup tables plus all six superseded member columns.
 - Migration 004 has an intentionally failing Down. Removed category,
   substitute, aggregate-hero, and integer timestamp data cannot be recreated
   truthfully; rollback requires a pre-migration backup rather than an empty
   compatibility schema.
 - Before application, back up roster tables, deploy the coordinated API
-  contract, apply 004, run the five embedded integrity queries, refresh member
+  contract, apply 004, run the eight embedded integrity queries, refresh member
   snapshots from authoritative sources, and only then enable Dashboard saved
-  views/live posts or CWL bonus writes. No migration/import was applied outside
+  views/bindings or CWL bonus writes. No migration/import was applied outside
   the disposable local database for this task.
