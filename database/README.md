@@ -121,10 +121,16 @@ The baseline copies existing Timescale settings into typed tables before it
 removes old JSON columns and retired tables. Migration 003 then consolidates
 server configuration into `servers`. It also unifies server logs, adds the
 disabled state, links server clans to `basic_clan`, renames `role_rules` to
-`server_roles`, and enforces the current role options. The four imports copy
-the current Mongo documents into the final tables; `server_settings.go` is the
-source-oriented importer name but writes canonical `servers`. The migrations
-and importers do not truncate or update `player_links`.
+`server_roles`, and enforces the current role options. Migration 004 replaces
+roster signup categories/substitutes with bounded question/answer JSON,
+complete typed player snapshots, normalized saved-view references, secure live
+post bindings, and an immutable roster-independent CWL bonus award ledger. Do
+not run
+`rosters.go` against version 4 until its legacy category/substitute projection
+is migrated. The other settings imports retain their existing ownership;
+`server_settings.go` is the source-oriented importer name but writes canonical
+`servers`. The migrations and importers do not truncate or update
+`player_links`.
 
 See [`../docs/database-workflows.md`](../docs/database-workflows.md) for the
 Goose, backfill, remote-run, and validation workflow.

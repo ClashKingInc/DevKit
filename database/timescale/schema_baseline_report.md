@@ -1,15 +1,18 @@
 # Schema Baseline Coordination Report
 
-This report tracks the coordinated implementation of the V2 cleanup in
-`001_initial_stats.sql`, `002_initial_settings.sql`, and
-`003_v2_schema_cleanup.sql` across DevKit and its consumers. Every task that
+This report tracks the coordinated implementation of the V2 cleanup and the
+new roster architecture in `001_initial_stats.sql`,
+`002_initial_settings.sql`, `003_v2_schema_cleanup.sql`, and
+`004_roster_architecture.sql` across DevKit and its consumers. Every task that
 changes an affected surface must update its section before reporting
 completion.
 
 ## DevKit
 
 Status: the two-file baseline plus migration 003 are applied to the real local
-Timescale database. No production or remote database was touched.
+Timescale database. Migration 004 is committed only after disposable local
+validation and has not been applied to the real local, production, or remote
+database.
 
 Validation:
 
@@ -3771,3 +3774,187 @@ Static coverage and validation:
 - The real local Timescale database passed this disposable validation before
   application and was subsequently migrated to Goose version 3 on 2026-07-27.
   No production/remote database, commit, push, or publication action occurred.
+
+## Migration 004 — roster architecture
+
+Status: authoritative DevKit schema complete and validated in a disposable
+local Timescale database. It is not applied to the real local database or any
+remote database.
+
+### Roster and signup contract
+
+- `roster_groups` remains the server-scoped organizational card-group model,
+  including the existing `rosters.group_id` association. Migration 004 does
+  not conflate it with signup categorization.
+- The superseded signup-category contract is removed:
+  `roster_signup_categories`, `roster_allowed_signup_categories`,
+  `roster_group_allowed_signup_categories`, both
+  `default_signup_category` columns, and member `signup_group`/`substitute`
+  columns. Existing category assignments and substitute flags are intentionally
+  discarded; there is no compatibility alias or fabricated replacement.
+- `rosters.signup_questions` is a required JSON array with at most four
+  configurable definitions. The database requires each object to have a
+  unique stable `id`, nonblank `type` and `label`, boolean `required`, an
+  `options` array of nonblank strings, and a unique nonnegative integer
+  `order`; `ai_description` is the only optional described field. Reserved
+  account/player selector IDs and
+  types are rejected because the selected account is the member row itself.
+- `roster_members.signup_answers` is a JSON object keyed by those stable
+  question IDs. Cross-row answer-to-definition validation remains in the API
+  transaction because a PostgreSQL CHECK cannot safely query the parent row;
+  unknown/deleted question IDs must be rejected or pruned there.
+
+### Player snapshot and refresh boundary
+
+- Canonical member identity/display fields remain: roster/player tag, name,
+  clan tag/name, town hall, trophies, position, Discord user ID/username/avatar,
+  and existing roster status fields. The snapshot adds paired league ID/name,
+  Discord display name, structured hero JSON, versioned `max_percent`, its
+  calculation timestamp, `refreshed_at`, and a bounded `refresh_error` summary.
+- Hero snapshots are arrays of objects requiring `name` and nonnegative
+  `level`, with optional ID, `max_level`, and village. The old aggregate
+  `hero_levels` cannot be losslessly expanded and is discarded; the next
+  authoritative player refresh/import must populate individual heroes.
+- `last_online` changes from epoch `bigint` to `timestamptz`; migration 004
+  accepts both seconds and milliseconds during conversion. Legacy
+  `current_league` is copied to `league_name`, while `league_id` remains NULL
+  until a source refresh supplies the official ID. `last_updated` and
+  `error_details` are replaced by typed refresh fields.
+- No roster refresh queue or cooldown table was added. Current callers expose
+  explicit roster/member refresh operations but no durable worker claim,
+  next-due, or cross-process cooldown query; per-member `refreshed_at` and
+  `refresh_error`, plus live-post update state, cover the proven persistence
+  requirement without inventing a scheduler.
+
+### Saved views and Discord live posts
+
+- `roster_views` is server-scoped and stores name, short intent, explicit
+  `spec_version`, a typed JSON spec, original prompt, structured provenance,
+  creator, timestamps, and a source `data_watermark`. The spec requires the
+  Dashboard builder's `schemaVersion`, nonempty typed column definitions, and
+  optional filter/sort/limit envelopes; `spec_version` must match
+  `spec.schemaVersion`.
+- `roster_view_rosters` is the normalized ordered roster-reference relation.
+  Composite foreign keys prove that a view and every referenced roster belong
+  to the same server, support roster-to-view invalidation, and avoid embedding
+  duplicate `rosterIds` inside the persisted spec. The API may continue to
+  accept/return `spec.rosterIds`, but it must extract/reconstruct them at the
+  SQL boundary.
+- `roster_live_posts` binds a view to channel, webhook, and message IDs. It
+  requires exactly one opaque encrypted webhook-token envelope or secret
+  manager reference, accepts no plaintext token column, stores a SHA-256 render
+  hash, and tracks pending/updating/succeeded/failed state with attempt,
+  success, and error timestamps. The API must encrypt before insert and must
+  never return the ciphertext or secret reference in public responses.
+
+### CWL bonus history
+
+- The domain is server-scoped but roster-independent: product navigation can
+  expose it at **Roster > CWL Bonuses** without making a roster own the data.
+  None of the award tables references reloadable `cwl_groups`; official CWL
+  rows may provide source evidence to an API transaction but cannot cascade or
+  rewrite the audit ledger.
+- `cwl_bonus_award_rules` is an immutable effective-dated ruleset keyed by
+  version, league ID, and war size. It stores the base award slots. A changed
+  rule is a new version, and a submission trigger proves the season is inside
+  the selected rule interval and its snapshotted base matches that rule.
+- `cwl_bonus_award_submissions` is an immutable revision ledger. It snapshots
+  season, clan, league ID/name, war size, final placement, wars won, base slots,
+  and final `award_slot_count`; the formula is base plus wins. Final placement
+  is required completion evidence and is not part of that formula. A differing
+  final count requires `override_reason`; revisions after one require a
+  `supersedes_id` for the immediately prior same-scope revision plus a
+  `correction_reason`. Unique per-server idempotency keys make retries return
+  the existing submission rather than append duplicates.
+- Recipients are normalized in immutable `cwl_bonus_award_recipients`, rather
+  than JSONB. The current product needs stable order and the existing CWL
+  history surface reads by player tag, so the child relation gives uniqueness,
+  indexed player history, and per-selection actor/time audit. Its insert trigger
+  locks the submission, requires recipients be inserted in the submission's
+  creation transaction, and rejects a position/count beyond the snapshotted
+  award slots. Later inserts/updates/deletes cannot alter an old recipient set;
+  corrections append a new submission and recipient set.
+
+### Exact downstream contract effects
+
+- **ClashKing API:** `internal/routes/rosters.go` currently selects and writes
+  `substitute`, `signup_group`, `hero_levels`, `current_league`, epoch
+  `last_online`, the three removed category tables, and both allowed-category
+  join tables. Applying 004 before changing those queries would break roster
+  reads/writes. Remove all four `/v2/roster-signup-category` handlers, remove
+  substitute/signup-category fields from `internal/models/v2/rosters.go`, add
+  signup question/answer and snapshot fields, scan `last_online` as time, and
+  update create/get/list/clone/refresh/member mutations atomically. The API has
+  no `/v2/roster/views` implementation even though the Dashboard client calls
+  it, so view CRUD/evaluate, live-post binding/render state, and domain-neutral
+  CWL bonus rules/submission/revision endpoints are required before those UI
+  surfaces can ship. Bonus count computation must use the effective
+  league/war-size base plus wins; placement only gates completed evidence.
+- **ClashKing Dashboard:** preserve roster card-group CRUD. Remove signup
+  category management, `MembersByCategory`, category drag/drop, compare-page
+  category moves, substitute rendering, and allowed-category/default-category
+  fields. The in-progress builder types already use `RosterSignupQuestion`,
+  `signupAnswers`, and `RosterViewSpec`; align the API wire keys deliberately
+  (`aiDescription` to SQL `ai_description`, question options normalized to an
+  empty array, and camel-case view spec retained inside JSON). Its current
+  `RosterViewSpec.rosterIds` remains a public request/response convenience but
+  is normalized into `roster_view_rosters` by the API.
+- **ClashKing Bot:** the current Go bot calls roster refresh and missing-member
+  endpoints without decoding the changed snapshot, so those calls can remain
+  once the API queries are migrated. Legacy Python roster/reminder code still
+  stores Mongo `sub`/group fields and specifically filters substitute members;
+  it is not an SQL migration blocker, but it must stop presenting those
+  concepts before the SQL-backed roster path becomes authoritative. Live-post
+  execution should consume the new binding/state contract and must never log a
+  decrypted webhook token.
+- **Importer:** `database/migrations/rosters.go` still writes the removed
+  category/substitute/aggregate fields. Do not run it against version 4 until
+  its projection and upsert are updated for signup questions/answers, official
+  league identity, structured heroes, versioned max percentage, Discord
+  display data, and typed refresh timestamps. A legacy source cannot infer
+  league IDs, hero detail, or max-calculation provenance, so those fields must
+  remain NULL/empty until an authoritative refresh rather than receiving
+  invented values.
+
+### Validation and rollout implications
+
+- Goose validation passes. A fresh disposable Timescale database reported
+  migrations 001-004 pending, applied all four, and reported version 4. After
+  deleting only the disposable Goose bookkeeping row for version 4, the exact
+  migration reran successfully against the already-migrated schema and returned
+  to version 4.
+- A representative fixture accepted a roster question/answer, full player
+  snapshot, cross-table saved view, and secret-reference live post.
+  Expected-failure writes rejected five signup questions, an array-valued
+  answer envelope, a cross-server view reference, and a live post with neither
+  encrypted token nor secret reference. The corrected CWL revision-ledger
+  fixture and rejection cases are recorded after its final validation below.
+  Direct validator checks also returned false for a question without ID, a hero
+  without name, and a view column without metric ID.
+- The corrected CWL fixture accepted one effective 2026 ruleset with base three,
+  a placement-eight initial submission whose four wins produced seven slots,
+  a normalized recipient, and a revision-two correction with an explicit
+  six-slot override/correction reason and new recipient set. Schema inspection
+  found zero foreign keys from the three award tables to any reloadable CWL
+  group table. Expected failures rejected rule/submission mutation, an eighth
+  recipient against seven slots, a non-overridden wrong formula, an out-of-date
+  ruleset, a revision that skipped the immediately prior submission, and a
+  recipient appended after its submission transaction. A submission plus
+  recipient committed successfully when written together in one transaction.
+- A separate populated version-3 fixture contained an organizational roster
+  group, all three signup-category relations, substitute/group assignments,
+  aggregate heroes, league names, and both second/millisecond epoch
+  `last_online` values. Migration 004 preserved the organizational group,
+  copied both league names with NULL IDs, converted both epochs to the same
+  correct `2023-11-14 22:13:20+00` timestamp, initialized question/answer/hero
+  JSON to valid empty shapes, and removed all three signup tables plus all six
+  superseded member columns.
+- Migration 004 has an intentionally failing Down. Removed category,
+  substitute, aggregate-hero, and integer timestamp data cannot be recreated
+  truthfully; rollback requires a pre-migration backup rather than an empty
+  compatibility schema.
+- Before application, back up roster tables, deploy the coordinated API
+  contract, apply 004, run the five embedded integrity queries, refresh member
+  snapshots from authoritative sources, and only then enable Dashboard saved
+  views/live posts or CWL bonus writes. No migration/import was applied outside
+  the disposable local database for this task.

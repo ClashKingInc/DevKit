@@ -112,6 +112,29 @@ verified linked player. Existing links remain `NULL` until the app launch flow u
 `player_links.tag` as their only identity, timestamp writes with the database clock, and cascade
 on unlink; neither table carries a user or account identifier.
 
+## Roster Architecture
+
+`roster_groups` organizes roster cards and is independent of the removed signup
+category model. A roster has at most four configurable `signup_questions`; the
+selected account is implicit in its `roster_members` row, whose
+`signup_answers` object is keyed by stable question IDs.
+
+Roster member rows retain the canonical player, clan, town hall, trophy, and
+Discord identity snapshot alongside structured heroes, official league
+identity, versioned max percentage, last-online time, and refresh state.
+`roster_views` stores the versioned typed display/query spec, while
+`roster_view_rosters` owns same-server roster references and
+`roster_live_posts` owns Discord message state. Live-post writers must store an
+application-encrypted webhook token envelope or a secret-manager reference;
+there is no plaintext token column.
+
+`cwl_bonus_award_rules`, `cwl_bonus_award_submissions`, and
+`cwl_bonus_award_recipients` are roster-independent domain history even when
+the product links them from the roster screen. Effective rules provide the
+league/war-size base; an immutable submission snapshots that base, wars won,
+final slot count, and completion placement. Corrections append a superseding
+revision and a new normalized recipient set.
+
 ## Mobile Push State
 
 Mobile push state is current-state SQL data, not a hypertable. `mobile_push_devices`
