@@ -784,6 +784,7 @@ class CKSegmentedControl<T> extends StatelessWidget {
     this.height,
     this.density = CKControlDensity.standard,
     this.color,
+    this.labelStyle,
   }) : assert(values.length == labels.length),
        assert(icons == null || icons.length == labels.length);
 
@@ -795,6 +796,7 @@ class CKSegmentedControl<T> extends StatelessWidget {
   final double? height;
   final CKControlDensity density;
   final Color? color;
+  final TextStyle? labelStyle;
 
   @override
   Widget build(BuildContext context) {
@@ -804,126 +806,390 @@ class CKSegmentedControl<T> extends StatelessWidget {
     }
 
     final colorScheme = Theme.of(context).colorScheme;
-    final indicatorDuration = CKMotion.durationOf(context, CKMotion.standard);
-    final scaledLabelHeight = MediaQuery.textScalerOf(context).scale(14);
-    final extraTextHeight = scaledLabelHeight > 14
-        ? (scaledLabelHeight - 14) * 1.4
+    final indicatorDuration = CKMotion.durationOf(context, CKMotion.fast);
+    final resolvedLabelStyle =
+        labelStyle ??
+        Theme.of(context).textTheme.labelLarge ??
+        CKTypography.of(context, CKTextRole.compactLabel);
+    final effectiveFontSize = resolvedLabelStyle.fontSize ?? 14;
+    final scaledLabelHeight = MediaQuery.textScalerOf(
+      context,
+    ).scale(effectiveFontSize);
+    final extraTextHeight = scaledLabelHeight > effectiveFontSize
+        ? (scaledLabelHeight - effectiveFontSize) * 1.4
         : 0.0;
-    final resolvedHeight = height ?? density.minimumHeight + extraTextHeight;
+    final minHeight = density.minimumHeight + extraTextHeight;
+    final resolvedHeight = height == null || height! < minHeight
+        ? minHeight
+        : height!;
+    final accent = color ?? colorScheme.primary;
+    final foreground = color != null && color!.computeLuminance() > 0.65
+        ? color!
+        : colorScheme.onSurface;
+    final mutedForeground = foreground.withValues(alpha: 0.78);
+    final hasAccent = color != null;
+    final background = hasAccent
+        ? accent.withValues(alpha: 0.10)
+        : colorScheme.surfaceContainerHighest.withValues(alpha: 0.45);
+    final selectedFill = hasAccent
+        ? accent.withValues(alpha: 0.18)
+        : colorScheme.surfaceContainerHighest.withValues(alpha: 0.74);
+    final outline = hasAccent
+        ? accent.withValues(alpha: CKOpacity.borderStrong)
+        : colorScheme.outlineVariant.withValues(alpha: CKOpacity.borderStrong);
 
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(CKRadius.pill),
-        border: Border.all(
-          color: colorScheme.outlineVariant.withValues(alpha: CKOpacity.border),
+    return SizedBox(
+      height: resolvedHeight,
+      child: Material(
+        color: background,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(CKRadius.chip),
+          side: BorderSide(color: outline),
         ),
-      ),
-      child: SizedBox(
-        height: resolvedHeight < density.minimumHeight
-            ? density.minimumHeight
-            : resolvedHeight,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final segmentWidth = constraints.maxWidth / labels.length;
-            const inset = 5.0;
+        clipBehavior: Clip.antiAlias,
+        child: Padding(
+          padding: const EdgeInsets.all(3),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final segmentWidth = constraints.maxWidth / labels.length;
 
-            return Stack(
-              children: [
-                AnimatedPositioned(
-                  duration: indicatorDuration,
-                  curve: CKMotion.standardCurve,
-                  left: selectedIndex * segmentWidth + inset,
-                  top: inset,
-                  bottom: inset,
-                  width: segmentWidth - inset * 2,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: colorScheme.surfaceContainerHighest.withValues(
-                        alpha: 0.72,
+              return Stack(
+                children: [
+                  AnimatedPositionedDirectional(
+                    duration: indicatorDuration,
+                    curve: CKMotion.standardCurve,
+                    start: selectedIndex * segmentWidth,
+                    top: 0,
+                    bottom: 0,
+                    width: segmentWidth,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: selectedFill,
+                        borderRadius: BorderRadius.circular(CKRadius.chip - 2),
                       ),
-                      borderRadius: BorderRadius.circular(CKRadius.pill),
                     ),
                   ),
-                ),
-                Row(
-                  children: [
-                    for (var index = 0; index < labels.length; index++)
-                      Expanded(
-                        child: Semantics(
-                          button: true,
-                          selected: index == selectedIndex,
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(CKRadius.pill),
-                            splashFactory: NoSplash.splashFactory,
-                            overlayColor: const WidgetStatePropertyAll(
-                              Colors.transparent,
-                            ),
-                            onTap: () => onChanged(values[index]),
-                            child: Center(
-                              child: AnimatedDefaultTextStyle(
-                                duration: CKMotion.durationOf(
-                                  context,
-                                  CKMotion.fast,
-                                ),
-                                curve: CKMotion.standardCurve,
-                                style:
-                                    CKTypography.of(
-                                      context,
-                                      CKTextRole.compactLabel,
-                                    ).copyWith(
-                                      color: index == selectedIndex
-                                          ? colorScheme.onSurface
-                                          : colorScheme.onSurface.withValues(
-                                              alpha: 0.76,
-                                            ),
-                                      fontWeight: index == selectedIndex
-                                          ? FontWeight.w700
-                                          : FontWeight.w600,
-                                      height: 1,
+                  Row(
+                    children: [
+                      for (var index = 0; index < labels.length; index++)
+                        Expanded(
+                          child: Semantics(
+                            button: true,
+                            selected: index == selectedIndex,
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(
+                                CKRadius.chip - 2,
+                              ),
+                              splashFactory: NoSplash.splashFactory,
+                              overlayColor: const WidgetStatePropertyAll(
+                                Colors.transparent,
+                              ),
+                              onTap: index == selectedIndex
+                                  ? null
+                                  : () => onChanged(values[index]),
+                              child: Center(
+                                child: AnimatedDefaultTextStyle(
+                                  duration: CKMotion.durationOf(
+                                    context,
+                                    CKMotion.fast,
+                                  ),
+                                  curve: CKMotion.standardCurve,
+                                  style: resolvedLabelStyle.copyWith(
+                                    color: index == selectedIndex
+                                        ? foreground
+                                        : mutedForeground,
+                                    fontWeight: index == selectedIndex
+                                        ? FontWeight.w800
+                                        : FontWeight.w700,
+                                    height: 1,
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
                                     ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    if (icons != null) ...[
-                                      IconTheme(
-                                        data: IconThemeData(
-                                          size: 16,
-                                          color: index == selectedIndex
-                                              ? colorScheme.onSurface
-                                              : colorScheme.onSurface
-                                                    .withValues(alpha: 0.76),
-                                        ),
-                                        child: SizedBox.square(
-                                          dimension: 16,
-                                          child: FittedBox(
-                                            fit: BoxFit.contain,
-                                            child: icons![index],
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        if (icons != null) ...[
+                                          IconTheme(
+                                            data: IconThemeData(
+                                              size: 17,
+                                              color: index == selectedIndex
+                                                  ? foreground
+                                                  : mutedForeground,
+                                            ),
+                                            child: SizedBox.square(
+                                              dimension: 17,
+                                              child: FittedBox(
+                                                fit: BoxFit.contain,
+                                                child: icons![index],
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: CKSpacing.xs),
+                                        ],
+                                        Flexible(
+                                          child: Text(
+                                            labels[index],
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
                                           ),
                                         ),
-                                      ),
-                                      const SizedBox(width: CKSpacing.xs),
-                                    ],
-                                    Flexible(
-                                      child: Text(
-                                        labels[index],
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
+                                      ],
                                     ),
-                                  ],
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                  ],
-                ),
+                    ],
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Horizontal rail for pill-shaped controls or summary chips.
+class CKSummaryChipRail extends StatelessWidget {
+  const CKSummaryChipRail({
+    super.key,
+    required this.children,
+    this.padding = const EdgeInsets.symmetric(horizontal: CKSpacing.lg),
+    this.alignment = WrapAlignment.center,
+    this.scrollable = true,
+  });
+
+  final List<Widget> children;
+  final EdgeInsetsGeometry padding;
+  final WrapAlignment alignment;
+  final bool scrollable;
+
+  @override
+  Widget build(BuildContext context) {
+    if (children.isEmpty) return const SizedBox.shrink();
+
+    if (scrollable) {
+      return Padding(
+        padding: padding,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          physics: const BouncingScrollPhysics(),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var index = 0; index < children.length; index++) ...[
+                children[index],
+                if (index < children.length - 1)
+                  const SizedBox(width: CKSpacing.xs + 2),
               ],
-            );
-          },
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: padding,
+      child: Wrap(
+        alignment: alignment,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: CKSpacing.xs + 2,
+        runSpacing: CKSpacing.xs + 2,
+        children: children,
+      ),
+    );
+  }
+}
+
+/// Horizontal-scroll rail for tappable filter chips.
+class CKFilterChipRail extends StatelessWidget {
+  const CKFilterChipRail({
+    super.key,
+    required this.children,
+    this.padding = const EdgeInsets.symmetric(horizontal: CKSpacing.lg),
+  });
+
+  final List<Widget> children;
+  final EdgeInsetsGeometry padding;
+
+  @override
+  Widget build(BuildContext context) {
+    if (children.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: padding,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (var index = 0; index < children.length; index++) ...[
+              children[index],
+              if (index < children.length - 1)
+                const SizedBox(width: CKSpacing.sm),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Tappable filter pill for horizontal filter rows.
+class CKFilterChip extends StatelessWidget {
+  const CKFilterChip({
+    super.key,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.icon,
+    this.color,
+  });
+
+  final String label;
+  final IconData? icon;
+  final bool selected;
+  final VoidCallback onTap;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final accent = color ?? colorScheme.primary;
+
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(CKRadius.pill),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(CKRadius.pill),
+        splashFactory: NoSplash.splashFactory,
+        onTap: onTap,
+        child: Container(
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 11),
+          decoration: BoxDecoration(
+            color: selected
+                ? accent.withValues(alpha: 0.16)
+                : colorScheme.surfaceContainerHighest.withValues(alpha: 0.38),
+            borderRadius: BorderRadius.circular(CKRadius.pill),
+            border: Border.all(
+              color: selected
+                  ? accent.withValues(alpha: 0.42)
+                  : colorScheme.outlineVariant.withValues(alpha: 0.28),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (icon != null) ...[
+                Icon(
+                  icon,
+                  size: 15,
+                  color: selected ? accent : colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: CKSpacing.xs + 1),
+              ],
+              Text(
+                label,
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: colorScheme.onSurface,
+                  fontWeight: selected ? FontWeight.w900 : FontWeight.w700,
+                  height: 1,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Read-only stat pill with an optional tap target.
+class CKSummaryChip extends StatelessWidget {
+  const CKSummaryChip({
+    super.key,
+    required this.label,
+    required this.value,
+    this.color,
+    this.icon,
+    this.onTap,
+    this.selected = false,
+  });
+
+  final String label;
+  final String value;
+  final Color? color;
+  final IconData? icon;
+  final VoidCallback? onTap;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final accent = color ?? colorScheme.primary;
+    final backgroundAlpha = selected ? 0.18 : 0.12;
+    final borderAlpha = selected ? 0.38 : 0.20;
+
+    final child = Container(
+      height: 30,
+      padding: const EdgeInsets.symmetric(horizontal: CKSpacing.sm),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: backgroundAlpha),
+        borderRadius: BorderRadius.circular(CKRadius.pill),
+        border: Border.all(color: accent.withValues(alpha: borderAlpha)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon ?? Icons.circle_rounded,
+            size: icon == null ? 10 : 14,
+            color: accent,
+          ),
+          const SizedBox(width: CKSpacing.xs + 1),
+          Text(
+            value,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              color: colorScheme.onSurface,
+              fontWeight: FontWeight.w900,
+              height: 1,
+            ),
+          ),
+          const SizedBox(width: CKSpacing.xs - 1),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w700,
+              height: 1,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (onTap == null) return child;
+
+    return Tooltip(
+      message: label,
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(CKRadius.pill),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(CKRadius.pill),
+          splashFactory: NoSplash.splashFactory,
+          onTap: onTap,
+          child: child,
         ),
       ),
     );

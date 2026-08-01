@@ -170,6 +170,11 @@ void main() {
     ) async {
       await tester.pumpWidget(
         MaterialApp(
+          theme: ThemeData(
+            textTheme: const TextTheme(
+              labelLarge: TextStyle(fontSize: 16, letterSpacing: 0),
+            ),
+          ),
           builder: (context, child) => MediaQuery(
             data: MediaQuery.of(
               context,
@@ -192,6 +197,67 @@ void main() {
         tester.getSize(find.byType(CKSegmentedControl<int>)).height,
         greaterThan(44),
       );
+      final planStyle = tester
+          .widget<AnimatedDefaultTextStyle>(
+            find
+                .ancestor(
+                  of: find.text('Plan'),
+                  matching: find.byType(AnimatedDefaultTextStyle),
+                )
+                .first,
+          )
+          .style;
+      expect(planStyle.fontSize, 16);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('filter and summary chips render in shared rails', (
+      tester,
+    ) async {
+      var selected = false;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                CKFilterChipRail(
+                  children: [
+                    CKFilterChip(
+                      label: 'Linked',
+                      icon: Icons.link,
+                      selected: selected,
+                      onTap: () => selected = true,
+                    ),
+                    CKFilterChip(
+                      label: 'Bookmarked',
+                      icon: Icons.bookmark,
+                      selected: !selected,
+                      onTap: () => selected = false,
+                    ),
+                  ],
+                ),
+                const CKSummaryChipRail(
+                  scrollable: false,
+                  children: [
+                    CKSummaryChip(
+                      label: 'attacks',
+                      value: '12',
+                      icon: Icons.sports_martial_arts,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Linked'));
+
+      expect(selected, isTrue);
+      expect(find.byType(CKFilterChip), findsNWidgets(2));
+      expect(find.byType(CKSummaryChip), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
