@@ -115,23 +115,19 @@ on unlink; neither table carries a user or account identifier.
 ## Mobile Push State
 
 Mobile push state is current-state SQL data, not a hypertable. `mobile_push_devices`
-stores one active APNs/FCM token per user, device, provider, and environment with a unique
-token hash for idempotent registration. Store the encrypted token in `token_ciphertext` and
-use `token_hash` only for lookup/dedupe.
+stores one APNs/FCM token per `(user_id, device_id, provider, environment)` with a unique
+token hash for idempotent registration. Store the encrypted token in `token_ciphertext`,
+use `token_hash` only for lookup/dedupe, and use `enabled` as the sole device-wide master
+notification switch.
 
-`mobile_notification_preferences` stores the device-wide master switch, enabled notification
-types, and account filters. `mobile_notification_subscriptions` stores per-type/player details.
-Announcement delivery must join these preferences and require the `announcements` type
-instead of broadcasting to every registered token.
+`mobile_notification_preferences` stores per-device/per-environment notification-category
+booleans and up to three reminder timings expressed as integer minutes from 1 through 2,820.
+`mobile_notification_accounts` stores the user-wide enabled player accounts; each row is
+authoritatively sourced from either a verified player link or a player bookmark. Clan
+notifications derive from those players' current clans rather than a separate clan toggle.
+Delivery requires an enabled device with an authorized or provisional OS authorization
+status, followed by the relevant per-category preference.
 
 `admin_posts.presentation_type` distinguishes block-based articles from hosted interactive
 stories. `show_on_home` controls carousel inclusion, while `pinned_on_home` keeps a post
 ahead of newer home posts without hiding those newer posts.
-
-`mobile_war_subscriptions` stores the selected clan notification preferences per device.
-Tracking workers should query enabled subscriptions by `clan_tag` when war or CWL events
-arrive.
-
-`mobile_live_activities` stores active iOS ActivityKit push tokens and their war identity.
-Workers should only push rows with `status = 'active'` and should update `last_payload_hash`
-after successful delivery to avoid repeated Dynamic Island score updates.

@@ -27,11 +27,12 @@ func runClanRecords(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 	defer pool.Close()
-	cp, err := migrateutil.LoadCheckpoint(cfg, "clan_records")
-	if err != nil {
+	plan := migrateutil.OneShotPlan{
+		ResetSQL: []string{`TRUNCATE TABLE public.clan_records`},
+	}
+	if err := migrateutil.StartOneShot(ctx, pool, plan); err != nil {
 		return err
 	}
-
 	rows := make([][]any, 0, cfg.BatchSize)
 	flush := func() error {
 		if len(rows) == 0 {
@@ -47,10 +48,9 @@ func runClanRecords(ctx context.Context, cfg migrateutil.Config) error {
 		{Key: "tag", Value: 1},
 		{Key: "records", Value: 1},
 	}
-	seen, err := migrateutil.StreamByObjectIDProjected(
+	seen, err := migrateutil.StreamAllProjected(
 		ctx,
 		cfg,
-		cp,
 		"all_clans_records_id",
 		mongoClient.Database("looper").Collection("all_clans"),
 		projection,
@@ -84,6 +84,9 @@ func runClanRecords(ctx context.Context, cfg migrateutil.Config) error {
 		flush,
 	)
 	if err != nil {
+		return err
+	}
+	if err := migrateutil.FinishOneShot(ctx, pool, plan); err != nil {
 		return err
 	}
 	fmt.Printf("clan_records: scanned_docs=%d\n", seen)

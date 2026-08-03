@@ -26,8 +26,19 @@ func runPlayerOnlineEvents(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 	defer pool.Close()
-	cp, err := migrateutil.LoadCheckpoint(cfg, "player_online_events")
-	if err != nil {
+	plan := migrateutil.OneShotPlan{
+		ResetSQL: []string{`TRUNCATE TABLE public.player_online_events`},
+		DropIndexes: []string{
+			`DROP INDEX IF EXISTS public.idx_player_online_events_clan_time`,
+			`DROP INDEX IF EXISTS public.idx_player_online_events_player_time`,
+			`DROP INDEX IF EXISTS public.player_online_events_seen_at_idx`,
+		},
+		CreateIndexes: []string{
+			`CREATE INDEX idx_player_online_events_clan_time ON public.player_online_events (clan_tag, seen_at DESC)`,
+			`CREATE INDEX idx_player_online_events_player_time ON public.player_online_events (tag, seen_at DESC)`,
+		},
+	}
+	if err := migrateutil.StartOneShot(ctx, pool, plan); err != nil {
 		return err
 	}
 	rows := make([][]any, 0, cfg.BatchSize)
@@ -39,7 +50,7 @@ func runPlayerOnlineEvents(ctx context.Context, cfg migrateutil.Config) error {
 		rows = rows[:0]
 		return err
 	}
-	seen, err := migrateutil.StreamByObjectID(ctx, cfg, cp, "last_online_id", mongoClient.Database("looper").Collection("last_online"), func(doc bson.M) (bool, error) {
+	seen, err := migrateutil.StreamAll(ctx, cfg, "last_online", mongoClient.Database("looper").Collection("last_online"), func(doc bson.M) (bool, error) {
 		meta := migrateutil.Map(doc["meta"])
 		seenAt, ok := migrateutil.Time(doc["timestamp"])
 		if !ok || meta == nil {
@@ -54,11 +65,13 @@ func runPlayerOnlineEvents(ctx context.Context, cfg migrateutil.Config) error {
 			seenAt,
 			tag,
 			clanTag,
-			migrateutil.Int(firstOnlineAny(meta["townhall_level"], meta["townhall"], meta["th"])),
 		})
 		return len(rows) >= cfg.BatchSize, nil
 	}, flush)
 	if err != nil {
+		return err
+	}
+	if err := migrateutil.FinishOneShot(ctx, pool, plan); err != nil {
 		return err
 	}
 	fmt.Printf("player_online_events: scanned_docs=%d\n", seen)
@@ -75,19 +88,19 @@ func flushPlayerOnlineRows(ctx context.Context, pool interface {
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `
 		CREATE TEMP TABLE _ck_player_online_events (
-			seen_at timestamptz, tag text, clan_tag text, townhall_level smallint
+			seen_at timestamptz, tag text, clan_tag text
 		) ON COMMIT DROP
 	`); err != nil {
 		return err
 	}
 	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"_ck_player_online_events"}, []string{
-		"seen_at", "tag", "clan_tag", "townhall_level",
+		"seen_at", "tag", "clan_tag",
 	}, pgx.CopyFromRows(rows)); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO player_online_events (seen_at, tag, clan_tag, townhall_level)
-		SELECT seen_at, tag, clan_tag, townhall_level
+		INSERT INTO player_online_events (seen_at, tag, clan_tag)
+		SELECT seen_at, tag, clan_tag
 		FROM _ck_player_online_events
 		WHERE tag <> '' AND clan_tag <> ''
 	`); err != nil {

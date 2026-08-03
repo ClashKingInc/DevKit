@@ -1,11 +1,23 @@
 package migrateutil
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+type recordingExecutor struct {
+	statements []string
+}
+
+func (r *recordingExecutor) Exec(_ context.Context, statement string, _ ...any) (pgconn.CommandTag, error) {
+	r.statements = append(r.statements, statement)
+	return pgconn.CommandTag{}, nil
+}
 
 func TestMigrationEnvPathPrefersRepositoryRoot(t *testing.T) {
 	repositoryRoot := t.TempDir()
@@ -68,5 +80,67 @@ func TestBadgeTokenStripsAssetURL(t *testing.T) {
 
 	if got := BadgeToken(fullURL); got != want {
 		t.Fatalf("BadgeToken() = %q, want %q", got, want)
+	}
+}
+
+func TestLoadCheckpointRejectsNonClanWarImporters(t *testing.T) {
+	if _, err := LoadCheckpoint(Config{Root: t.TempDir()}, "player_stats"); err == nil {
+		t.Fatal("LoadCheckpoint() allowed player_stats; only clan_wars may be resumable")
+	}
+}
+
+func TestOneShotLifecycleDropsThenResetsAndBuildsOnlyWhenFinished(t *testing.T) {
+	exec := &recordingExecutor{}
+	plan := OneShotPlan{
+		DropIndexes:   []string{"drop-a", "drop-b"},
+		ResetSQL:      []string{"clear-child", "clear-parent"},
+		CreateIndexes: []string{"create-a", "create-b"},
+	}
+
+	if err := StartOneShot(context.Background(), exec, plan); err != nil {
+		t.Fatal(err)
+	}
+	wantStart := []string{"drop-a", "drop-b", "clear-child", "clear-parent"}
+	if len(exec.statements) != len(wantStart) {
+		t.Fatalf("StartOneShot statements = %v, want %v", exec.statements, wantStart)
+	}
+	for index := range wantStart {
+		if exec.statements[index] != wantStart[index] {
+			t.Fatalf("StartOneShot statements = %v, want %v", exec.statements, wantStart)
+		}
+	}
+
+	if err := FinishOneShot(context.Background(), exec, plan); err != nil {
+		t.Fatal(err)
+	}
+	wantAll := append(wantStart, "create-a", "create-b")
+	if len(exec.statements) != len(wantAll) {
+		t.Fatalf("full lifecycle statements = %v, want %v", exec.statements, wantAll)
+	}
+	for index := range wantAll {
+		if exec.statements[index] != wantAll[index] {
+			t.Fatalf("full lifecycle statements = %v, want %v", exec.statements, wantAll)
+		}
+	}
+}
+
+func TestClanWarsCheckpointLivesAtRepositoryRoot(t *testing.T) {
+	repositoryRoot := t.TempDir()
+	databaseRoot := filepath.Join(repositoryRoot, "database")
+	if err := os.MkdirAll(databaseRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := LoadCheckpoint(Config{Root: databaseRoot}, "clan_wars")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkpoint.Set("clan_war_id", "64b000000000000000000001"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(repositoryRoot, "migration_state.json")); err != nil {
+		t.Fatalf("repository-root migration_state.json was not written: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(databaseRoot, "migration_state.json")); !os.IsNotExist(err) {
+		t.Fatalf("database/migration_state.json should not be used, stat err=%v", err)
 	}
 }

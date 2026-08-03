@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -45,6 +47,43 @@ type Progress struct {
 	total      int64
 	start      time.Time
 	lastRender time.Time
+}
+
+// OneShotPlan describes the destructive fresh-start lifecycle used by every
+// importer except clan_wars. Primary keys, unique constraints, and foreign keys
+// intentionally stay in place; only secondary indexes that make bulk loading
+// slower are delayed until the complete source stream has committed.
+type OneShotPlan struct {
+	ResetSQL      []string
+	DropIndexes   []string
+	CreateIndexes []string
+}
+
+type SQLExecutor interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+func StartOneShot(ctx context.Context, exec SQLExecutor, plan OneShotPlan) error {
+	for _, statement := range plan.DropIndexes {
+		if _, err := exec.Exec(ctx, statement); err != nil {
+			return fmt.Errorf("drop one-shot import index: %w", err)
+		}
+	}
+	for _, statement := range plan.ResetSQL {
+		if _, err := exec.Exec(ctx, statement); err != nil {
+			return fmt.Errorf("reset one-shot import target: %w", err)
+		}
+	}
+	return nil
+}
+
+func FinishOneShot(ctx context.Context, exec SQLExecutor, plan OneShotPlan) error {
+	for _, statement := range plan.CreateIndexes {
+		if _, err := exec.Exec(ctx, statement); err != nil {
+			return fmt.Errorf("build one-shot import index: %w", err)
+		}
+	}
+	return nil
 }
 
 func Main(script string, fn func(context.Context, Config) error) {
@@ -147,8 +186,27 @@ func TimescalePool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 	return pgxpool.NewWithConfig(ctx, poolCfg)
 }
 
+func RequireEmptyTables(ctx context.Context, pool interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, tables ...string) error {
+	for _, table := range tables {
+		var populated bool
+		query := "SELECT EXISTS (SELECT 1 FROM " + pgx.Identifier{table}.Sanitize() + " LIMIT 1)"
+		if err := pool.QueryRow(ctx, query).Scan(&populated); err != nil {
+			return fmt.Errorf("check %s before one-shot import: %w", table, err)
+		}
+		if populated {
+			return fmt.Errorf("%s is not empty; clear only this import target before restarting the one-shot migration", table)
+		}
+	}
+	return nil
+}
+
 func LoadCheckpoint(cfg Config, script string) (*Checkpoint, error) {
-	path := filepath.Join(cfg.Root, "migration_state.json")
+	if script != "clan_wars" {
+		return nil, fmt.Errorf("%s does not support checkpoints; only clan_wars is resumable", script)
+	}
+	path := filepath.Join(filepath.Dir(cfg.Root), "migration_state.json")
 	cp := &Checkpoint{
 		path:   path,
 		script: script,
@@ -210,21 +268,26 @@ func (c *Checkpoint) Clear() error {
 }
 
 func loadLegacyCheckpoint(cfg Config, cp *Checkpoint) (*Checkpoint, error) {
-	path := filepath.Join(cfg.Root, ".migration_state", cp.script+".json")
-	payload, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
+	for _, path := range []string{
+		filepath.Join(filepath.Dir(cfg.Root), ".migration_state", cp.script+".json"),
+		filepath.Join(cfg.Root, ".migration_state", cp.script+".json"),
+	} {
+		payload, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(bytes.TrimSpace(payload)) == 0 {
+			return cp, nil
+		}
+		if err := json.Unmarshal(payload, &cp.data); err != nil {
+			return nil, err
+		}
+		cp.state[cp.script] = cp.jsonValue()
 		return cp, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	if len(bytes.TrimSpace(payload)) == 0 {
-		return cp, nil
-	}
-	if err := json.Unmarshal(payload, &cp.data); err != nil {
-		return nil, err
-	}
-	cp.state[cp.script] = cp.jsonValue()
 	return cp, nil
 }
 
@@ -266,65 +329,48 @@ func checkpointDataFromJSONValue(script string, value any) (map[string]string, e
 
 func singleValueCheckpointKey(script string) string {
 	switch script {
-	case "basic_clans":
-		return "clan_tags_id"
-	case "clan_change_history":
-		return "all_clans_changes_id"
-	case "clan_records":
-		return "all_clans_records_id"
 	case "clan_wars":
 		return "clan_war_id"
-	case "cwl_groups":
-		return "cwl_group_id"
-	case "join_leave_history":
-		return "join_leave_id"
-	case "legend_history_snapshots":
-		return "legend_history_id"
-	case "player_history_events":
-		return "player_history_id"
-	case "player_online_events":
-		return "last_online_id"
-	case "player_stats":
-		return "player_stats_id"
 	default:
 		return ""
 	}
 }
 
-func StreamByObjectID(
+func StreamAll(
 	ctx context.Context,
 	cfg Config,
-	cp *Checkpoint,
-	cpKey string,
+	label string,
 	collection *mongo.Collection,
 	handle func(bson.M) (bool, error),
 	flush func() error,
 ) (int64, error) {
-	return StreamByObjectIDProjected(ctx, cfg, cp, cpKey, collection, nil, handle, flush)
+	return streamCollection(ctx, cfg, label, collection, nil, handle, flush)
 }
 
-func StreamByObjectIDProjected(
+func StreamAllProjected(
 	ctx context.Context,
 	cfg Config,
-	cp *Checkpoint,
-	cpKey string,
+	label string,
 	collection *mongo.Collection,
 	projection any,
 	handle func(bson.M) (bool, error),
 	flush func() error,
 ) (int64, error) {
-	var filter any = bson.D{}
-	if raw := cp.Get(cpKey); raw != "" {
-		id, err := bson.ObjectIDFromHex(raw)
-		if err != nil {
-			return 0, fmt.Errorf("bad checkpoint %s=%q: %w", cpKey, raw, err)
-		}
-		filter = bson.D{{Key: "_id", Value: bson.D{{Key: "$gt", Value: id}}}}
-	}
+	return streamCollection(ctx, cfg, label, collection, projection, handle, flush)
+}
+
+func streamCollection(
+	ctx context.Context,
+	cfg Config,
+	label string,
+	collection *mongo.Collection,
+	projection any,
+	handle func(bson.M) (bool, error),
+	flush func() error,
+) (int64, error) {
+	filter := bson.D{}
 	opts := options.Find().
-		SetSort(bson.D{{Key: "_id", Value: 1}}).
-		SetBatchSize(int32(min(cfg.BatchSize, 10000))).
-		SetNoCursorTimeout(true)
+		SetBatchSize(int32(min(cfg.BatchSize, 10000)))
 	if projection != nil {
 		opts.SetProjection(projection)
 	}
@@ -334,9 +380,8 @@ func StreamByObjectIDProjected(
 	}
 	defer cursor.Close(ctx)
 
-	progress := NewProgress(ctx, cfg, collection, cpKey, filter)
+	progress := NewProgress(ctx, cfg, collection, label, filter)
 	var seen int64
-	var checkpointID string
 	defer func() {
 		progress.Done(seen)
 	}()
@@ -350,18 +395,9 @@ func StreamByObjectIDProjected(
 			return seen, err
 		}
 		seen++
-		if id, ok := doc["_id"].(bson.ObjectID); ok {
-			checkpointID = id.Hex()
-		}
 		if ready {
 			if err := flush(); err != nil {
 				return seen, err
-			}
-			if checkpointID != "" {
-				if err := cp.Set(cpKey, checkpointID); err != nil {
-					return seen, err
-				}
-				checkpointID = ""
 			}
 		}
 		progress.Tick(seen)
@@ -372,23 +408,18 @@ func StreamByObjectIDProjected(
 	if err := cursor.Err(); err != nil {
 		return seen, err
 	}
-	if checkpointID != "" {
-		if err := flush(); err != nil {
-			return seen, err
-		}
-		if err := cp.Set(cpKey, checkpointID); err != nil {
-			return seen, err
-		}
+	if err := flush(); err != nil {
+		return seen, err
 	}
 	return seen, nil
 }
 
-func NewProgress(ctx context.Context, cfg Config, collection *mongo.Collection, label string, filter any) *Progress {
+func NewProgress(ctx context.Context, cfg Config, collection *mongo.Collection, label string, _ any) *Progress {
 	total := cfg.LimitDocs
 	if total <= 0 {
 		countCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
-		count, err := collection.CountDocuments(countCtx, filter)
+		count, err := collection.EstimatedDocumentCount(countCtx)
 		if err == nil {
 			total = count
 		}
@@ -595,10 +626,10 @@ func repoRoot() (string, error) {
 		return "", err
 	}
 	for {
-		if _, err := os.Stat(filepath.Join(wd, "timescale", "001_initial.sql")); err == nil {
+		if _, err := os.Stat(filepath.Join(wd, "timescale", "001_initial_stats.sql")); err == nil {
 			return wd, nil
 		}
-		if _, err := os.Stat(filepath.Join(wd, "..", "timescale", "001_initial.sql")); err == nil {
+		if _, err := os.Stat(filepath.Join(wd, "..", "timescale", "001_initial_stats.sql")); err == nil {
 			return filepath.Clean(filepath.Join(wd, "..")), nil
 		}
 		parent := filepath.Dir(wd)

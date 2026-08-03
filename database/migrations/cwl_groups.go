@@ -25,24 +25,28 @@ func runCWLGroups(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 	defer pool.Close()
-	cp, err := migrateutil.LoadCheckpoint(cfg, "cwl_groups")
-	if err != nil {
+	if _, err := pool.Exec(ctx, `
+		ALTER TABLE public.cwl_standings
+			DROP CONSTRAINT IF EXISTS cwl_standings_group_clan_fkey;
+		ALTER TABLE public.cwl_group_members
+			DROP CONSTRAINT IF EXISTS cwl_group_members_group_clan_fkey,
+			DROP CONSTRAINT IF EXISTS cwl_group_members_pkey;
+		ALTER TABLE public.cwl_group_clans
+			DROP CONSTRAINT IF EXISTS cwl_group_clans_cwl_id_fkey,
+			DROP CONSTRAINT IF EXISTS cwl_group_clans_pkey;
+		ALTER TABLE public.cwl_groups
+			DROP CONSTRAINT IF EXISTS cwl_groups_pkey;
+		DROP INDEX IF EXISTS public.idx_cwl_groups_season_league;
+		DROP INDEX IF EXISTS public.idx_cwl_groups_season_league_size;
+		DROP INDEX IF EXISTS public.idx_cwl_group_clans_clan_cwl;
+		DROP INDEX IF EXISTS public.idx_cwl_group_members_cwl_id;
+		TRUNCATE TABLE
+			public.cwl_standings,
+			public.cwl_group_members,
+			public.cwl_group_clans,
+			public.cwl_groups;
+	`); err != nil {
 		return err
-	}
-	if cp.Get("cwl_group_id") != "" {
-		return fmt.Errorf("one-shot CWL import found an existing checkpoint; clear the CWL tables and checkpoint before restarting")
-	}
-	var targetHasRows bool
-	if err := pool.QueryRow(ctx, `
-		SELECT EXISTS (SELECT 1 FROM cwl_groups LIMIT 1)
-		    OR EXISTS (SELECT 1 FROM cwl_group_clans LIMIT 1)
-		    OR EXISTS (SELECT 1 FROM cwl_group_members LIMIT 1)
-		    OR EXISTS (SELECT 1 FROM cwl_standings LIMIT 1)
-	`).Scan(&targetHasRows); err != nil {
-		return err
-	}
-	if targetHasRows {
-		return fmt.Errorf("one-shot CWL import requires empty CWL tables")
 	}
 	mongoClient, err := migrateutil.StatsClient(ctx, cfg)
 	if err != nil {
@@ -84,7 +88,7 @@ func runCWLGroups(ctx context.Context, cfg migrateutil.Config) error {
 		docsInBatch = 0
 		return err
 	}
-	seen, err := migrateutil.StreamByObjectID(ctx, streamCfg, cp, "cwl_group_id", mongoClient.Database("looper").Collection("cwl_group"), func(doc bson.M) (bool, error) {
+	seen, err := migrateutil.StreamAll(ctx, streamCfg, "cwl_group", mongoClient.Database("looper").Collection("cwl_group"), func(doc bson.M) (bool, error) {
 		data := migrateutil.Map(doc["data"])
 		if data == nil {
 			return false, nil
@@ -174,7 +178,7 @@ func runCWLGroups(ctx context.Context, cfg migrateutil.Config) error {
 		},
 		{
 			name: "cwl_group_members_pkey",
-			sql:  "ALTER TABLE cwl_group_members ADD CONSTRAINT cwl_group_members_pkey PRIMARY KEY (cwl_id, tag)",
+			sql:  "ALTER TABLE cwl_group_members ADD CONSTRAINT cwl_group_members_pkey PRIMARY KEY (tag, cwl_id)",
 		},
 		{
 			name: "cwl_group_members_group_clan_fkey",
@@ -197,12 +201,8 @@ func runCWLGroups(ctx context.Context, cfg migrateutil.Config) error {
 			sql:  "CREATE INDEX IF NOT EXISTS idx_cwl_group_clans_clan_cwl ON cwl_group_clans (clan_tag, cwl_id DESC)",
 		},
 		{
-			name: "idx_cwl_group_members_player_tag",
-			sql:  "CREATE INDEX IF NOT EXISTS idx_cwl_group_members_player_tag ON cwl_group_members (tag, cwl_id)",
-		},
-		{
-			name: "idx_cwl_group_members_group_clan",
-			sql:  "CREATE INDEX IF NOT EXISTS idx_cwl_group_members_group_clan ON cwl_group_members (cwl_id, clan_tag)",
+			name: "idx_cwl_group_members_cwl_id",
+			sql:  "CREATE INDEX IF NOT EXISTS idx_cwl_group_members_cwl_id ON cwl_group_members (cwl_id)",
 		},
 	} {
 		startedAt := time.Now()

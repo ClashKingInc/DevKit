@@ -27,11 +27,10 @@ func runJoinLeaveHistory(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 	defer pool.Close()
-	cp, err := migrateutil.LoadCheckpoint(cfg, "join_leave_history")
-	if err != nil {
+	if err := dropJoinLeaveIndexes(ctx, pool); err != nil {
 		return err
 	}
-	if err := dropJoinLeaveIndexes(ctx, pool); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE TABLE public.join_leave_history`); err != nil {
 		return err
 	}
 	rows := make([][]any, 0, cfg.BatchSize)
@@ -43,7 +42,7 @@ func runJoinLeaveHistory(ctx context.Context, cfg migrateutil.Config) error {
 		rows = rows[:0]
 		return err
 	}
-	seen, err := migrateutil.StreamByObjectID(ctx, cfg, cp, "join_leave_id", mongoClient.Database("looper").Collection("join_leave_history"), func(doc bson.M) (bool, error) {
+	seen, err := migrateutil.StreamAll(ctx, cfg, "join_leave_history", mongoClient.Database("looper").Collection("join_leave_history"), func(doc bson.M) (bool, error) {
 		eventTime, ok := migrateutil.Time(doc["time"])
 		if !ok {
 			return false, nil
@@ -73,15 +72,11 @@ func runJoinLeaveHistory(ctx context.Context, cfg migrateutil.Config) error {
 		})
 		return len(rows) >= cfg.BatchSize, nil
 	}, flush)
-	reindexErr := createJoinLeaveIndexes(ctx, pool)
 	if err != nil {
-		if reindexErr != nil {
-			return fmt.Errorf("%w; also failed to recreate join_leave_history indexes: %v", err, reindexErr)
-		}
 		return err
 	}
-	if reindexErr != nil {
-		return reindexErr
+	if err := createJoinLeaveIndexes(ctx, pool); err != nil {
+		return err
 	}
 	fmt.Printf("join_leave_history: scanned_docs=%d\n", seen)
 	return nil
