@@ -344,7 +344,19 @@ func StreamAll(
 	handle func(bson.M) (bool, error),
 	flush func() error,
 ) (int64, error) {
-	return streamCollection(ctx, cfg, label, collection, nil, handle, flush)
+	return streamCollection(ctx, cfg, label, collection, bson.D{}, nil, handle, flush)
+}
+
+func StreamAllFiltered(
+	ctx context.Context,
+	cfg Config,
+	label string,
+	collection *mongo.Collection,
+	filter bson.D,
+	handle func(bson.M) (bool, error),
+	flush func() error,
+) (int64, error) {
+	return streamCollection(ctx, cfg, label, collection, filter, nil, handle, flush)
 }
 
 func StreamAllProjected(
@@ -356,7 +368,7 @@ func StreamAllProjected(
 	handle func(bson.M) (bool, error),
 	flush func() error,
 ) (int64, error) {
-	return streamCollection(ctx, cfg, label, collection, projection, handle, flush)
+	return streamCollection(ctx, cfg, label, collection, bson.D{}, projection, handle, flush)
 }
 
 func streamCollection(
@@ -364,11 +376,11 @@ func streamCollection(
 	cfg Config,
 	label string,
 	collection *mongo.Collection,
+	filter bson.D,
 	projection any,
 	handle func(bson.M) (bool, error),
 	flush func() error,
 ) (int64, error) {
-	filter := bson.D{}
 	opts := options.Find().
 		SetBatchSize(int32(min(cfg.BatchSize, 10000)))
 	if projection != nil {

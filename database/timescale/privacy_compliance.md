@@ -6,7 +6,7 @@ The DevKit Timescale schemas define personal-data stores used by the ClashKing m
 
 - `auth_users`, `auth_discord_tokens`, `auth_refresh_tokens`, `auth_password_reset_tokens`, and `api_tokens` contain account, authentication, and token metadata.
 - `player_links`, `player_upgrades`, `player_upgrade_preferences`, `user_settings`, `user_bookmarks`, `user_recent_searches`, `search_groups`, rosters, reminders, tickets, and moderation records can link Discord users to Clash of Clans player tags, app activity, preferences, and server workflows.
-- `mobile_push_devices`, `mobile_notification_preferences`, and `mobile_notification_accounts` contain device identifiers, encrypted push tokens, enabled player-account selections, and notification preferences.
+- `mobile_push_devices` and `mobile_notification_accounts` contain device identifiers, encrypted push tokens, per-device notification preferences, and user-wide enabled player-account selections.
 - `admin_users`, `admin_sessions`, and `admin_audit_events` contain administrator identity, session, IP address, user-agent, action, and resource data.
 
 ## Required schema practices

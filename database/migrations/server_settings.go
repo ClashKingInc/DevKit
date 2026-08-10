@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"clashking_devkit_database_migrations/migrateutil"
 	"github.com/jackc/pgx/v5"
@@ -17,11 +18,16 @@ func main() {
 }
 
 func runServerSettings(ctx context.Context, cfg migrateutil.Config) error {
-	client, err := migrateutil.StaticClient(ctx, cfg)
+	staticClient, err := migrateutil.StaticClient(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	defer client.Disconnect(ctx)
+	defer staticClient.Disconnect(ctx)
+	statsClient, err := migrateutil.StatsClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer statsClient.Disconnect(ctx)
 	pool, err := migrateutil.TimescalePool(ctx, cfg)
 	if err != nil {
 		return err
@@ -41,9 +47,12 @@ func runServerSettings(ctx context.Context, cfg migrateutil.Config) error {
 	if err := migrateutil.StartOneShot(ctx, pool, plan); err != nil {
 		return err
 	}
-	db := client.Database("usafam")
+	db := staticClient.Database("usafam")
 	roleModes, err := migrateServerDocuments(ctx, cfg, pool, db.Collection("server"))
 	if err != nil {
+		return err
+	}
+	if err := migrateServerCommandActivity(ctx, pool, statsClient.Database("new_looper").Collection("command_stats")); err != nil {
 		return err
 	}
 	roleCollections := []struct {
@@ -68,6 +77,64 @@ func runServerSettings(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 	return migrateutil.FinishOneShot(ctx, pool, plan)
+}
+
+// migrateServerCommandActivity fills the canonical server activity timestamp
+// from historical bot command usage. Servers with no matching command remain
+// NULL and are therefore treated as inactive by the 90-day consumers.
+func migrateServerCommandActivity(ctx context.Context, exec migrateutil.SQLExecutor, collection *mongo.Collection) error {
+	cursor, err := collection.Aggregate(ctx, bson.A{
+		bson.M{"$match": bson.M{"server": bson.M{"$ne": nil}, "time": bson.M{"$ne": nil}}},
+		bson.M{"$group": bson.M{"_id": "$server", "last_command_at": bson.M{"$max": "$time"}}},
+	})
+	if err != nil {
+		return fmt.Errorf("aggregate server command activity: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	updated := int64(0)
+	for cursor.Next(ctx) {
+		var row bson.M
+		if err := cursor.Decode(&row); err != nil {
+			return err
+		}
+		serverID := migrateutil.String(row["_id"])
+		lastCommandAt, ok := mongoCommandTime(row["last_command_at"])
+		if serverID == "" || !ok {
+			continue
+		}
+		result, err := exec.Exec(ctx, `
+			UPDATE public.servers
+			SET last_command_at = $2
+			WHERE id = $1
+		`, serverID, lastCommandAt)
+		if err != nil {
+			return err
+		}
+		updated += result.RowsAffected()
+	}
+	if err := cursor.Err(); err != nil {
+		return err
+	}
+	fmt.Printf("server_settings.command_activity: updated_servers=%d\n", updated)
+	return nil
+}
+
+func mongoCommandTime(value any) (time.Time, bool) {
+	switch typed := value.(type) {
+	case int32:
+		return time.Unix(int64(typed), 0).UTC(), typed > 0
+	case int64:
+		return time.Unix(typed, 0).UTC(), typed > 0
+	case float64:
+		return time.Unix(int64(typed), 0).UTC(), typed > 0
+	case bson.DateTime:
+		return typed.Time().UTC(), true
+	case time.Time:
+		return typed.UTC(), true
+	default:
+		return time.Time{}, false
+	}
 }
 
 func migrateServerDocuments(ctx context.Context, cfg migrateutil.Config, pool interface {

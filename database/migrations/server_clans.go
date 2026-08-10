@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"clashking_devkit_database_migrations/migrateutil"
 	"github.com/jackc/pgx/v5"
@@ -33,7 +34,7 @@ func runServerClans(ctx context.Context, cfg migrateutil.Config) error {
 			`DELETE FROM public.server_logs WHERE clan_tag IS NOT NULL`,
 			`DELETE FROM public.server_roles WHERE clan_tag IS NOT NULL`,
 			`DELETE FROM public.server_clans`,
-			`DELETE FROM public.clan_categories`,
+			`DELETE FROM public.server_clan_categories`,
 		},
 		DropIndexes: []string{
 			`DROP INDEX IF EXISTS public.idx_server_logs_scope`,
@@ -98,23 +99,31 @@ func writeServerClanDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 	if !trackedClanExists {
 		return nil
 	}
+	addedAt, err := serverClanAddedAt(doc)
+	if err != nil {
+		return fmt.Errorf("server clan %s on server %s: %w", clanTag, serverID, err)
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO servers (id, name) VALUES ($1, $1) ON CONFLICT DO NOTHING`, serverID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO server_clans (tag, server_id, abbreviation, updated_at)
-		VALUES ($1, $2, $3, now())
+		INSERT INTO server_clans (tag, server_id, abbreviation, added_at, updated_at)
+		VALUES ($1, $2, $3, $4, now())
 		ON CONFLICT (tag, server_id) DO UPDATE SET
 			abbreviation = EXCLUDED.abbreviation,
+			added_at = EXCLUDED.added_at,
 			updated_at = now()
-	`, clanTag, serverID, migrateutil.String(doc["abbreviation"])); err != nil {
+	`, clanTag, serverID, migrateutil.String(doc["abbreviation"]), addedAt); err != nil {
 		return err
 	}
 	logs := migrateutil.Map(doc["logs"])
 	if category := migrateutil.String(doc["category"]); category != "" {
 		if _, err := tx.Exec(ctx, `
 			WITH selected AS (
-				INSERT INTO clan_categories (server_id, name) VALUES ($1, $3)
+				INSERT INTO server_clan_categories (server_id, name, position)
+				SELECT $1, $3, COALESCE(max(position) + 1, 0)
+				FROM server_clan_categories
+				WHERE server_id = $1
 				ON CONFLICT (server_id, name) DO UPDATE SET name = EXCLUDED.name
 				RETURNING id
 			)
@@ -179,6 +188,14 @@ func writeServerClanDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		}
 	}
 	return nil
+}
+
+func serverClanAddedAt(doc bson.M) (time.Time, error) {
+	objectID, ok := doc["_id"].(bson.ObjectID)
+	if !ok {
+		return time.Time{}, fmt.Errorf("_id must be a Mongo ObjectID")
+	}
+	return objectID.Timestamp().UTC(), nil
 }
 
 func canonicalClanLogType(value string) string {

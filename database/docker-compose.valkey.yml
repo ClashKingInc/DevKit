@@ -13,7 +13,7 @@ services:
     volumes:
       - valkey-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "VALKEYCLI_AUTH=\"$${VALKEY_PASSWORD}\" valkey-cli ping | grep -q PONG"]
+      test: ["CMD-SHELL", "valkey-cli --no-auth-warning -a \"$${VALKEY_PASSWORD}\" ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 10

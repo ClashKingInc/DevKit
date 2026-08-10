@@ -1,18 +1,16 @@
 # Schema Baseline Coordination Report
 
-This report tracks the coordinated implementation of the V2 cleanup and the
-new roster architecture in `001_initial_stats.sql`,
-`002_initial_settings.sql`, `003_v2_schema_cleanup.sql`, and
-`004_roster_architecture.sql` across DevKit and its consumers. Every task that
-changes an affected surface must update its section before reporting
-completion.
+This report preserves the historical coordination record for the V2 cleanup
+and roster architecture. The migration numbers mentioned below describe the
+pre-squash implementation; their final schema has since been consolidated into
+`001_initial_stats.sql` and `002_initial_settings.sql`. The superseded numbered
+files no longer exist.
 
 ## DevKit
 
-Status: the two-file baseline plus migration 003 are applied to the real local
-Timescale database. Migration 004 is committed only after disposable local
-validation and has not been applied to the real local, production, or remote
-database.
+Status: the authoritative fresh-install schema is the two-file baseline. The
+historical application notes below remain evidence of how its final contracts
+were derived and validated.
 
 Validation:
 
@@ -82,13 +80,15 @@ Validation:
 
 #### 5. `auth_users`
 
-- Keep `user_id`, `email_hash`, `discord_user_id`, `password_hash`,
+- Keep `user_id`, `provider`, `email_hash`, `password_hash`,
   `created_at`, and `updated_at`.
 - Drop `display_name`, `verified`, `profile`, and `data`.
 - Retain `username` for email accounts, but remove its empty-string default and
   `NOT NULL` constraint so Discord accounts do not require stored profile data.
-- Clear existing `username` values for rows with `discord_user_id`; the
-  single-provider constraint already prevents an email identity on those rows.
+- Discord accounts use their Discord snowflake as `user_id`; email accounts
+  use generated UUIDs. The required `provider` column records `discord` or
+  `email`, and provider-specific checks enforce the corresponding nullable
+  fields.
 - Do not add replacement columns for Discord username, display name, avatar, or
   locale. The API must fetch those values live using the relevant device's
   stored Discord OAuth credentials.
@@ -156,9 +156,10 @@ Validation:
 - Persistent Tracking task `019f94ba-972b-7171-ad08-0f4f86796eef` owns the
   Valkey replacement and remains available for future cleanup decisions.
 
-#### 9. `clan_categories`
+#### 9. `server_clan_categories`
 
-- Preserve the `clan_categories` table shape and all existing keys and
+- Preserve the category table shape and keys while naming it
+  `server_clan_categories` to match its server-settings ownership.
   constraints.
 - Replace `server_clans_category_id_fkey` with the same foreign key plus
   `ON DELETE SET NULL`, so deleting a category automatically uncategorizes
@@ -455,15 +456,15 @@ Affected routes and behavior:
   and its 30-day signed expiry, then commits. A missing/already-consumed token
   or replacement insert/commit failure leaves no partial rotation because the
   transaction rolls back.
-- Every `auth_users` lookup and write now uses only `user_id`, nullable
-  `email_hash`, nullable `discord_user_id`, nullable email-account `username`,
+- Every `auth_users` lookup and write now uses only `user_id`, required
+  `provider`, nullable `email_hash`, nullable email-account `username`,
   nullable `password_hash`, `created_at`, and `updated_at`. The internal typed
   `authUser` scanner/persistence helpers enforce the single-provider identity
   constraint and never read or write `display_name`, `verified`, `profile`, or
   `data`.
 - Email registration/login/password behavior still uses typed
-  `username`/`password_hash`. Discord authentication persists only
-  `user_id`/`discord_user_id`; `GET /v2/me` and `GET /v2/auth/me` require the
+  `username`/`password_hash`. Discord authentication persists its snowflake as
+  `user_id` with `provider=discord`; `GET /v2/me` and `GET /v2/auth/me` require the
   current device ID, select that device's encrypted Discord OAuth credential,
   fetch the live Discord profile, and reject an identity mismatch. There is no
   stored profile fallback or cross-device credential fallback.
@@ -1775,16 +1776,18 @@ Outcome:
   is unchanged; the App no longer fabricates a dated Town Hall or league-tier
   comparison from an unsupported history source.
 - Notification preferences now use the exact camelCase GET/PUT contract:
-  `deviceEnabled`, eight explicit category booleans, integer
-  `reminderTimings`, request-only `accountTags`, and response
-  `{playerTag,source}` accounts. The master is cached locally as false by
-  default but is never stored as a preference; PUT updates the retained
-  `mobile_push_devices.enabled` row atomically with preferences/accounts.
+  the device-specific `notificationsEnabled` master, eight explicit category booleans,
+  integer `reminderTimings`, and
+  response `{playerTag,source,active}` accounts. Category PUTs do not rewrite
+  account selection; the dedicated per-player endpoint inserts or deletes one
+  `mobile_notification_accounts` row at a time.
 - Disabling delivery no longer unregisters or deletes the FCM token. Enabling
   first obtains permission/registers the current device, then saves
-  `deviceEnabled=true`; explicit unregister/logout retains its existing delete
+  `notificationsEnabled=true`; explicit unregister/logout retains its existing delete
   behavior.
-- The UI exposes exactly the eight final categories. Events and war state are
+- The notification settings UI exposes exactly the eight final categories,
+  while linked and bookmarked player cards own their per-account switches.
+  Events and war state are
   single booleans, war attacks has no mode picker, and the only nested control
   is war reminder timing. Reminder values are integer minutes, limited to
   three, with the existing 15/30-minute and 1–47-hour choices.
@@ -1840,14 +1843,14 @@ Files:
 
 Capital Raid cache contract:
 
-- With the default `botclans.snapshot_prefix` of `botclans:snapshot:`, the
+- With the default `trackedclans.snapshot_prefix` of `trackedclans:snapshot:`, the
   compressed previous response key is
-  `botclans:snapshot:raid:<clanTag>`.
+  `trackedclans:snapshot:raid:<clanTag>`.
 - The internal replacement-cleanup participant set is
-  `botclans:snapshot:raid-members:<clanTag>`. It exists only to enumerate the
+  `trackedclans:snapshot:raid-members:<clanTag>`. It exists only to enumerate the
   prior response's mappings without a JSON-search module.
 - Each reverse lookup is a Valkey string at
-  `botclans:snapshot:raid-member:<playerTag>` whose value is the owning clan
+  `trackedclans:snapshot:raid-member:<playerTag>` whose value is the owning clan
   tag. Empty and duplicate participant tags are omitted.
 - The response value is the raw Clash API JSON encoded with
   `utils.Compress`, the same `github.com/golang/snappy` block encoding used by
@@ -2525,8 +2528,9 @@ Importer environment-path correction:
   IDs, and derived names/icons/URLs are omitted.
 - Capital history retains only source documents dated Tuesday and stores each
   accepted snapshot under the immediately preceding Monday date. Other
-  Capital days are skipped. `ranking_history.legends` and
-  `ranking_history.league_history` remain explicitly ignored. The separate
+  Capital days are skipped. `ranking_history.legends` remains ignored;
+  `ranking_history.league_history` is outside this leaderboard importer and is
+  handled separately by migration 017's temporary CWL staging workflow. The separate
   `player_leaderboard` and `clan_leaderboard` collections are also not loaded:
   their documents contain seasonal `{rank, season, tag, type, value}` facts
   but no snapshot date, location, or full official response item, so they
@@ -3058,9 +3062,9 @@ task was started. App and Bot have no active typed caller of these responses.
 - `mobile_notification_preferences` is reduced to the natural identity
   `(user_id, device_id, environment)`, eight explicit booleans, and
   `reminder_timings integer[] NOT NULL DEFAULT '{}'`. The booleans are
-  `league_battles_enabled`, `war_attacks_enabled`, `war_state_enabled`,
+  `legend_attacks_enabled`, `legend_defenses_enabled`, `war_attacks_enabled`, `war_state_enabled`,
   `war_reminders_enabled`, `events_enabled`, `announcements_enabled`,
-  `upgrade_finishes_enabled`, and `monthly_support_enabled`; each defaults to
+  and `monthly_support_enabled`; each defaults to
   false. There is no preference-level master switch.
 - The reminder check allows at most three non-null integer minute values, each
   from 1 through 2,820 inclusive. Legacy `Nh`/`Nm` values are converted while
@@ -3672,8 +3676,7 @@ Static coverage and validation:
   null. This forum/thread extension applies only to Logs, Reminders, and
   Autoboards; no other selector changes.
 - Refresh scheduling uses positive `interval_minutes` and requires all send
-  schedule columns null. Send scheduling requires an IANA
-  `schedule_timezone`, local `schedule_time`, and exactly one
+  schedule columns null. Send scheduling uses UTC `schedule_time` and exactly one
   `schedule_kind`: `daily`, `weekdays` with one through seven ISO weekday
   integers (`1..7`), or `day_of_month` with a value from `1..31`. Send rows
   cannot have an interval or persistent message. No sub-daily send recurrence,
@@ -3777,9 +3780,33 @@ Static coverage and validation:
 
 ## Migration 004 — roster architecture
 
-Status: authoritative DevKit schema complete and validated in a disposable
-local Timescale database. It is not applied to the real local database or any
-remote database.
+Status: migrations 001 through 15 are applied to the real local Timescale
+database. The detailed
+migration-004 audit below is retained as historical evidence; migration 013
+supersedes its questionnaire-version, refresh-error, normalized display/sort,
+recent-access, metric-cache, membership-draft, and Discord binding designs.
+
+### Migration 013 roster simplification
+
+- Rosters store ordered stable `display_column_ids`, JSON `sort_configuration`,
+  and at most one `webhook_id` plus `message_id`. The normalized display/sort
+  tables and all binding/event/token structures are removed.
+- Signup questions support only `text`, `boolean`, and `single_select`, have no
+  AI-description field, and remain capped at four stable IDs. Deleting a
+  question or changing its type removes its keyed member answers.
+- `roster_size`, the duplicate town-hall restriction, questionnaire version,
+  max-percent calculation metadata, Discord display name, and refresh-error
+  storage are removed. Transient player refresh failures retain the previous
+  snapshot and timestamp; player 404s delete the member.
+- `roster_ai_usage` remains the monthly source of truth and adds explicit cache
+  write tokens. The derived metric cache, recent-access table, and durable
+  membership-draft tables are removed; metric recipes calculate directly from
+  authoritative data.
+- Migration 014 reconciles every existing member's Discord user ID from
+  `player_links` without bulk Discord API calls and clears stale identity
+  display data whenever ownership changed.
+- Migration 015 removes `roster_metric_cache`; dynamic metrics now read their
+  authoritative tracking tables on every evaluation.
 
 ### Roster and signup contract
 
@@ -3804,10 +3831,8 @@ remote database.
   transaction because a PostgreSQL CHECK cannot safely query the parent row;
   unknown/deleted question IDs must be rejected or pruned there.
 - `questionnaire_version` starts at one and must advance whenever question
-  identity, validation, or order changes. Public sharing is opt-in through a
-  unique URL-safe `public_share_id` and a same-server `public_view_id`; the API
-  must additionally prove that view is linked to the roster through
-  `roster_view_rosters`. `roster_role_id` stores the optional Discord role
+  identity, validation, or order changes. Public roster sharing is opt-in
+  through a unique URL-safe `public_share_id`. `roster_role_id` stores the optional Discord role
   snowflake used by roster access and signup flows.
 
 ### Player snapshot and refresh boundary
@@ -3815,12 +3840,10 @@ remote database.
 - Canonical member identity/display fields remain: roster/player tag, name,
   clan tag/name, town hall, trophies, position, Discord user ID/username/avatar,
   and existing roster status fields. The snapshot adds paired league ID/name,
-  Discord display name, structured hero JSON, versioned `max_percent`, its
+  Discord display name, the home-village `hero_level_sum`, versioned `max_percent`, its
   calculation timestamp, `refreshed_at`, and a bounded `refresh_error` summary.
-- Hero snapshots are arrays of objects requiring `name` and nonnegative
-  `level`, with optional ID, `max_level`, and village. The old aggregate
-  `hero_levels` cannot be losslessly expanded and is discarded; the next
-  authoritative player refresh/import must populate individual heroes.
+- `hero_level_sum` stores only the sum of current home-village hero levels.
+  Individual hero data is deliberately not retained in roster storage.
 - `last_online` changes from epoch `bigint` to `timestamptz`; migration 004
   accepts both seconds and milliseconds during conversion. Legacy
   `current_league` is copied to `league_name`, while `league_id` remains NULL
@@ -3834,26 +3857,18 @@ remote database.
   that column.
 - The API/bot caller audit found no missing member snapshot columns after the
   first migration-004 revision: canonical player/clan/TH/trophy identity,
-  official league ID/name, structured heroes, versioned max percentage,
+  official league ID/name, the home-hero level sum, versioned max percentage,
   Discord username/display/avatar, last-online time, refresh result, and signup
   answers are all represented.
 
 ### Saved views, derived state, and Discord bindings
 
-- `roster_views` is server-scoped and stores name, short intent, explicit
-  `spec_version`, a typed JSON spec, original prompt, structured provenance,
-  creator, timestamps, and a source `data_watermark`. The spec requires the
-  Dashboard builder's `schemaVersion`, nonempty typed column definitions, and
-  optional filter/sort/limit envelopes; `spec_version` must match
-  `spec.schemaVersion`.
-- `roster_view_rosters` is the normalized ordered roster-reference relation.
-  Composite foreign keys prove that a view and every referenced roster belong
-  to the same server, support roster-to-view invalidation, and avoid embedding
-  duplicate `rosterIds` inside the persisted spec. The API may continue to
-  accept/return `spec.rosterIds`, but it must extract/reconstruct them at the
-  SQL boundary.
+- `roster_views` is server-scoped and stores a name, compact share ID,
+  authoritative versioned sandbox source program, creator, and timestamps.
+  Roster selection and generated columns, rows, filters, sort, highlights, and
+  limits are runtime inputs/output and are deliberately not persisted.
 - `roster_metric_cache` stores expiring, versioned per-member metric results
-  keyed by canonical parameter SHA-256; saved view specs remain authoritative.
+  keyed by canonical parameter SHA-256; saved view programs remain authoritative.
   `roster_ai_usage` records provider/model token and exact USD cost components
   without prompt or response content. `roster_recent_access` is mutable current
   state for `GET /v2/me/rosters/recent`, not an access audit log.
@@ -3881,33 +3896,14 @@ remote database.
   for idempotent retries. The API must row-lock and revalidate watermarks before
   applying the frozen change set.
 
-### CWL bonus history
+### CWL bonus recipients
 
-- The domain is server-scoped but roster-independent: product navigation can
-  expose it at **Roster > CWL Bonuses** without making a roster own the data.
-  None of the award tables references reloadable `cwl_groups`; official CWL
-  rows may provide source evidence to an API transaction but cannot cascade or
-  rewrite the audit ledger.
-- `cwl_bonus_award_rules` is an immutable effective-dated ruleset keyed by
-  version, league ID, and war size. It stores the base award slots. A changed
-  rule is a new version, and a submission trigger proves the season is inside
-  the selected rule interval and its snapshotted base matches that rule.
-- `cwl_bonus_award_submissions` is an immutable revision ledger. It snapshots
-  season, clan, league ID/name, war size, final placement, wars won, base slots,
-  and final `award_slot_count`; the formula is base plus wins. Final placement
-  is required completion evidence and is not part of that formula. A differing
-  final count requires `override_reason`; revisions after one require a
-  `supersedes_id` for the immediately prior same-scope revision plus a
-  `correction_reason`. Unique per-server idempotency keys make retries return
-  the existing submission rather than append duplicates.
-- Recipients are normalized in immutable `cwl_bonus_award_recipients`, rather
-  than JSONB. The current product needs stable order and the existing CWL
-  history surface reads by player tag, so the child relation gives uniqueness,
-  indexed player history, and per-selection actor/time audit. Its insert trigger
-  locks the submission, requires recipients be inserted in the submission's
-  creation transaction, and rejects a position/count beyond the snapshotted
-  award slots. Later inserts/updates/deletes cannot alter an old recipient set;
-  corrections append a new submission and recipient set.
+- `cwl_bonus_recipients` is roster-independent and contains only `season`,
+  `clan_tag`, `player_tag`, and `medal_count`. Its composite primary key makes
+  the selected player set replaceable without submission or revision tables.
+- Dashboard calculates standings and slot counts from the stored CWL group and
+  split `war_leagues` static data. The API validates configured-clan access and
+  frozen master-roster membership before replacing the stored recipient set.
 
 ### Exact downstream contract effects
 
@@ -3923,8 +3919,7 @@ remote database.
   it, so view CRUD/evaluate, public-share hydration, binding/event polling,
   refresh cooldown, recent access, metric cache, AI usage, membership-draft
   confirmation, and domain-neutral CWL bonus rules/submission/revision endpoints
-  are required before those UI surfaces can ship. Public responses hydrate
-  normalized roster references into the view spec, and membership draft apply
+  are required before those UI surfaces can ship. Membership draft apply
   must row-lock, revalidate, and remain idempotent. Bonus count computation must use the effective
   league/war-size base plus wins; placement only gates completed evidence.
 - **ClashKing Dashboard:** preserve roster card-group CRUD. Remove signup
@@ -3932,11 +3927,9 @@ remote database.
   category moves, substitute rendering, and allowed-category/default-category
   fields. The in-progress builder types already use `RosterSignupQuestion`,
   `signupAnswers`, and `RosterViewSpec`; align the API wire keys deliberately
-  (`aiDescription` to SQL `ai_description`, question options normalized to an
-  empty array, and camel-case view spec retained inside JSON). Its current
-  `RosterViewSpec.rosterIds` remains a public request/response convenience but
-  is normalized into `roster_view_rosters` by the API. Public share controls
-  use `public_share_id`/`public_enabled`/`public_view_id`; signup form changes
+  (`aiDescription` to SQL `ai_description` and question options normalized to an
+  empty array). Runtime view output remains camel-case JSON but is never stored.
+  Public roster share controls use `public_share_id`/`public_enabled`; signup form changes
   carry `questionnaire_version`, and the AI membership review confirms a
   frozen draft rather than resubmitting mutable client changes.
 - **ClashKing Bot:** the current Go bot calls roster refresh and missing-member
@@ -3953,7 +3946,7 @@ remote database.
 - **Importer:** `database/migrations/rosters.go` still writes the removed
   category/substitute/aggregate fields. Do not run it against version 4 until
   its projection and upsert are updated for signup questions/answers, official
-  league identity, structured heroes, versioned max percentage, Discord
+  league identity, the home-hero level sum, versioned max percentage, Discord
   display data, and typed refresh timestamps. A legacy source cannot infer
   league IDs, hero detail, or max-calculation provenance, so those fields must
   remain NULL/empty until an authoritative refresh rather than receiving

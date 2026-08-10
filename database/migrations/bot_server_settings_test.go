@@ -97,3 +97,33 @@ func TestTicketQuestionsEnforcesDatabaseLimits(t *testing.T) {
 		t.Fatalf("ticketQuestions() first question length = %d, want 200 characters", length)
 	}
 }
+
+func TestGiveawayImageNameKeepsOnlyTrustedCDNFilenameSuffix(t *testing.T) {
+	tests := map[string]string{
+		"https://cdn.clashking.xyz/giveaway_123e4567-e89b-12d3-a456-426614174000.png": "123e4567-e89b-12d3-a456-426614174000.png",
+		"https://cdn.clashking.xyz/legacy/folder/giveaway_abc.png?version=2":          "abc.png",
+		"https://CDN.CLASHKING.XYZ/giveaway_upper-host.png":                           "upper-host.png",
+		"https://example.com/giveaway_untrusted.png":                                  "",
+		"https://images.cdn.clashking.xyz/giveaway_subdomain.png":                     "",
+		"https://cdn.clashking.xyz/legacy-without-required-prefix.png":                "",
+		"": "",
+	}
+	for input, want := range tests {
+		if got := giveawayImageName(input); got != want {
+			t.Errorf("giveawayImageName(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestGiveawaysOneShotPlanOnlyTouchesGiveaways(t *testing.T) {
+	plan := giveawaysOneShotPlan()
+	allStatements := strings.Join(append(append(plan.ResetSQL, plan.DropIndexes...), plan.CreateIndexes...), "\n")
+	if !strings.Contains(allStatements, "public.giveaways") {
+		t.Fatal("giveaway-only plan does not target public.giveaways")
+	}
+	for _, unrelated := range []string{"tickets", "reminders", "short_links", "user_settings", "server_custom_embeds"} {
+		if strings.Contains(allStatements, unrelated) {
+			t.Fatalf("giveaway-only plan unexpectedly touches %s", unrelated)
+		}
+	}
+}

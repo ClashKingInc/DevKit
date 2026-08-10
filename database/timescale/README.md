@@ -3,6 +3,13 @@
 This repo uses goose SQL migrations for TimescaleDB, which is PostgreSQL with the
 Timescale extension enabled.
 
+The baseline is intentionally limited to two files. `001_initial_stats.sql`
+owns tracking and game-stat data, including hypertables, retention/compression
+policies, and analytical views. `002_initial_settings.sql` owns application and
+server configuration, authentication, mobile, roster, billing, moderation, and
+other user-facing state. Both files create their final objects directly; there
+are no transitional upgrade migrations in the baseline.
+
 ## Migration Format
 
 ```sql
@@ -120,51 +127,50 @@ selected account is implicit in its `roster_members` row, whose
 `signup_answers` object is keyed by stable question IDs.
 
 Roster member rows retain the canonical player, clan, town hall, trophy, and
-Discord identity snapshot alongside structured heroes, official league
-identity, versioned max percentage, last-online time, and refresh state.
-`roster_views` stores the versioned typed display/query spec, while
-`roster_view_rosters` owns same-server roster references. Rosters also carry
-the questionnaire version, public share/view state, shared refresh timestamps,
-and optional Discord role ID required by the server-scoped API.
+Discord identity snapshot alongside the home-hero level sum, official league
+identity, latest max percentage, last-online time, and refresh timestamp.
+`roster_views` stores the authoritative versioned sandbox source program and
+compact share ID. Runtime roster selection and generated display/query output
+are deliberately not persisted. Rosters carry stable display-column IDs and a
+small JSON sort configuration, public share state, shared refresh timestamps,
+and the optional Discord role ID required by the server-scoped API.
 
-`roster_metric_cache` stores expiring versioned metric results without changing
-saved view specs. `roster_ai_usage` records provider token/cost accounting
-without prompts or responses, and `roster_recent_access` serves the user's
-current recent-roster list. `roster_membership_drafts` freezes a short-lived AI
-add/remove/move change set, custom roster IDs, and per-roster digests behind a
-hashed approval token; only one terminal apply/deny/expiry transition is
-allowed.
+Dynamic roster metrics are calculated directly from their authoritative tables;
+there is no persisted metric cache. `roster_ai_usage` records provider
+token/cost accounting, including explicit cache reads and writes, without
+prompts or responses. AI membership proposals stay in the browser session
+and carry expected roster revisions. The API locks and revalidates those
+revisions before applying an approved add/remove/move set atomically; there is
+no durable draft or approval-token record.
 
-`roster_bindings` is the sole durable Discord binding for signup, refreshable,
-and live posts; snapshot messages have no binding. It stores only an opaque
-application-encrypted webhook-token envelope. Desired changes append
-`roster_binding_events`, which coalesce into one highest-revision
-`roster_binding_pending_events` row per binding. The bot-authenticated internal
-execution route may decrypt the token just in time, and applied acknowledgements
-advance `applied_revision` and remove satisfied pending work.
+Each roster may reference one Discord post directly through `webhook_id` and
+`message_id`. No webhook token, view association, delivery mode, render queue,
+or binding revision is stored in the database.
 
-`cwl_bonus_award_rules`, `cwl_bonus_award_submissions`, and
-`cwl_bonus_award_recipients` are roster-independent domain history even when
-the product links them from the roster screen. Effective rules provide the
-league/war-size base; an immutable submission snapshots that base, wars won,
-final slot count, and completion placement. Corrections append a superseding
-revision and a new normalized recipient set.
+`cwl_bonus_recipients` stores only the selected clan, season, player tag, and
+awarded medal count. League metadata, standings, and eligible players come from
+the stored CWL group and static data when Dashboard renders the workflow.
+
+`cwl_league_history` is temporary-consumption staging for the historical CWL
+league repair. Each clan row contains only a JSONB map from season to numeric
+league ID; the API deletes the row after it fills that clan's missing
+`cwl_groups.cwl_league_id` values.
 
 ## Mobile Push State
 
 Mobile push state is current-state SQL data, not a hypertable. `mobile_push_devices`
-stores one APNs/FCM token per `(user_id, device_id, provider, environment)` with a unique
-token hash for idempotent registration. Store the encrypted token in `token_ciphertext`,
-use `token_hash` only for lookup/dedupe, and use `enabled` as the sole device-wide master
-notification switch.
+stores one FCM token and its notification preferences per
+`(user_id, device_id, provider, environment)`, with a unique token hash for idempotent
+registration. Store the encrypted token in `token_ciphertext`, use `token_hash` only for
+lookup/dedupe, and use `enabled` as the sole device-wide master notification switch. The
+same row stores the category booleans and up to three reminder timings expressed as integer
+minutes from 1 through 2,820.
 
-`mobile_notification_preferences` stores per-device/per-environment notification-category
-booleans and up to three reminder timings expressed as integer minutes from 1 through 2,820.
 `mobile_notification_accounts` stores the user-wide enabled player accounts; each row is
 authoritatively sourced from either a verified player link or a player bookmark. Clan
 notifications derive from those players' current clans rather than a separate clan toggle.
 Delivery requires an enabled device with an authorized or provisional OS authorization
-status, followed by the relevant per-category preference.
+status and the relevant category enabled on that device.
 
 `admin_posts.presentation_type` distinguishes block-based articles from hosted interactive
 stories. `show_on_home` controls carousel inclusion, while `pinned_on_home` keeps a post

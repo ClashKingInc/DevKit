@@ -5,6 +5,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"os"
+	"path"
 	"strings"
 
 	"clashking_devkit_database_migrations/migrateutil"
@@ -19,6 +22,13 @@ func main() {
 }
 
 func runBotServerSettings(ctx context.Context, cfg migrateutil.Config) error {
+	if scope := strings.TrimSpace(os.Getenv("BOT_SERVER_SETTINGS_ONLY")); scope != "" {
+		if scope != "giveaways" {
+			return fmt.Errorf("unsupported BOT_SERVER_SETTINGS_ONLY scope %q", scope)
+		}
+		return runGiveawaysOnly(ctx, cfg)
+	}
+
 	staticClient, err := migrateutil.StaticClient(ctx, cfg)
 	if err != nil {
 		return err
@@ -67,6 +77,58 @@ func runBotServerSettings(ctx context.Context, cfg migrateutil.Config) error {
 	// truthfully before the API board-type registry is finalized, so this
 	// importer must not scan or recreate them.
 	return migrateutil.FinishOneShot(ctx, pool, plan)
+}
+
+func runGiveawaysOnly(ctx context.Context, cfg migrateutil.Config) error {
+	statsClient, err := migrateutil.StatsClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer statsClient.Disconnect(ctx)
+	pool, err := migrateutil.TimescalePool(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	collection := statsClient.Database("clashking").Collection("giveaways")
+	sourceCount, err := collection.CountDocuments(ctx, bson.M{})
+	if err != nil {
+		return fmt.Errorf("preflight source giveaways: %w", err)
+	}
+	if sourceCount == 0 {
+		return fmt.Errorf("refusing to truncate giveaways: source collection is empty")
+	}
+	fmt.Printf("settings.giveaways: source_docs=%d\n", sourceCount)
+	plan := giveawaysOneShotPlan()
+	if err := migrateutil.StartOneShot(ctx, pool, plan); err != nil {
+		return err
+	}
+	if err := migrateGiveaways(ctx, cfg, pool, collection); err != nil {
+		return err
+	}
+	return migrateutil.FinishOneShot(ctx, pool, plan)
+}
+
+func giveawaysOneShotPlan() migrateutil.OneShotPlan {
+	return migrateutil.OneShotPlan{
+		ResetSQL: []string{`TRUNCATE TABLE public.giveaways`},
+		DropIndexes: []string{
+			`DROP INDEX IF EXISTS public.idx_giveaways_due_end`,
+			`DROP INDEX IF EXISTS public.idx_giveaways_due_start`,
+			`DROP INDEX IF EXISTS public.idx_giveaways_end_time`,
+			`DROP INDEX IF EXISTS public.idx_giveaways_entries_gin`,
+			`DROP INDEX IF EXISTS public.idx_giveaways_pending_event`,
+			`DROP INDEX IF EXISTS public.idx_giveaways_server_status`,
+		},
+		CreateIndexes: []string{
+			`CREATE INDEX idx_giveaways_due_end ON public.giveaways (end_time) WHERE status = 'ongoing'`,
+			`CREATE INDEX idx_giveaways_due_start ON public.giveaways (start_time) WHERE status = 'scheduled'`,
+			`CREATE INDEX idx_giveaways_end_time ON public.giveaways (end_time)`,
+			`CREATE INDEX idx_giveaways_entries_gin ON public.giveaways USING gin (entries)`,
+			`CREATE INDEX idx_giveaways_pending_event ON public.giveaways (event_pending_at) WHERE event_pending IS NOT NULL`,
+			`CREATE INDEX idx_giveaways_server_status ON public.giveaways (server_id, status)`,
+		},
+	}
 }
 
 func botSettingsOneShotPlan() migrateutil.OneShotPlan {
@@ -656,7 +718,7 @@ func migrateGiveaways(ctx context.Context, cfg migrateutil.Config, pool interfac
 			migrateutil.String(doc["text_above_embed"]),
 			migrateutil.String(doc["text_in_embed"]),
 			migrateutil.String(doc["text_on_end"]),
-			migrateutil.String(doc["image_url"]),
+			giveawayImageName(doc["image_url"]),
 			migrateutil.Bool(doc["profile_picture_required"]),
 			migrateutil.Bool(doc["coc_account_required"]),
 			migrateutil.String(doc["roles_mode"]),
@@ -682,6 +744,20 @@ func giveawayOptionalTime(value any) any {
 		return parsed
 	}
 	return nil
+}
+
+func giveawayImageName(value any) string {
+	raw := strings.TrimSpace(migrateutil.String(value))
+	parsed, err := url.Parse(raw)
+	if err != nil || !strings.EqualFold(parsed.Hostname(), "cdn.clashking.xyz") {
+		return ""
+	}
+	const prefix = "giveaway_"
+	filename := path.Base(parsed.Path)
+	if !strings.HasPrefix(filename, prefix) {
+		return ""
+	}
+	return strings.TrimPrefix(filename, prefix)
 }
 
 func migrateShortLinks(ctx context.Context, cfg migrateutil.Config, pool interface {

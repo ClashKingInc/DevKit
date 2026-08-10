@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"clashking_devkit_database_migrations/migrateutil"
 	"github.com/jackc/pgx/v5"
@@ -17,6 +18,9 @@ func main() {
 }
 
 func runJoinLeaveHistory(ctx context.Context, cfg migrateutil.Config) error {
+	clanTag := normalizeJoinLeaveClanTag(cfg.Env["JOIN_LEAVE_HISTORY_CLAN_TAG"])
+	playerTag := normalizeJoinLeavePlayerTag(cfg.Env["JOIN_LEAVE_HISTORY_PLAYER_TAG"])
+	filtered := clanTag != "" || playerTag != ""
 	mongoClient, err := migrateutil.StatsClient(ctx, cfg)
 	if err != nil {
 		return err
@@ -27,11 +31,25 @@ func runJoinLeaveHistory(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 	defer pool.Close()
-	if err := dropJoinLeaveIndexes(ctx, pool); err != nil {
-		return err
+	if !filtered {
+		if err := dropJoinLeaveIndexes(ctx, pool); err != nil {
+			return err
+		}
 	}
-	if _, err := pool.Exec(ctx, `TRUNCATE TABLE public.join_leave_history`); err != nil {
-		return err
+	if playerTag != "" {
+		query := `DELETE FROM public.join_leave_history WHERE player_tag = $1`
+		args := []any{playerTag}
+		if clanTag != "" {
+			query += ` AND clan_tag = $2`
+			args = append(args, clanTag)
+		}
+		if _, err := pool.Exec(ctx, query, args...); err != nil {
+			return err
+		}
+	} else {
+		if _, err := pool.Exec(ctx, `TRUNCATE TABLE public.join_leave_history`); err != nil {
+			return err
+		}
 	}
 	rows := make([][]any, 0, cfg.BatchSize)
 	flush := func() error {
@@ -42,7 +60,7 @@ func runJoinLeaveHistory(ctx context.Context, cfg migrateutil.Config) error {
 		rows = rows[:0]
 		return err
 	}
-	seen, err := migrateutil.StreamAll(ctx, cfg, "join_leave_history", mongoClient.Database("looper").Collection("join_leave_history"), func(doc bson.M) (bool, error) {
+	seen, err := migrateutil.StreamAllFiltered(ctx, cfg, "join_leave_history", mongoClient.Database("looper").Collection("join_leave_history"), joinLeaveHistoryFilter(clanTag, playerTag), func(doc bson.M) (bool, error) {
 		eventTime, ok := migrateutil.Time(doc["time"])
 		if !ok {
 			return false, nil
@@ -78,8 +96,42 @@ func runJoinLeaveHistory(ctx context.Context, cfg migrateutil.Config) error {
 	if err := createJoinLeaveIndexes(ctx, pool); err != nil {
 		return err
 	}
-	fmt.Printf("join_leave_history: scanned_docs=%d\n", seen)
+	if filtered {
+		fmt.Printf("join_leave_history: clan_tag=%s player_tag=%s scanned_docs=%d\n", clanTag, playerTag, seen)
+	} else {
+		fmt.Printf("join_leave_history: scanned_docs=%d\n", seen)
+	}
 	return nil
+}
+
+func normalizeJoinLeaveClanTag(value string) string {
+	return normalizeJoinLeaveTag(value)
+}
+
+func normalizeJoinLeavePlayerTag(value string) string {
+	return normalizeJoinLeaveTag(value)
+}
+
+func normalizeJoinLeaveTag(value string) string {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	if !strings.HasPrefix(value, "#") {
+		value = "#" + value
+	}
+	return value
+}
+
+func joinLeaveHistoryFilter(clanTag, playerTag string) bson.D {
+	filter := bson.D{}
+	if clanTag != "" {
+		filter = append(filter, bson.E{Key: "clan", Value: clanTag})
+	}
+	if playerTag != "" {
+		filter = append(filter, bson.E{Key: "tag", Value: playerTag})
+	}
+	return filter
 }
 
 func flushJoinLeaveRows(ctx context.Context, pool interface {

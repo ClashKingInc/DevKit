@@ -22,7 +22,8 @@ read-only diagnostic query.
 
 1. Inspect every existing numbered migration and the live Goose status.
 2. Add the next numbered migration instead of silently rewriting an applied
-   migration.
+   migration. Rebuild the two-file baseline only during an explicitly approved
+   pre-release squash, and verify it against the complete prior migration chain.
 3. Include `-- +goose Up` and a deliberate `-- +goose Down` section.
 4. Validate ordering and syntax:
 

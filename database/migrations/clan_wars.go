@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -26,6 +27,20 @@ func main() {
 
 func runClanWars(ctx context.Context, cfg migrateutil.Config) (err error) {
 	profile := envBool(cfg.Env, "CLAN_WARS_PROFILE")
+	clanTag := normalizeClanWarTag(cfg.Env["CLAN_WARS_CLAN_TAG"])
+	cwlClanTag := normalizeClanWarTag(cfg.Env["CLAN_WARS_CWL_CLAN_TAG"])
+	if clanTag != "" && cwlClanTag != "" {
+		return fmt.Errorf("CLAN_WARS_CLAN_TAG and CLAN_WARS_CWL_CLAN_TAG cannot both be set")
+	}
+	checkpointKey := clanWarCheckpointKey(clanTag)
+	if cwlClanTag != "" {
+		checkpointKey = "clan_war_cwl_2025_08_2026_07_id_" + strings.TrimPrefix(cwlClanTag, "#")
+	}
+	manageIndexes := clanTag == "" && cwlClanTag == ""
+	truncate := envBool(cfg.Env, "CLAN_WARS_TRUNCATE")
+	if truncate && cwlClanTag != "" {
+		return fmt.Errorf("CLAN_WARS_TRUNCATE cannot be used with CLAN_WARS_CWL_CLAN_TAG")
+	}
 	started := time.Now()
 	if profile {
 		defer func() {
@@ -46,7 +61,10 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) (err error) {
 	if err != nil {
 		return err
 	}
-	if envBool(cfg.Env, "CLAN_WARS_TRUNCATE") {
+	if truncate {
+		if clanTag != "" {
+			fmt.Fprintf(os.Stderr, "clan_wars: truncating all war tables before clan-scoped import for %s\n", clanTag)
+		}
 		if err := cp.Clear(); err != nil {
 			return err
 		}
@@ -64,10 +82,21 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) (err error) {
 			return err
 		}
 	}
-	if err := dropClanWarIndexes(ctx, pool); err != nil {
-		return err
+	if manageIndexes {
+		if err := dropClanWarIndexes(ctx, pool); err != nil {
+			return err
+		}
 	}
 	collection := mongoClient.Database("looper").Collection("clan_war")
+	filter := clanWarFilter(clanTag)
+	if cwlClanTag != "" {
+		warTags, err := loadCWLBackfillWarTags(ctx, pool, cwlClanTag)
+		if err != nil {
+			return err
+		}
+		filter = cwlWarTagFilter(warTags)
+		fmt.Printf("clan_wars: cwl_clan_tag=%s requested_war_tags=%d\n", cwlClanTag, len(warTags))
+	}
 	var wars []warIndexInsert
 	var members []warMemberInsert
 	var attacks []warAttackInsert
@@ -87,7 +116,7 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) (err error) {
 		docsInBatch = 0
 		return err
 	}
-	seen, err := streamClanWarDocs(ctx, cfg, cp, "clan_war_id", collection, clanWarProjection(), func(doc clanWarDoc) (bool, error) {
+	seen, err := streamClanWarDocs(ctx, cfg, cp, checkpointKey, collection, filter, clanWarProjection(), func(doc clanWarDoc) (bool, error) {
 		accepted, err := appendClanWarDoc(doc, &wars, &members, &missedAttacks, &attacks)
 		if err != nil || !accepted {
 			return false, err
@@ -98,10 +127,115 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) (err error) {
 	if err != nil {
 		return err
 	}
-	if err := recreateClanWarIndexes(ctx, pool); err != nil {
-		return err
+	if manageIndexes {
+		if err := recreateClanWarIndexes(ctx, pool); err != nil {
+			return err
+		}
 	}
-	fmt.Printf("clan_wars: scanned_docs=%d\n", seen)
+	if cwlClanTag != "" {
+		fmt.Printf("clan_wars: cwl_clan_tag=%s scanned_docs=%d\n", cwlClanTag, seen)
+	} else if clanTag != "" {
+		fmt.Printf("clan_wars: clan_tag=%s scanned_docs=%d\n", clanTag, seen)
+	} else {
+		fmt.Printf("clan_wars: scanned_docs=%d\n", seen)
+	}
+	return nil
+}
+
+func normalizeClanWarTag(value string) string {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	if !strings.HasPrefix(value, "#") {
+		value = "#" + value
+	}
+	return value
+}
+
+func clanWarCheckpointKey(clanTag string) string {
+	if clanTag == "" {
+		return "clan_war_id"
+	}
+	return "clan_war_id_" + strings.TrimPrefix(clanTag, "#")
+}
+
+func clanWarFilter(clanTag string) bson.D {
+	if clanTag == "" {
+		return bson.D{}
+	}
+	return bson.D{{Key: "$or", Value: bson.A{
+		bson.D{{Key: "data.clan.tag", Value: clanTag}},
+		bson.D{{Key: "data.opponent.tag", Value: clanTag}},
+	}}}
+}
+
+func cwlWarTagFilter(warTags []string) bson.D {
+	return bson.D{{Key: "data.tag", Value: bson.D{{Key: "$in", Value: warTags}}}}
+}
+
+func loadCWLBackfillWarTags(ctx context.Context, pool interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}, clanTag string) ([]string, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT groups.rounds
+		FROM cwl_groups AS groups
+		JOIN cwl_group_clans AS clans ON clans.cwl_id = groups.cwl_id
+		WHERE clans.clan_tag = $1
+		  AND left(groups.season, 7) >= '2025-08'
+		  AND left(groups.season, 7) < '2026-08'
+	`, clanTag)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seen := map[string]struct{}{}
+	warTags := make([]string, 0)
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		for _, warTag := range decodeCWLBackfillWarTags(raw) {
+			if warTag == "" || warTag == "#0" {
+				continue
+			}
+			if _, exists := seen[warTag]; exists {
+				continue
+			}
+			seen[warTag] = struct{}{}
+			warTags = append(warTags, warTag)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(warTags) == 0 {
+		return nil, fmt.Errorf("no August 2025 through July 2026 CWL war tags found for %s", clanTag)
+	}
+	sort.Strings(warTags)
+	return warTags, nil
+}
+
+func decodeCWLBackfillWarTags(raw []byte) []string {
+	var official []struct {
+		WarTags []string `json:"warTags"`
+	}
+	if err := json.Unmarshal(raw, &official); err == nil {
+		warTags := make([]string, 0)
+		for _, round := range official {
+			warTags = append(warTags, round.WarTags...)
+		}
+		return warTags
+	}
+	var nested [][]string
+	if err := json.Unmarshal(raw, &nested); err == nil {
+		warTags := make([]string, 0)
+		for _, round := range nested {
+			warTags = append(warTags, round...)
+		}
+		return warTags
+	}
 	return nil
 }
 
@@ -272,17 +406,18 @@ func streamClanWarDocs(
 	cp *migrateutil.Checkpoint,
 	cpKey string,
 	collection *mongo.Collection,
+	baseFilter bson.D,
 	projection any,
 	handle func(clanWarDoc) (bool, error),
 	flush func() error,
 ) (int64, error) {
-	var filter any = bson.D{}
+	filter := append(bson.D(nil), baseFilter...)
 	if raw := cp.Get(cpKey); raw != "" {
 		id, err := bson.ObjectIDFromHex(raw)
 		if err != nil {
 			return 0, fmt.Errorf("bad checkpoint %s=%q: %w", cpKey, raw, err)
 		}
-		filter = bson.D{{Key: "_id", Value: bson.D{{Key: "$gt", Value: id}}}}
+		filter = append(filter, bson.E{Key: "_id", Value: bson.D{{Key: "$gt", Value: id}}})
 	}
 	opts := options.Find().
 		SetSort(bson.D{{Key: "_id", Value: 1}}).
