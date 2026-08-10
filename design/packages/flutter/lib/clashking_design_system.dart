@@ -492,6 +492,7 @@ class CKUpgradeRow extends StatelessWidget {
     this.onTap,
     this.semanticLabel,
     this.density = CKControlDensity.standard,
+    this.showQueueAccent = true,
   });
 
   final Widget leading;
@@ -502,6 +503,10 @@ class CKUpgradeRow extends StatelessWidget {
   final VoidCallback? onTap;
   final String? semanticLabel;
   final CKControlDensity density;
+
+  /// Keeps the queue color marker for tracker rows. Neutral recommendations
+  /// can omit it when their surrounding copy already establishes context.
+  final bool showQueueAccent;
 
   @override
   Widget build(BuildContext context) {
@@ -515,15 +520,18 @@ class CKUpgradeRow extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Container(
-              width: 4,
-              height: 36,
-              decoration: BoxDecoration(
-                color: accentColor,
-                borderRadius: BorderRadius.circular(CKRadius.pill),
+            if (showQueueAccent) ...[
+              Container(
+                key: const ValueKey('ck-upgrade-row-queue-accent'),
+                width: 4,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: accentColor,
+                  borderRadius: BorderRadius.circular(CKRadius.pill),
+                ),
               ),
-            ),
-            const SizedBox(width: CKSpacing.sm),
+              const SizedBox(width: CKSpacing.sm),
+            ],
             SizedBox.square(dimension: 40, child: leading),
             const SizedBox(width: CKSpacing.md),
             Expanded(

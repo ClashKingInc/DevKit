@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a neutral `CKUpgradeRow` variant through `showQueueAccent` for
+  recommendations and actions that do not represent a tracker queue.
+
 - Added the ClashKing SemiBold Inter-derived font to the CSS and Flutter
   packages, with `CKFont.family` as the package-qualified Flutter family name.
 - Added the shared danger-button variant and disabled toggle state.

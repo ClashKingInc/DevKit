@@ -235,5 +235,26 @@ void main() {
 
       expect(tester.takeException(), isNull);
     });
+
+    testWidgets('upgrade row can omit its queue accent', (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: CKUpgradeRow(
+              leading: Icon(Icons.home),
+              title: 'Archer Tower',
+              subtitle: 'Level 17 to 18',
+              accentColor: CKUpgradeColors.builders,
+              showQueueAccent: false,
+            ),
+          ),
+        ),
+      );
+
+      expect(
+        find.byKey(const ValueKey('ck-upgrade-row-queue-accent')),
+        findsNothing,
+      );
+    });
   });
 }

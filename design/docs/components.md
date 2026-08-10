@@ -133,8 +133,10 @@ Uniformity contract:
 - Filters use the text-only `CKSegmentedControl`.
 - Do not add one-off search, selector, progress badge, or section-card colors.
 
-- `CKUpgradeRow` keeps game artwork primary and uses one narrow semantic queue
-  accent rather than a field of metric chips.
+- `CKUpgradeRow` keeps game artwork primary and normally uses one narrow
+  semantic queue accent rather than a field of metric chips. Set
+  `showQueueAccent: false` when the row is a neutral recommendation or action
+  outside a queue and the surrounding label already provides its context.
 - `CKResourceCost` presents an icon and amount inline without another framed
   surface.
 - `CKCollectionTile` is artwork-first. Missing items use grayscale plus reduced
