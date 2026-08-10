@@ -2,3 +2,5 @@
 *.idea
 .migration_state/
 migration_state.json
+.t3/
+t3.json
