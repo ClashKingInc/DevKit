@@ -17,9 +17,7 @@ cd database
 Set the environment variables in Coolify, copy `.env.example` to `.env`, or
 export the variables in your shell before starting services. Migration tools
 resolve `migration_state.json` from this directory. Migration connection
-settings are read from the repository-root `.env` (with `database/.env` kept
-as a compatibility fallback). The shared checkpoint loader can still read
-legacy `.migration_state/<script>.json` files.
+settings are read from the repository-root `.env`.
 
 ## Start
 
@@ -41,7 +39,7 @@ Services:
 
 | Service | URL / address |
 | --- | --- |
-| Timescale/Postgres | `postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${HOST_BIND_IP}:${TIMESCALE_PORT}/${POSTGRES_DB}?sslmode=disable` |
+| Timescale/Postgres | `postgres://${TIMESCALE_USERNAME}:${TIMESCALE_PASSWORD}@${HOST_BIND_IP}:${TIMESCALE_PORT}/${TIMESCALE_DATABASE}?sslmode=${TIMESCALE_SSLMODE}` |
 | Valkey | `${HOST_BIND_IP}:${VALKEY_PORT}` |
 
 Set `HOST_BIND_IP` to `127.0.0.1` when only same-host access is needed. Use an
@@ -55,7 +53,7 @@ Use goose when you want migration semantics:
 ```bash
 go run github.com/pressly/goose/v3/cmd/goose@latest \
   -dir timescale \
-  postgres "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${HOST_BIND_IP}:${TIMESCALE_PORT}/${POSTGRES_DB}?sslmode=disable" \
+  postgres "postgres://${TIMESCALE_USERNAME}:${TIMESCALE_PASSWORD}@${HOST_BIND_IP}:${TIMESCALE_PORT}/${TIMESCALE_DATABASE}?sslmode=${TIMESCALE_SSLMODE}" \
   up
 ```
 
@@ -215,8 +213,14 @@ Goose, backfill, remote-run, and validation workflow.
 When running `clashking_tracking` from the host, use:
 
 ```bash
-TIMESCALE_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${HOST_BIND_IP}:${TIMESCALE_PORT}/${POSTGRES_DB}?sslmode=disable"
-VALKEY_ADDR="${HOST_BIND_IP}:${VALKEY_PORT}"
+TIMESCALE_HOST="${HOST_BIND_IP}"
+TIMESCALE_PORT="${TIMESCALE_PORT}"
+TIMESCALE_DATABASE="${TIMESCALE_DATABASE}"
+TIMESCALE_USERNAME="${TIMESCALE_USERNAME}"
+TIMESCALE_PASSWORD="${TIMESCALE_PASSWORD}"
+TIMESCALE_SSLMODE="${TIMESCALE_SSLMODE}"
+VALKEY_HOST="${HOST_BIND_IP}"
+VALKEY_PORT="${VALKEY_PORT}"
 VALKEY_PASSWORD="${VALKEY_PASSWORD}"
 ```
 

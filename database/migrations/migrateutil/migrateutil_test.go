@@ -37,7 +37,7 @@ func TestMigrationEnvPathPrefersRepositoryRoot(t *testing.T) {
 	}
 }
 
-func TestMigrationEnvPathFallsBackToDatabaseRoot(t *testing.T) {
+func TestMigrationEnvPathDoesNotFallBackToDatabaseRoot(t *testing.T) {
 	repositoryRoot := t.TempDir()
 	databaseRoot := filepath.Join(repositoryRoot, "database")
 	if err := os.MkdirAll(databaseRoot, 0o755); err != nil {
@@ -47,8 +47,36 @@ func TestMigrationEnvPathFallsBackToDatabaseRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got, want := migrationEnvPath(databaseRoot), filepath.Join(databaseRoot, ".env"); got != want {
+	if got, want := migrationEnvPath(databaseRoot), filepath.Join(repositoryRoot, ".env"); got != want {
 		t.Fatalf("migrationEnvPath() = %q, want %q", got, want)
+	}
+}
+
+func TestTimescaleURLFromCanonicalEnvironment(t *testing.T) {
+	env := map[string]string{
+		"TIMESCALE_HOST":     "timescale",
+		"TIMESCALE_PORT":     "5432",
+		"TIMESCALE_DATABASE": "tracking data",
+		"TIMESCALE_USERNAME": "tracking",
+		"TIMESCALE_PASSWORD": "p@ss/word",
+		"TIMESCALE_SSLMODE":  "require",
+	}
+	got, err := timescaleURLFromEnv(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "postgres://tracking:p%40ss%2Fword@timescale:5432/tracking%20data?sslmode=require"; got != want {
+		t.Fatalf("timescaleURLFromEnv() = %q, want %q", got, want)
+	}
+}
+
+func TestTimescaleURLDoesNotAcceptLegacyURLVariables(t *testing.T) {
+	_, err := timescaleURLFromEnv(map[string]string{
+		"TIMESCALE_URL": "postgres://legacy",
+		"DATABASE_URL":  "postgres://legacy",
+	})
+	if err == nil {
+		t.Fatal("timescaleURLFromEnv() accepted legacy URL variables")
 	}
 }
 

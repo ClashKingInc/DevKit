@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -113,12 +115,16 @@ func LoadConfig() (Config, error) {
 			env[key] = value
 		}
 	}
+	timescaleURL, err := timescaleURLFromEnv(env)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		Root:         root,
 		Env:          env,
-		StatsMongo:   firstNonEmpty(env["STATS_MONGODB"], env["STATS_MONGODB_URI"]),
-		StaticMongo:  firstNonEmpty(env["STATIC_MONGODB"], env["STATIC_MONGODB_URI"]),
-		TimescaleURL: firstNonEmpty(env["TIMESCALE_URL"], env["DATABASE_URL"]),
+		StatsMongo:   strings.TrimSpace(env["STATS_MONGODB"]),
+		StaticMongo:  strings.TrimSpace(env["STATIC_MONGODB"]),
+		TimescaleURL: timescaleURL,
 		BatchSize:    envInt(env, "MIGRATION_BATCH_SIZE", defaultBatchSize),
 		LimitDocs:    envInt64(env, "MIGRATION_LIMIT_DOCS", 0),
 	}
@@ -129,14 +135,9 @@ func LoadConfig() (Config, error) {
 }
 
 func migrationEnvPath(databaseRoot string) string {
-	// Migration programs run from database/migrations, but repository secrets
-	// intentionally live at the repository root. Keep database/.env as a
-	// compatibility fallback for older local setups.
-	repositoryEnv := filepath.Join(filepath.Dir(databaseRoot), ".env")
-	if _, err := os.Stat(repositoryEnv); err == nil {
-		return repositoryEnv
-	}
-	return filepath.Join(databaseRoot, ".env")
+	// Migration programs run from database/migrations, while repository secrets
+	// intentionally live at the repository root.
+	return filepath.Join(filepath.Dir(databaseRoot), ".env")
 }
 
 func LoadEnv(path string) (map[string]string, error) {
@@ -176,7 +177,7 @@ func StaticClient(ctx context.Context, cfg Config) (*mongo.Client, error) {
 
 func TimescalePool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 	if cfg.TimescaleURL == "" {
-		return nil, errors.New("missing TIMESCALE_URL in .env")
+		return nil, errors.New("missing TIMESCALE_* connection variables in .env")
 	}
 	poolCfg, err := pgxpool.ParseConfig(cfg.TimescaleURL)
 	if err != nil {
@@ -184,6 +185,29 @@ func TimescalePool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 	}
 	poolCfg.MaxConns = 8
 	return pgxpool.NewWithConfig(ctx, poolCfg)
+}
+
+func timescaleURLFromEnv(env map[string]string) (string, error) {
+	required := []string{"TIMESCALE_HOST", "TIMESCALE_USERNAME", "TIMESCALE_PASSWORD", "TIMESCALE_DATABASE"}
+	missing := make([]string, 0)
+	for _, key := range required {
+		if strings.TrimSpace(env[key]) == "" {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		return "", fmt.Errorf("missing Timescale environment variables: %s", strings.Join(missing, ", "))
+	}
+	connection := &url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(env["TIMESCALE_USERNAME"], env["TIMESCALE_PASSWORD"]),
+		Host:   net.JoinHostPort(env["TIMESCALE_HOST"], firstNonEmpty(env["TIMESCALE_PORT"], "5432")),
+		Path:   env["TIMESCALE_DATABASE"],
+	}
+	query := connection.Query()
+	query.Set("sslmode", firstNonEmpty(env["TIMESCALE_SSLMODE"], "disable"))
+	connection.RawQuery = query.Encode()
+	return connection.String(), nil
 }
 
 func RequireEmptyTables(ctx context.Context, pool interface {

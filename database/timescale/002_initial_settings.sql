@@ -136,6 +136,19 @@ SET default_table_access_method = heap;
 -- +goose StatementEnd
 
 --
+-- Name: achievement_player_awards; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.achievement_player_awards (
+    achievement_id text NOT NULL,
+    player_tag text NOT NULL,
+    occurrence_key text DEFAULT 'lifetime'::text NOT NULL,
+    earned_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT achievement_player_awards_achievement_id_check CHECK ((achievement_id <> ''::text)),
+    CONSTRAINT achievement_player_awards_occurrence_key_check CHECK ((occurrence_key <> ''::text))
+);
+
+--
 -- Name: admin_audit_events; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1478,6 +1491,13 @@ CREATE TABLE public.user_settings (
 ALTER TABLE public.tickets ALTER COLUMN number SET DEFAULT nextval('public.tickets_number_seq'::regclass);
 
 --
+-- Name: achievement_player_awards achievement_player_awards_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.achievement_player_awards
+    ADD CONSTRAINT achievement_player_awards_pkey PRIMARY KEY (achievement_id, player_tag, occurrence_key);
+
+--
 -- Name: admin_audit_events admin_audit_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1515,7 +1535,7 @@ INSERT INTO public.admin_feature_flags (
     'Subscription checkout',
     'Allow eligible dashboard users to start a Stripe subscription checkout.',
     false,
-    100,
+    0,
     ARRAY['web']::text[],
     'Product',
     'safe'
@@ -2149,6 +2169,12 @@ CREATE INDEX dashboard_role_grants_role_idx ON public.dashboard_role_grants USIN
 CREATE INDEX dashboard_role_grants_server_idx ON public.dashboard_role_grants USING btree (server_id);
 
 --
+-- Name: idx_achievement_player_awards_player_tag; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_achievement_player_awards_player_tag ON public.achievement_player_awards USING btree (player_tag);
+
+--
 -- Name: idx_admin_audit_events_created; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2525,6 +2551,13 @@ CREATE CONSTRAINT TRIGGER autoboard_targets_scope_trigger AFTER INSERT OR DELETE
 --
 
 CREATE CONSTRAINT TRIGGER autoboards_target_scope_trigger AFTER INSERT OR UPDATE OF target_scope ON public.autoboards DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.ck_validate_autoboard_target_scope();
+
+--
+-- Name: achievement_player_awards achievement_player_awards_player_tag_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.achievement_player_awards
+    ADD CONSTRAINT achievement_player_awards_player_tag_fkey FOREIGN KEY (player_tag) REFERENCES public.player_links(tag) ON DELETE CASCADE;
 
 --
 -- Name: admin_campaign_delivery_attempts admin_campaign_delivery_attempts_campaign_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
@@ -2928,6 +2961,7 @@ ALTER TABLE public.tickets
 SELECT add_retention_policy('user_recent_searches', INTERVAL '90 days', if_not_exists => TRUE);
 
 -- +goose Down
+DROP TABLE IF EXISTS public.achievement_player_awards CASCADE;
 DROP TABLE IF EXISTS public.admin_audit_events CASCADE;
 DROP TABLE IF EXISTS public.admin_campaign_delivery_attempts CASCADE;
 DROP TABLE IF EXISTS public.admin_feature_flags CASCADE;

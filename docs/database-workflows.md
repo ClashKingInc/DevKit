@@ -34,13 +34,13 @@ read-only diagnostic query.
 5. Inspect remote status before applying:
 
    ```bash
-   goose -dir database/timescale postgres "$TIMESCALE_URL" status
+   goose -dir database/timescale postgres "postgres://${TIMESCALE_USERNAME}:${TIMESCALE_PASSWORD}@${TIMESCALE_HOST}:${TIMESCALE_PORT}/${TIMESCALE_DATABASE}?sslmode=${TIMESCALE_SSLMODE}" status
    ```
 
 6. Apply while watching output:
 
    ```bash
-   goose -dir database/timescale postgres "$TIMESCALE_URL" up
+   goose -dir database/timescale postgres "postgres://${TIMESCALE_USERNAME}:${TIMESCALE_PASSWORD}@${TIMESCALE_HOST}:${TIMESCALE_PORT}/${TIMESCALE_DATABASE}?sslmode=${TIMESCALE_SSLMODE}" up
    ```
 
 7. Query the changed objects and verify retention policies, indexes, and row
