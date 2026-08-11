@@ -119,6 +119,11 @@ verified linked player. Existing links remain `NULL` until the app launch flow u
 `player_links.tag` as their only identity, timestamp writes with the database clock, and cascade
 on unlink; neither table carries a user or account identifier.
 
+`achievement_player_awards` records each earned achievement by achievement ID,
+linked player tag, and occurrence key. Lifetime awards use the default
+`lifetime` occurrence, repeatable awards provide their own stable occurrence,
+and every award cascades away when its player link is removed.
+
 ## Roster Architecture
 
 `roster_groups` organizes roster cards and is independent of the removed signup
