@@ -11,6 +11,7 @@ Shared contracts must be updated from their source of truth outward.
 | Clash API-compatible models and enums | Official API plus client library implementation | `clashy.go`, `cocpy`, `MockAPI`, API services |
 | Mock fixtures and interactive OpenAPI examples | `MockAPI` | local clients, demos, integration tests |
 | Shared visual tokens | `DevKit/design` | dashboard, admin, mobile adoption |
+| Production environment names | `DevKit/docs/production-environment.md` | Coolify resources, API, admin, proxy, tracking, Cloudflare deployment |
 
 ## Migration sequence
 

@@ -1535,7 +1535,7 @@ INSERT INTO public.admin_feature_flags (
     'Subscription checkout',
     'Allow eligible dashboard users to start a Stripe subscription checkout.',
     false,
-    100,
+    0,
     ARRAY['web']::text[],
     'Product',
     'safe'
