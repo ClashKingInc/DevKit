@@ -655,18 +655,6 @@ SELECT add_continuous_aggregate_policy(
 );
 
 --
--- Name: tracked_player_targets; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.tracked_player_targets (
-    tag text NOT NULL,
-    enabled boolean DEFAULT true NOT NULL,
-    source text DEFAULT 'manual'::text NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
---
 -- Name: tracking_domain_stats; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -954,13 +942,6 @@ ALTER TABLE public.player_rankings_current
 
 ALTER TABLE public.ranked_league_group_members
     ADD CONSTRAINT ranked_league_group_members_pkey PRIMARY KEY (season_id, group_tag, player_tag);
-
---
--- Name: tracked_player_targets tracked_player_targets_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE public.tracked_player_targets
-    ADD CONSTRAINT tracked_player_targets_pkey PRIMARY KEY (tag);
 
 --
 -- Name: tracking_sync_cursors tracking_sync_cursors_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -1532,7 +1513,6 @@ DROP TABLE IF EXISTS public.player_online_events CASCADE;
 DROP TABLE IF EXISTS public.player_rankings_current CASCADE;
 DROP TABLE IF EXISTS public.player_stat_changes CASCADE;
 DROP TABLE IF EXISTS public.ranked_league_group_members CASCADE;
-DROP TABLE IF EXISTS public.tracked_player_targets CASCADE;
 DROP TABLE IF EXISTS public.tracking_domain_stats CASCADE;
 DROP TABLE IF EXISTS public.tracking_process_stats CASCADE;
 DROP TABLE IF EXISTS public.tracking_sync_cursors CASCADE;
