@@ -1,0 +1,22 @@
+{
+  "name": "clashking-pgsync-staging",
+  "role_descriptors": {
+    "clashking_pgsync": {
+      "cluster": ["monitor"],
+      "indices": [
+        {
+          "names": [
+            "clashking_players_v1",
+            "clashking_clans_v1"
+          ],
+          "privileges": [
+            "read",
+            "write",
+            "manage",
+            "view_index_metadata"
+          ]
+        }
+      ]
+    }
+  }
+}

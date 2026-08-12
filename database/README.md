@@ -35,12 +35,31 @@ docker compose \
   up -d
 ```
 
+The staging player/clan search stack adds Elasticsearch and PGSync while
+reusing the same Timescale and Valkey services:
+
+```bash
+docker compose \
+  -f docker-compose.timescale.yml \
+  -f docker-compose.valkey.yml \
+  -f docker-compose.elasticsearch.yml \
+  -f docker-compose.pgsync.yml \
+  up -d
+```
+
+PGSync bootstrap is a separate one-time administrative command and is never
+part of normal container startup. Complete the PostgreSQL preflight, index
+provisioning, role setup, and validation process in
+[`pgsync/RUNBOOK.md`](pgsync/RUNBOOK.md) before starting the daemon in staging.
+
 Services:
 
 | Service | URL / address |
 | --- | --- |
 | Timescale/Postgres | `postgres://${TIMESCALE_USERNAME}:${TIMESCALE_PASSWORD}@${HOST_BIND_IP}:${TIMESCALE_PORT}/${TIMESCALE_DATABASE}?sslmode=${TIMESCALE_SSLMODE}` |
 | Valkey | `${HOST_BIND_IP}:${VALKEY_PORT}` |
+| Elasticsearch | Private Compose network only at `http://elasticsearch:9200` |
+| PGSync | Private worker with no listening/public port |
 
 Set `HOST_BIND_IP` to `127.0.0.1` when only same-host access is needed. Use an
 explicit trusted interface when another host must connect; do not bind database

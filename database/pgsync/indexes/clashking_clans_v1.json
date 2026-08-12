@@ -1,0 +1,71 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0,
+    "refresh_interval": "30s",
+    "analysis": {
+      "normalizer": {
+        "tag_lowercase": {
+          "type": "custom",
+          "filter": ["lowercase"]
+        }
+      },
+      "tokenizer": {
+        "name_edge_ngram": {
+          "type": "edge_ngram",
+          "min_gram": 2,
+          "max_gram": 16,
+          "token_chars": ["letter", "digit"]
+        }
+      },
+      "analyzer": {
+        "name_autocomplete": {
+          "type": "custom",
+          "tokenizer": "name_edge_ngram",
+          "filter": ["lowercase"]
+        },
+        "name_search": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": ["lowercase"]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "dynamic_templates": [],
+    "properties": {
+      "_meta": {
+        "type": "object",
+        "enabled": false
+      },
+      "tag": {
+        "type": "keyword",
+        "normalizer": "tag_lowercase"
+      },
+      "name": {
+        "type": "text",
+        "analyzer": "name_autocomplete",
+        "search_analyzer": "name_search"
+      },
+      "clan_level": {
+        "type": "integer"
+      },
+      "badge_token": {
+        "type": "keyword",
+        "index": false,
+        "doc_values": false
+      },
+      "location_id": {
+        "type": "integer"
+      },
+      "cwl_league_id": {
+        "type": "integer"
+      },
+      "member_count": {
+        "type": "integer"
+      }
+    }
+  }
+}

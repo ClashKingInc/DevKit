@@ -1,47 +1,74 @@
 # ClashKing DevKit
 
-Shared database, design, documentation, and AI-development resources for
-ClashKing applications and services.
+ClashKing DevKit is the shared home for ClashKing's database schema,
+infrastructure configuration, and design system. It keeps the pieces used by
+multiple ClashKing projects together so they don't drift between repositories.
 
-## Repository layout
+Application code and product-specific UI still live in their own repositories,
+and secrets stay in the deployment environment.
 
-| Path | Contents |
-| --- | --- |
-| [`database/`](database/) | TimescaleDB schema, Goose migrations, MongoDB-to-Timescale backfills, and the local Timescale/Valkey Compose stack. |
-| [`design/`](design/) | Cross-platform design tokens and reusable CSS and Flutter packages. |
-| [`docs/`](docs/) | DevKit-specific architecture, workflows, ownership, and mobile design guidance. |
-| [`skills/`](skills/) | Versioned copies of custom Codex skills plus reusable workflow skills derived from recurring team work. |
+## What DevKit governs
 
-Database migration executables stay in `database/migrations/` because they
-share a Go module, environment loading, checkpoint storage, and schema-root
-discovery.
+### Database and infrastructure
 
-## Quick start
+The `database/` workspace contains the PostgreSQL and TimescaleDB schema, Goose
+migrations, and one-off Go backfills from legacy data stores. It also contains
+the Compose files used to run Timescale, Valkey, Elasticsearch, and PGSync.
 
-### Database stack
+Schema changes belong in numbered migrations under `database/timescale/`.
+Backfills belong in `database/migrations/` and should use the existing shared
+connection, checkpoint, and schema-discovery utilities.
+
+The staging PGSync setup copies selected player and clan fields from PostgreSQL
+into Elasticsearch while PostgreSQL remains the source of truth. Its folder
+also contains the mappings, monitoring queries, and instructions for setup,
+validation, recovery, and reindexing.
+
+### Shared design language
+
+The `design/` workspace provides shared tokens and reusable components for web,
+admin, and Flutter projects. Complete pages, navigation, state management, and
+product-specific components stay in the app that uses them.
+
+Design changes should preserve semantic parity across platforms where the
+concept is shared, include usage documentation, and follow the decisions and
+governance recorded under `design/docs/`.
+
+## Working locally
+
+Create a local database environment file from the non-secret template:
 
 ```bash
 cd database
 cp .env.example .env
-docker compose -f docker-compose.timescale.yml -f docker-compose.valkey.yml up -d
 ```
 
-See [`database/README.md`](database/README.md) and
-[`docs/database-workflows.md`](docs/database-workflows.md). Privacy and retention
-requirements for personal-data schemas live in
-[`database/timescale/privacy_compliance.md`](database/timescale/privacy_compliance.md).
+Start the core Timescale and Valkey services:
 
-### Design tokens
+```bash
+docker compose \
+  -f docker-compose.timescale.yml \
+  -f docker-compose.valkey.yml \
+  up -d
+```
+
+The Elasticsearch and PGSync definitions are intentionally separate. Follow
+the PGSync runbook before starting them because logical replication settings,
+database roles, mappings, and the one-time bootstrap must be prepared first.
+
+Validate the shared design packages with:
 
 ```bash
 npm --prefix design install
 npm --prefix design run check
 ```
 
-See [`design/README.md`](design/README.md) and
-[`docs/mobile-design.md`](docs/mobile-design.md).
+The complete repository validation entrypoint is:
 
-### Skills
+```bash
+./scripts/validate-repository.sh
+```
 
-Browse [`docs/skills-catalog.md`](docs/skills-catalog.md). Each directory under
-`skills/` is self-contained and can be copied into a Codex skills directory.
+It checks the Go migration tools, Goose migrations, CSS and Flutter packages,
+and application design drift. You'll need the Go, Goose, Node, and Flutter
+toolchains installed to run everything.

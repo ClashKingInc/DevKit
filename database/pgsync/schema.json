@@ -1,0 +1,165 @@
+[
+  {
+    "database": "${POSTGRES_DB}",
+    "index": "clashking_players_v1",
+    "setting": {
+      "number_of_shards": 4,
+      "number_of_replicas": 0,
+      "refresh_interval": "30s",
+      "analysis": {
+        "normalizer": {
+          "tag_lowercase": {
+            "type": "custom",
+            "filter": ["lowercase"]
+          }
+        },
+        "tokenizer": {
+          "name_edge_ngram": {
+            "type": "edge_ngram",
+            "min_gram": 2,
+            "max_gram": 16,
+            "token_chars": ["letter", "digit"]
+          }
+        },
+        "analyzer": {
+          "name_autocomplete": {
+            "type": "custom",
+            "tokenizer": "name_edge_ngram",
+            "filter": ["lowercase"]
+          },
+          "name_search": {
+            "type": "custom",
+            "tokenizer": "standard",
+            "filter": ["lowercase"]
+          }
+        }
+      }
+    },
+    "mapping": {
+      "dynamic": "strict",
+      "dynamic_templates": [],
+      "properties": {
+        "_meta": {
+          "type": "object",
+          "enabled": false
+        },
+        "tag": {
+          "type": "keyword",
+          "normalizer": "tag_lowercase"
+        },
+        "name": {
+          "type": "text",
+          "analyzer": "name_autocomplete",
+          "search_analyzer": "name_search"
+        },
+        "league_id": {
+          "type": "integer"
+        },
+        "clan_tag": {
+          "type": "keyword",
+          "normalizer": "tag_lowercase"
+        },
+        "townhall_level": {
+          "type": "integer"
+        }
+      }
+    },
+    "nodes": {
+      "table": "basic_player",
+      "schema": "public",
+      "columns": [
+        "tag",
+        "name",
+        "league_id",
+        "clan_tag",
+        "townhall_level"
+      ]
+    }
+  },
+  {
+    "database": "${POSTGRES_DB}",
+    "index": "clashking_clans_v1",
+    "setting": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "refresh_interval": "30s",
+      "analysis": {
+        "normalizer": {
+          "tag_lowercase": {
+            "type": "custom",
+            "filter": ["lowercase"]
+          }
+        },
+        "tokenizer": {
+          "name_edge_ngram": {
+            "type": "edge_ngram",
+            "min_gram": 2,
+            "max_gram": 16,
+            "token_chars": ["letter", "digit"]
+          }
+        },
+        "analyzer": {
+          "name_autocomplete": {
+            "type": "custom",
+            "tokenizer": "name_edge_ngram",
+            "filter": ["lowercase"]
+          },
+          "name_search": {
+            "type": "custom",
+            "tokenizer": "standard",
+            "filter": ["lowercase"]
+          }
+        }
+      }
+    },
+    "mapping": {
+      "dynamic": "strict",
+      "dynamic_templates": [],
+      "properties": {
+        "_meta": {
+          "type": "object",
+          "enabled": false
+        },
+        "tag": {
+          "type": "keyword",
+          "normalizer": "tag_lowercase"
+        },
+        "name": {
+          "type": "text",
+          "analyzer": "name_autocomplete",
+          "search_analyzer": "name_search"
+        },
+        "clan_level": {
+          "type": "integer"
+        },
+        "badge_token": {
+          "type": "keyword",
+          "index": false,
+          "doc_values": false
+        },
+        "location_id": {
+          "type": "integer"
+        },
+        "cwl_league_id": {
+          "type": "integer"
+        },
+        "member_count": {
+          "type": "integer"
+        }
+      }
+    },
+    "nodes": {
+      "table": "basic_clan",
+      "schema": "public",
+      "columns": [
+        "tag",
+        "name",
+        "clan_level",
+        "badge_token",
+        "location_id",
+        "cwl_league_id",
+        "member_count"
+      ]
+    }
+  }
+]
