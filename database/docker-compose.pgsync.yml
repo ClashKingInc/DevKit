@@ -1,0 +1,53 @@
+name: clashking_tracking
+
+services:
+  pgsync:
+    image: clashking/pgsync:7.2.0
+    build:
+      context: ./pgsync
+      dockerfile: Dockerfile
+      args:
+        PGSYNC_VERSION: "7.2.0"
+        PGSYNC_GIT_REF: d438650e6b6a046505e847a604d5be0e9338f2d6
+    container_name: clashking-search-pgsync
+    restart: unless-stopped
+    command:
+      - --config
+      - /config/schema.json
+      - --daemon
+    environment:
+      PG_DRIVER: psycopg2
+      PG_HOST: ${TIMESCALE_HOST}
+      PG_PORT: "5432"
+      POSTGRES_DB: ${TIMESCALE_DATABASE}
+      PG_USER: ${PGSYNC_DB_USER}
+      PG_PASSWORD: ${PGSYNC_DB_PASSWORD}
+      PG_SSLMODE: ${TIMESCALE_SSLMODE}
+      ELASTICSEARCH: "true"
+      ELASTICSEARCH_HOST: elasticsearch
+      ELASTICSEARCH_PORT: "9200"
+      ELASTICSEARCH_SCHEME: http
+      ELASTICSEARCH_API_KEY_ID: ${PGSYNC_ELASTICSEARCH_API_KEY_ID}
+      ELASTICSEARCH_API_KEY: ${PGSYNC_ELASTICSEARCH_API_KEY}
+      ELASTICSEARCH_RAISE_ON_ERROR: "true"
+      ELASTICSEARCH_RAISE_ON_EXCEPTION: "true"
+      ELASTICSEARCH_STREAMING_BULK: "true"
+      ELASTICSEARCH_CHUNK_SIZE: "2000"
+      ELASTICSEARCH_MAX_RETRIES: "5"
+      REDIS_CHECKPOINT: "true"
+      REDIS_HOST: ${VALKEY_HOST}
+      REDIS_PORT: "6379"
+      REDIS_DB: "1"
+      REDIS_AUTH: ${VALKEY_PASSWORD}
+      SQLALCHEMY_POOL_SIZE: "4"
+      SQLALCHEMY_MAX_OVERFLOW: "4"
+      NUM_WORKERS: "2"
+    volumes:
+      - ./pgsync/schema.json:/config/schema.json:ro
+    depends_on:
+      timescale:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy

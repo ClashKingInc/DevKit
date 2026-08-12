@@ -36,7 +36,6 @@ Every public token or component change should include:
 
 - [ ] code implementation,
 - [ ] documentation update,
-- [ ] changelog entry,
 - [ ] migration note if behavior or naming changes,
 - [ ] validation with `npm run check`,
 - [ ] Flutter formatting for Dart changes.

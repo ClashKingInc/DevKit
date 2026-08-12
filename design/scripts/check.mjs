@@ -59,7 +59,6 @@ for (const className of [
 }
 
 for (const docPath of [
-  'CHANGELOG.md',
   'docs/MASTER.md',
   'docs/flutter.md',
   'docs/components.md',
