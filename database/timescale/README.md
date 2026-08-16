@@ -93,8 +93,8 @@ Optional Clash IDs on `basic_clan`, such as location, CWL league, and capital le
 nullable. Missing API values should be stored as `NULL`, not as a sentinel `0`.
 
 `basic_player` is the shared player profile table. Profile ingesters can upsert tag, name,
-league, and town hall without touching player activity. `battlelogs_tracking_ttl` is nullable and is
-reserved for scripts that observe actual activity signals such as war attacks.
+league, and town hall without touching player activity. Battle-log membership is derived from
+Legend League and explicit tracked-player targets rather than a mutable profile-table TTL.
 
 `join_leave_history` stores append-only membership events. It stores player tags, optional
 player names, and town hall values. It does not store role snapshots or extra JSONB data.

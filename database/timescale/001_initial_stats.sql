@@ -69,6 +69,7 @@ CREATE TABLE public.basic_clan (
     troops_received integer NOT NULL,
     members jsonb DEFAULT '[]'::jsonb NOT NULL,
     last_active timestamp with time zone,
+    last_war_at timestamp with time zone,
     builder_base_points integer DEFAULT 0 NOT NULL,
     capital_points integer DEFAULT 0 NOT NULL
 );
@@ -83,7 +84,6 @@ CREATE TABLE public.basic_player (
     league_id integer,
     clan_tag text,
     townhall_level integer NOT NULL,
-    battlelogs_tracking_ttl timestamp with time zone,
     trophies integer DEFAULT 0 NOT NULL
 );
 
@@ -288,15 +288,16 @@ CREATE TABLE public.clan_records (
 );
 
 --
--- Name: current_war_timers; Type: TABLE; Schema: public; Owner: -
+-- Name: player_timers; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.current_war_timers (
+CREATE TABLE public.player_timers (
+    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
     player_tag text NOT NULL,
-    war_id text NOT NULL,
-    clan_tag text NOT NULL,
-    opponent_tag text NOT NULL,
-    end_time timestamp with time zone NOT NULL
+    event_type text NOT NULL,
+    event_key text NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT player_timers_event_type_check CHECK ((event_type = ANY (ARRAY['war'::text, 'raid'::text])))
 );
 
 --
@@ -582,7 +583,7 @@ CREATE TABLE public.player_stat_changes (
     previous_value bigint NOT NULL,
     current_value bigint NOT NULL,
     delta bigint NOT NULL,
-    CONSTRAINT player_stat_changes_stat_type_check CHECK ((stat_type = ANY (ARRAY['donated'::text, 'received'::text, 'clan_games'::text, 'capital_gold_donated'::text]))),
+    CONSTRAINT player_stat_changes_stat_type_check CHECK ((stat_type = ANY (ARRAY['donated'::text, 'received'::text, 'clan_games'::text, 'capital_gold_donated'::text, 'season_pass'::text]))),
     CONSTRAINT player_stat_changes_values_check CHECK (((previous_value >= 0) AND (current_value > previous_value) AND (delta = (current_value - previous_value))))
 );
 
@@ -738,6 +739,16 @@ CREATE TABLE public.tracking_sync_cursors (
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
+-- Explicit product-owned membership in the fast player tracking pool.
+CREATE TABLE public.tracked_player_targets (
+    tag text NOT NULL,
+    enabled boolean DEFAULT true NOT NULL,
+    source text DEFAULT 'api'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT tracked_player_targets_tag_check CHECK ((btrim(tag) <> ''::text))
+);
+
 --
 -- Name: war_attacks; Type: TABLE; Schema: public; Owner: -
 --
@@ -821,7 +832,20 @@ CREATE TABLE public.war_schedule (
     prep_time timestamp with time zone NOT NULL,
     end_time timestamp with time zone NOT NULL,
     next_run_at timestamp with time zone NOT NULL,
+    war_type text DEFAULT ''::text NOT NULL,
     war_tag text
+);
+
+--
+-- Name: war_reminder_jobs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.war_reminder_jobs (
+    schedule_key text NOT NULL,
+    minutes_remaining integer NOT NULL,
+    run_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT war_reminder_jobs_minutes_check CHECK ((minutes_remaining > 0))
 );
 
 --
@@ -860,11 +884,14 @@ ALTER TABLE public.clan_records
     ADD CONSTRAINT clan_records_pkey PRIMARY KEY (tag);
 
 --
--- Name: current_war_timers current_war_timers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: player_timers player_timers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE public.current_war_timers
-    ADD CONSTRAINT current_war_timers_pkey PRIMARY KEY (player_tag);
+ALTER TABLE public.player_timers
+    ADD CONSTRAINT player_timers_pkey PRIMARY KEY (id);
+
+ALTER TABLE public.player_timers
+    ADD CONSTRAINT player_timers_player_event_key_key UNIQUE (player_tag, event_type, event_key);
 
 --
 -- Name: cwl_league_history cwl_league_history_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -957,6 +984,9 @@ ALTER TABLE public.tracking_sync_cursors
 ALTER TABLE public.war_attacks
     ADD CONSTRAINT war_attacks_pkey PRIMARY KEY (war_id, war_end_time, attacker_tag, defender_tag, attack_order);
 
+ALTER TABLE public.tracked_player_targets
+    ADD CONSTRAINT tracked_player_targets_pkey PRIMARY KEY (tag);
+
 --
 -- Name: war_members war_members_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
@@ -984,6 +1014,9 @@ ALTER TABLE public.war_schedule
 
 ALTER TABLE public.war_schedule
     ADD CONSTRAINT war_schedule_war_id_key UNIQUE (war_id);
+
+ALTER TABLE public.war_reminder_jobs
+    ADD CONSTRAINT war_reminder_jobs_pkey PRIMARY KEY (schedule_key, minutes_remaining);
 
 --
 -- Name: wars wars_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -1022,23 +1055,13 @@ CREATE INDEX clan_change_history_event_time_idx ON public.clan_change_history US
 
 CREATE INDEX idx_basic_clan_last_active ON public.basic_clan USING btree (last_active);
 
+CREATE INDEX idx_basic_clan_last_war_at ON public.basic_clan USING btree (last_war_at DESC) WHERE (public_war_log = true);
+
 --
 -- Name: idx_basic_clan_member_count; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_basic_clan_member_count ON public.basic_clan USING btree (member_count);
-
---
--- Name: idx_basic_player_battlelogs_ttl_legend; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_basic_player_battlelogs_ttl_legend ON public.basic_player USING btree (battlelogs_tracking_ttl DESC, tag) WHERE (league_id = 105000036);
-
---
--- Name: idx_basic_player_battlelogs_ttl_standard; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_basic_player_battlelogs_ttl_standard ON public.basic_player USING btree (battlelogs_tracking_ttl DESC, tag) WHERE (league_id IS DISTINCT FROM 105000036);
 
 --
 -- Name: idx_basic_player_league_trophies; Type: INDEX; Schema: public; Owner: -
@@ -1149,16 +1172,18 @@ CREATE INDEX idx_clan_leaderboards_war_wins_rank ON public.clan_leaderboards USI
 CREATE INDEX idx_clan_rankings_current_scope_rank ON public.clan_rankings_current USING btree (ranking_type, location_id, rank);
 
 --
--- Name: idx_current_war_timers_end_time; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_player_timers_expires_at; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_current_war_timers_end_time ON public.current_war_timers USING btree (end_time);
+CREATE INDEX idx_player_timers_expires_at ON public.player_timers USING btree (expires_at);
 
 --
--- Name: idx_current_war_timers_war_id; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_player_timers_player_tag; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_current_war_timers_war_id ON public.current_war_timers USING btree (war_id);
+CREATE INDEX idx_player_timers_player_tag ON public.player_timers USING btree (player_tag);
+
+CREATE INDEX idx_player_timers_event ON public.player_timers USING btree (event_type, event_key);
 
 --
 -- Name: idx_cwl_standings_clan_season; Type: INDEX; Schema: public; Owner: -
@@ -1376,6 +1401,8 @@ CREATE INDEX idx_tracking_process_stats_run_time ON public.tracking_process_stat
 
 CREATE INDEX idx_tracking_process_stats_script_time ON public.tracking_process_stats USING btree (script, interval_end DESC);
 
+CREATE INDEX idx_tracked_player_targets_enabled_tag ON public.tracked_player_targets USING btree (tag) WHERE (enabled = true);
+
 --
 -- Name: idx_war_attacks_clan_time; Type: INDEX; Schema: public; Owner: -
 --
@@ -1423,6 +1450,13 @@ CREATE INDEX idx_war_schedule_next_run ON public.war_schedule USING btree (next_
 --
 
 CREATE INDEX idx_war_schedule_source_opponent ON public.war_schedule USING btree (source_clan_tag, opponent_tag);
+
+CREATE INDEX idx_war_schedule_opponent ON public.war_schedule USING btree (opponent_tag);
+
+CREATE INDEX idx_war_reminder_jobs_run_at ON public.war_reminder_jobs USING btree (run_at);
+
+ALTER TABLE public.war_reminder_jobs
+    ADD CONSTRAINT war_reminder_jobs_schedule_key_fkey FOREIGN KEY (schedule_key) REFERENCES public.war_schedule(schedule_key) ON DELETE CASCADE;
 
 --
 -- Name: idx_wars_clan_end_time; Type: INDEX; Schema: public; Owner: -
@@ -1494,7 +1528,7 @@ DROP TABLE IF EXISTS public.battlelogs CASCADE;
 DROP TABLE IF EXISTS public.clan_change_history CASCADE;
 DROP TABLE IF EXISTS public.clan_rankings_current CASCADE;
 DROP TABLE IF EXISTS public.clan_records CASCADE;
-DROP TABLE IF EXISTS public.current_war_timers CASCADE;
+DROP TABLE IF EXISTS public.player_timers CASCADE;
 DROP TABLE IF EXISTS public.cwl_group_clans CASCADE;
 DROP TABLE IF EXISTS public.cwl_group_members CASCADE;
 DROP TABLE IF EXISTS public.cwl_groups CASCADE;
@@ -1516,9 +1550,11 @@ DROP TABLE IF EXISTS public.ranked_league_group_members CASCADE;
 DROP TABLE IF EXISTS public.tracking_domain_stats CASCADE;
 DROP TABLE IF EXISTS public.tracking_process_stats CASCADE;
 DROP TABLE IF EXISTS public.tracking_sync_cursors CASCADE;
+DROP TABLE IF EXISTS public.tracked_player_targets CASCADE;
 DROP TABLE IF EXISTS public.war_attacks CASCADE;
 DROP TABLE IF EXISTS public.war_members CASCADE;
 DROP TABLE IF EXISTS public.war_missed_attacks CASCADE;
+DROP TABLE IF EXISTS public.war_reminder_jobs CASCADE;
 DROP TABLE IF EXISTS public.war_schedule CASCADE;
 DROP TABLE IF EXISTS public.wars CASCADE;
 DROP SEQUENCE IF EXISTS public.tracking_stats_run_id_seq CASCADE;
