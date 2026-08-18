@@ -88,6 +88,25 @@ CREATE TABLE public.basic_player (
 );
 
 --
+-- Name: player_profile_details; Type: TABLE; Schema: public; Owner: -
+--
+
+-- One row means the player's full profile was fetched. Global progress
+-- statistics use this table as their sample population instead of basic_player,
+-- which also contains players whose detailed progress is unknown.
+CREATE TABLE public.player_profile_details (
+    player_tag text NOT NULL,
+    townhall_level smallint NOT NULL,
+    heroes jsonb DEFAULT '[]'::jsonb NOT NULL,
+    equipment jsonb DEFAULT '[]'::jsonb NOT NULL,
+    achievements jsonb DEFAULT '[]'::jsonb NOT NULL,
+    observed_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT player_profile_details_heroes_array CHECK ((jsonb_typeof(heroes) = 'array'::text)),
+    CONSTRAINT player_profile_details_equipment_array CHECK ((jsonb_typeof(equipment) = 'array'::text)),
+    CONSTRAINT player_profile_details_achievements_array CHECK ((jsonb_typeof(achievements) = 'array'::text))
+);
+
+--
 -- Name: join_leave_history; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -739,16 +758,6 @@ CREATE TABLE public.tracking_sync_cursors (
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
--- Explicit product-owned membership in the fast player tracking pool.
-CREATE TABLE public.tracked_player_targets (
-    tag text NOT NULL,
-    enabled boolean DEFAULT true NOT NULL,
-    source text DEFAULT 'api'::text NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT tracked_player_targets_tag_check CHECK ((btrim(tag) <> ''::text))
-);
-
 --
 -- Name: war_attacks; Type: TABLE; Schema: public; Owner: -
 --
@@ -862,6 +871,12 @@ ALTER TABLE public.basic_clan
 ALTER TABLE public.basic_player
     ADD CONSTRAINT basic_player_pkey PRIMARY KEY (tag);
 
+ALTER TABLE public.player_profile_details
+    ADD CONSTRAINT player_profile_details_pkey PRIMARY KEY (player_tag);
+
+ALTER TABLE public.player_profile_details
+    ADD CONSTRAINT player_profile_details_player_tag_fkey FOREIGN KEY (player_tag) REFERENCES public.basic_player(tag) ON DELETE CASCADE;
+
 --
 -- Name: battlelogs battlelogs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
@@ -892,6 +907,24 @@ ALTER TABLE public.player_timers
 
 ALTER TABLE public.player_timers
     ADD CONSTRAINT player_timers_player_event_key_key UNIQUE (player_tag, event_type, event_key);
+
+ALTER TABLE public.cwl_groups
+    ADD CONSTRAINT cwl_groups_pkey PRIMARY KEY (cwl_id);
+
+ALTER TABLE public.cwl_group_clans
+    ADD CONSTRAINT cwl_group_clans_pkey PRIMARY KEY (cwl_id, clan_tag);
+
+ALTER TABLE public.cwl_group_members
+    ADD CONSTRAINT cwl_group_members_pkey PRIMARY KEY (tag, cwl_id);
+
+ALTER TABLE public.cwl_group_clans
+    ADD CONSTRAINT cwl_group_clans_cwl_id_fkey FOREIGN KEY (cwl_id) REFERENCES public.cwl_groups(cwl_id) ON DELETE CASCADE;
+
+ALTER TABLE public.cwl_group_members
+    ADD CONSTRAINT cwl_group_members_group_clan_fkey FOREIGN KEY (cwl_id, clan_tag) REFERENCES public.cwl_group_clans(cwl_id, clan_tag) ON DELETE CASCADE;
+
+ALTER TABLE public.cwl_standings
+    ADD CONSTRAINT cwl_standings_group_clan_fkey FOREIGN KEY (cwl_id, clan_tag) REFERENCES public.cwl_group_clans(cwl_id, clan_tag) ON DELETE CASCADE;
 
 --
 -- Name: cwl_league_history cwl_league_history_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -947,7 +980,7 @@ ALTER TABLE public.leaderboard_history_player_home
 --
 
 ALTER TABLE public.legend_history
-    ADD CONSTRAINT legend_history_pkey PRIMARY KEY (season, player_tag);
+    ADD CONSTRAINT legend_history_pkey PRIMARY KEY (player_tag, season);
 
 --
 -- Name: legend_rankings_current legend_rankings_current_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -983,9 +1016,6 @@ ALTER TABLE public.tracking_sync_cursors
 
 ALTER TABLE public.war_attacks
     ADD CONSTRAINT war_attacks_pkey PRIMARY KEY (war_id, war_end_time, attacker_tag, defender_tag, attack_order);
-
-ALTER TABLE public.tracked_player_targets
-    ADD CONSTRAINT tracked_player_targets_pkey PRIMARY KEY (tag);
 
 --
 -- Name: war_members war_members_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -1074,6 +1104,11 @@ CREATE INDEX idx_basic_player_league_trophies ON public.basic_player USING btree
 --
 
 CREATE INDEX idx_basic_player_townhall_league_trophies ON public.basic_player USING btree (townhall_level, league_id DESC, trophies DESC) WHERE ((townhall_level >= 7) AND (league_id IS NOT NULL) AND (league_id <> 105000000));
+
+-- There are deliberately no GIN indexes on the JSON. The global aggregates are
+-- occasional batch scans, while a JSON index would make every profile change
+-- heavier and would not help a scan that expands every player's arrays.
+CREATE INDEX idx_player_profile_details_townhall ON public.player_profile_details USING btree (townhall_level);
 
 --
 -- Name: idx_battlelogs_army_counts; Type: INDEX; Schema: public; Owner: -
@@ -1185,6 +1220,14 @@ CREATE INDEX idx_player_timers_player_tag ON public.player_timers USING btree (p
 
 CREATE INDEX idx_player_timers_event ON public.player_timers USING btree (event_type, event_key);
 
+CREATE INDEX idx_cwl_groups_season_league ON public.cwl_groups USING btree (season, cwl_league_id);
+
+CREATE INDEX idx_cwl_groups_season_league_size ON public.cwl_groups USING btree (season, cwl_league_id, war_size);
+
+CREATE INDEX idx_cwl_group_clans_clan_cwl ON public.cwl_group_clans USING btree (clan_tag, cwl_id DESC);
+
+CREATE INDEX idx_cwl_group_members_cwl_id ON public.cwl_group_members USING btree (cwl_id);
+
 --
 -- Name: idx_cwl_standings_clan_season; Type: INDEX; Schema: public; Owner: -
 --
@@ -1219,73 +1262,37 @@ CREATE INDEX idx_join_leave_history_player ON public.join_leave_history USING bt
 -- Name: idx_leaderboard_history_clan_builder_base_clan; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_leaderboard_history_clan_builder_base_clan ON public.leaderboard_history_clan_builder_base USING btree (clan_tag, date DESC);
-
---
--- Name: idx_leaderboard_history_clan_builder_base_location_rank; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_leaderboard_history_clan_builder_base_location_rank ON public.leaderboard_history_clan_builder_base USING btree (location_id, date DESC, rank);
+CREATE INDEX idx_leaderboard_history_clan_builder_base_clan ON public.leaderboard_history_clan_builder_base USING btree (clan_tag);
 
 --
 -- Name: idx_leaderboard_history_clan_capital_clan; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_leaderboard_history_clan_capital_clan ON public.leaderboard_history_clan_capital USING btree (clan_tag, date DESC);
-
---
--- Name: idx_leaderboard_history_clan_capital_location_rank; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_leaderboard_history_clan_capital_location_rank ON public.leaderboard_history_clan_capital USING btree (location_id, date DESC, rank);
+CREATE INDEX idx_leaderboard_history_clan_capital_clan ON public.leaderboard_history_clan_capital USING btree (clan_tag);
 
 --
 -- Name: idx_leaderboard_history_clan_home_clan; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_leaderboard_history_clan_home_clan ON public.leaderboard_history_clan_home USING btree (clan_tag, date DESC);
-
---
--- Name: idx_leaderboard_history_clan_home_location_rank; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_leaderboard_history_clan_home_location_rank ON public.leaderboard_history_clan_home USING btree (location_id, date DESC, rank);
-
---
--- Name: idx_leaderboard_history_player_builder_base_location_rank; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_leaderboard_history_player_builder_base_location_rank ON public.leaderboard_history_player_builder_base USING btree (location_id, date DESC, rank);
+CREATE INDEX idx_leaderboard_history_clan_home_clan ON public.leaderboard_history_clan_home USING btree (clan_tag);
 
 --
 -- Name: idx_leaderboard_history_player_builder_base_player; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_leaderboard_history_player_builder_base_player ON public.leaderboard_history_player_builder_base USING btree (player_tag, date DESC);
-
---
--- Name: idx_leaderboard_history_player_home_location_rank; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_leaderboard_history_player_home_location_rank ON public.leaderboard_history_player_home USING btree (location_id, date DESC, rank);
+CREATE INDEX idx_leaderboard_history_player_builder_base_player ON public.leaderboard_history_player_builder_base USING btree (player_tag);
 
 --
 -- Name: idx_leaderboard_history_player_home_player; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_leaderboard_history_player_home_player ON public.leaderboard_history_player_home USING btree (player_tag, date DESC);
+CREATE INDEX idx_leaderboard_history_player_home_player ON public.leaderboard_history_player_home USING btree (player_tag);
 
 --
--- Name: idx_legend_history_clan_rank; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_legend_history_clan_season; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_legend_history_clan_rank ON public.legend_history USING btree (clan_tag, rank, season DESC) WHERE (clan_tag IS NOT NULL);
-
---
--- Name: idx_legend_history_player_season; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_legend_history_player_season ON public.legend_history USING btree (player_tag, season DESC);
+CREATE INDEX idx_legend_history_clan_season ON public.legend_history USING btree (clan_tag, season DESC) WHERE (clan_tag IS NOT NULL);
 
 --
 -- Name: idx_legend_history_season_rank; Type: INDEX; Schema: public; Owner: -
@@ -1401,8 +1408,6 @@ CREATE INDEX idx_tracking_process_stats_run_time ON public.tracking_process_stat
 
 CREATE INDEX idx_tracking_process_stats_script_time ON public.tracking_process_stats USING btree (script, interval_end DESC);
 
-CREATE INDEX idx_tracked_player_targets_enabled_tag ON public.tracked_player_targets USING btree (tag) WHERE (enabled = true);
-
 --
 -- Name: idx_war_attacks_clan_time; Type: INDEX; Schema: public; Owner: -
 --
@@ -1452,6 +1457,8 @@ CREATE INDEX idx_war_schedule_next_run ON public.war_schedule USING btree (next_
 CREATE INDEX idx_war_schedule_source_opponent ON public.war_schedule USING btree (source_clan_tag, opponent_tag);
 
 CREATE INDEX idx_war_schedule_opponent ON public.war_schedule USING btree (opponent_tag);
+
+CREATE INDEX idx_war_schedule_war_tag ON public.war_schedule USING btree (war_tag) WHERE (war_tag IS NOT NULL);
 
 CREATE INDEX idx_war_reminder_jobs_run_at ON public.war_reminder_jobs USING btree (run_at);
 
@@ -1523,6 +1530,7 @@ DROP MATERIALIZED VIEW IF EXISTS public.townhall_counts CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS public.townhall_stats_daily CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS public.war_league_counts CASCADE;
 DROP TABLE IF EXISTS public.basic_clan CASCADE;
+DROP TABLE IF EXISTS public.player_profile_details CASCADE;
 DROP TABLE IF EXISTS public.basic_player CASCADE;
 DROP TABLE IF EXISTS public.battlelogs CASCADE;
 DROP TABLE IF EXISTS public.clan_change_history CASCADE;
@@ -1550,7 +1558,6 @@ DROP TABLE IF EXISTS public.ranked_league_group_members CASCADE;
 DROP TABLE IF EXISTS public.tracking_domain_stats CASCADE;
 DROP TABLE IF EXISTS public.tracking_process_stats CASCADE;
 DROP TABLE IF EXISTS public.tracking_sync_cursors CASCADE;
-DROP TABLE IF EXISTS public.tracked_player_targets CASCADE;
 DROP TABLE IF EXISTS public.war_attacks CASCADE;
 DROP TABLE IF EXISTS public.war_members CASCADE;
 DROP TABLE IF EXISTS public.war_missed_attacks CASCADE;

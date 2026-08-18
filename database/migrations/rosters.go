@@ -54,7 +54,7 @@ func rosterOneShotPlan() migrateutil.OneShotPlan {
 	return migrateutil.OneShotPlan{
 		ResetSQL: []string{
 			`DELETE FROM public.rosters`,
-			`TRUNCATE TABLE public.roster_automation_rules, public.roster_groups`,
+			`TRUNCATE TABLE public.roster_automation_executions, public.roster_automation_rules, public.roster_groups`,
 		},
 		DropIndexes: []string{
 			`DROP INDEX IF EXISTS public.idx_roster_automation_rules_server_group`,

@@ -156,16 +156,11 @@ func leaderboardHistoryOneShotPlan() migrateutil.OneShotPlan {
 			`DROP INDEX IF EXISTS public.idx_leaderboard_history_clan_capital_clan`,
 		},
 		CreateIndexes: []string{
-			`CREATE INDEX idx_leaderboard_history_player_home_location_rank ON public.leaderboard_history_player_home (location_id, date DESC, rank)`,
-			`CREATE INDEX idx_leaderboard_history_player_home_player ON public.leaderboard_history_player_home (player_tag, date DESC)`,
-			`CREATE INDEX idx_leaderboard_history_player_builder_base_location_rank ON public.leaderboard_history_player_builder_base (location_id, date DESC, rank)`,
-			`CREATE INDEX idx_leaderboard_history_player_builder_base_player ON public.leaderboard_history_player_builder_base (player_tag, date DESC)`,
-			`CREATE INDEX idx_leaderboard_history_clan_home_location_rank ON public.leaderboard_history_clan_home (location_id, date DESC, rank)`,
-			`CREATE INDEX idx_leaderboard_history_clan_home_clan ON public.leaderboard_history_clan_home (clan_tag, date DESC)`,
-			`CREATE INDEX idx_leaderboard_history_clan_builder_base_location_rank ON public.leaderboard_history_clan_builder_base (location_id, date DESC, rank)`,
-			`CREATE INDEX idx_leaderboard_history_clan_builder_base_clan ON public.leaderboard_history_clan_builder_base (clan_tag, date DESC)`,
-			`CREATE INDEX idx_leaderboard_history_clan_capital_location_rank ON public.leaderboard_history_clan_capital (location_id, date DESC, rank)`,
-			`CREATE INDEX idx_leaderboard_history_clan_capital_clan ON public.leaderboard_history_clan_capital (clan_tag, date DESC)`,
+			`CREATE INDEX idx_leaderboard_history_player_home_player ON public.leaderboard_history_player_home (player_tag)`,
+			`CREATE INDEX idx_leaderboard_history_player_builder_base_player ON public.leaderboard_history_player_builder_base (player_tag)`,
+			`CREATE INDEX idx_leaderboard_history_clan_home_clan ON public.leaderboard_history_clan_home (clan_tag)`,
+			`CREATE INDEX idx_leaderboard_history_clan_builder_base_clan ON public.leaderboard_history_clan_builder_base (clan_tag)`,
+			`CREATE INDEX idx_leaderboard_history_clan_capital_clan ON public.leaderboard_history_clan_capital (clan_tag)`,
 		},
 	}
 }

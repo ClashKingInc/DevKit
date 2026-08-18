@@ -94,11 +94,11 @@ func legendHistoryOneShotPlan() migrateutil.OneShotPlan {
 			`DROP INDEX IF EXISTS public.idx_legend_history_season_rank`,
 			`DROP INDEX IF EXISTS public.idx_legend_history_player_season`,
 			`DROP INDEX IF EXISTS public.idx_legend_history_clan_rank`,
+			`DROP INDEX IF EXISTS public.idx_legend_history_clan_season`,
 		},
 		CreateIndexes: []string{
 			`CREATE INDEX idx_legend_history_season_rank ON public.legend_history (season, rank)`,
-			`CREATE INDEX idx_legend_history_player_season ON public.legend_history (player_tag, season DESC)`,
-			`CREATE INDEX idx_legend_history_clan_rank ON public.legend_history (clan_tag, rank, season DESC) WHERE clan_tag IS NOT NULL`,
+			`CREATE INDEX idx_legend_history_clan_season ON public.legend_history (clan_tag, season DESC) WHERE clan_tag IS NOT NULL`,
 		},
 	}
 }
@@ -238,7 +238,7 @@ func flushLegendHistoryRows(ctx context.Context, pool interface {
 			attack_wins, defense_wins, rank, clan_tag, clan_name,
 			clan_badge_token, league_tier_id
 		FROM _ck_legend_history
-		ON CONFLICT (season, player_tag) DO UPDATE SET
+		ON CONFLICT (player_tag, season) DO UPDATE SET
 			player_name = EXCLUDED.player_name,
 			exp_level = EXCLUDED.exp_level,
 			rank = EXCLUDED.rank,
