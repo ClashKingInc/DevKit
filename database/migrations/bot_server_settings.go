@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 
 	"clashking_devkit_database_migrations/migrateutil"
@@ -23,10 +24,14 @@ func main() {
 
 func runBotServerSettings(ctx context.Context, cfg migrateutil.Config) error {
 	if scope := strings.TrimSpace(os.Getenv("BOT_SERVER_SETTINGS_ONLY")); scope != "" {
-		if scope != "giveaways" {
+		switch scope {
+		case "giveaways":
+			return runGiveawaysOnly(ctx, cfg)
+		case "reminders":
+			return runRemindersOnly(ctx, cfg)
+		default:
 			return fmt.Errorf("unsupported BOT_SERVER_SETTINGS_ONLY scope %q", scope)
 		}
-		return runGiveawaysOnly(ctx, cfg)
 	}
 
 	staticClient, err := migrateutil.StaticClient(ctx, cfg)
@@ -77,6 +82,46 @@ func runBotServerSettings(ctx context.Context, cfg migrateutil.Config) error {
 	// truthfully before the API board-type registry is finalized, so this
 	// importer must not scan or recreate them.
 	return migrateutil.FinishOneShot(ctx, pool, plan)
+}
+
+func runRemindersOnly(ctx context.Context, cfg migrateutil.Config) error {
+	staticClient, err := migrateutil.StaticClient(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer staticClient.Disconnect(ctx)
+	pool, err := migrateutil.TimescalePool(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	collection := staticClient.Database("usafam").Collection("reminders")
+	sourceCount, err := collection.CountDocuments(ctx, bson.M{})
+	if err != nil {
+		return fmt.Errorf("preflight source reminders: %w", err)
+	}
+	if sourceCount == 0 {
+		return fmt.Errorf("refusing to truncate reminders: source collection is empty")
+	}
+	fmt.Printf("settings.reminders: source_docs=%d\n", sourceCount)
+	plan := remindersOneShotPlan()
+	if err := migrateutil.StartOneShot(ctx, pool, plan); err != nil {
+		return err
+	}
+	if err := migrateReminders(ctx, cfg, pool, collection); err != nil {
+		return err
+	}
+	return migrateutil.FinishOneShot(ctx, pool, plan)
+}
+
+func remindersOneShotPlan() migrateutil.OneShotPlan {
+	return migrateutil.OneShotPlan{
+		ResetSQL:    []string{`TRUNCATE TABLE public.reminders`},
+		DropIndexes: []string{`DROP INDEX IF EXISTS public.idx_reminders_server_type_name`},
+		CreateIndexes: []string{
+			`CREATE INDEX idx_reminders_server_type_name ON public.reminders (server_id, type_name)`,
+		},
+	}
 }
 
 func runGiveawaysOnly(ctx context.Context, cfg migrateutil.Config) error {
@@ -593,6 +638,26 @@ func timeFromMongoDocument(doc bson.M) any {
 	return nil
 }
 
+func reminderMinutes(value any) int {
+	raw := strings.TrimSpace(strings.ToLower(migrateutil.String(value)))
+	raw = strings.TrimSpace(strings.TrimSuffix(raw, "hr"))
+	if raw == "" {
+		return 0
+	}
+	hours, err := strconv.ParseFloat(raw, 64)
+	if err != nil || hours <= 0 {
+		return 0
+	}
+	return int(hours*60 + 0.5)
+}
+
+func reminderMinutesFromDocument(doc bson.M) int {
+	if minutes := migrateutil.Int(doc["minutes_remaining"]); minutes > 0 {
+		return minutes
+	}
+	return reminderMinutes(doc["time"])
+}
+
 func migrateReminders(ctx context.Context, cfg migrateutil.Config, pool interface {
 	Begin(context.Context) (pgx.Tx, error)
 }, collection *mongo.Collection) error {
@@ -630,7 +695,7 @@ func migrateReminders(ctx context.Context, cfg migrateutil.Config, pool interfac
 			migrateutil.String(doc["type"]),
 			migrateutil.String(doc["clan"]),
 			migrateutil.String(doc["webhook_token"]),
-			migrateutil.Int(doc["minutes_remaining"]),
+			reminderMinutesFromDocument(doc),
 			migrateutil.String(doc["channel"]),
 			reminderThreadID(doc),
 			migrateutil.String(doc["time"]),

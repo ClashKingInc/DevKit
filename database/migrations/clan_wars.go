@@ -162,7 +162,10 @@ func clanWarCheckpointKey(clanTag string) string {
 
 func clanWarFilter(clanTag string) bson.D {
 	if clanTag == "" {
-		return bson.D{}
+		// Mongo driver v2 cannot encode an empty bson.D as a top-level Find
+		// filter. Every stored document has an _id, so this remains an
+		// unfiltered, indexable global scan while producing valid BSON.
+		return bson.D{{Key: "_id", Value: bson.D{{Key: "$exists", Value: true}}}}
 	}
 	return bson.D{{Key: "$or", Value: bson.A{
 		bson.D{{Key: "data.clan.tag", Value: clanTag}},
@@ -769,6 +772,36 @@ func flushClanWarRows(ctx context.Context, pool clanWarSQL, wars []warIndexInser
 		}
 		clanWarProfile.warsCopyNanos.Add(time.Since(copyStarted).Nanoseconds())
 		clanWarProfile.warRows.Add(tag.RowsAffected())
+		if _, err := tx.Exec(ctx, `
+			WITH observed AS (
+				SELECT clan_tag AS tag, max(end_time) AS last_war_at
+				FROM _ck_wars
+				WHERE clan_tag <> ''
+				GROUP BY clan_tag
+				UNION ALL
+				SELECT opponent_tag AS tag, max(end_time) AS last_war_at
+				FROM _ck_wars
+				WHERE opponent_tag <> ''
+				GROUP BY opponent_tag
+			), latest AS (
+				SELECT tag, max(last_war_at) AS last_war_at
+				FROM observed
+				GROUP BY tag
+			)
+			UPDATE public.basic_clan AS clan
+			SET last_war_at = GREATEST(
+				COALESCE(clan.last_war_at, '-infinity'::timestamptz),
+				latest.last_war_at
+			)
+			FROM latest
+			WHERE clan.tag = latest.tag
+			  AND clan.last_war_at IS DISTINCT FROM GREATEST(
+				COALESCE(clan.last_war_at, '-infinity'::timestamptz),
+				latest.last_war_at
+			  )
+		`); err != nil {
+			return err
+		}
 	}
 	if len(missedAttacks) > 0 {
 		if _, err := tx.Exec(ctx, `CREATE TEMP TABLE _ck_war_missed_attacks (LIKE public.war_missed_attacks INCLUDING DEFAULTS) ON COMMIT DROP`); err != nil {

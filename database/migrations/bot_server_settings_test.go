@@ -56,6 +56,24 @@ func TestReminderThreadIDUsesTypedSourceAliases(t *testing.T) {
 	}
 }
 
+func TestReminderMinutesConvertsLegacyDecimalHours(t *testing.T) {
+	tests := map[string]int{
+		"0.25 hr": 15,
+		"1 hr":    60,
+		"6.25 hr": 375,
+		"144 hr":  8640,
+		"":        0,
+	}
+	for input, want := range tests {
+		if got := reminderMinutes(input); got != want {
+			t.Errorf("reminderMinutes(%q) = %d, want %d", input, got, want)
+		}
+	}
+	if got := reminderMinutesFromDocument(bson.M{"minutes_remaining": 45, "time": "6 hr"}); got != 45 {
+		t.Fatalf("typed minutes = %d, want 45", got)
+	}
+}
+
 func TestTicketIntegerFieldsRejectSnowflakesAndOutOfRangeValues(t *testing.T) {
 	if got := nullableIntInRange("18", 1, 100); got != 18 {
 		t.Fatalf("nullableIntInRange(18) = %#v, want 18", got)
@@ -124,6 +142,19 @@ func TestGiveawaysOneShotPlanOnlyTouchesGiveaways(t *testing.T) {
 	for _, unrelated := range []string{"tickets", "reminders", "short_links", "user_settings", "server_custom_embeds"} {
 		if strings.Contains(allStatements, unrelated) {
 			t.Fatalf("giveaway-only plan unexpectedly touches %s", unrelated)
+		}
+	}
+}
+
+func TestRemindersOneShotPlanOnlyTouchesReminders(t *testing.T) {
+	plan := remindersOneShotPlan()
+	allStatements := strings.Join(append(append(plan.ResetSQL, plan.DropIndexes...), plan.CreateIndexes...), "\n")
+	if !strings.Contains(allStatements, "public.reminders") {
+		t.Fatal("reminder-only plan does not target public.reminders")
+	}
+	for _, unrelated := range []string{"tickets", "giveaways", "short_links", "user_settings", "server_custom_embeds"} {
+		if strings.Contains(allStatements, unrelated) {
+			t.Fatalf("reminder-only plan unexpectedly touches %s", unrelated)
 		}
 	}
 }

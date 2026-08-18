@@ -165,7 +165,10 @@ func runPlayerLinks(ctx context.Context, cfg migrateutil.Config) error {
 
 func loadSettings(cfg migrateutil.Config) (settings, error) {
 	s := settings{
-		BotToken:        strings.TrimSpace(cfg.Env["DISCORD_BOT_TOKEN"]),
+		BotToken: strings.TrimSpace(firstNonEmpty(
+			cfg.Env["DISCORD_BOT_TOKEN"],
+			cfg.Env["BOT_TOKEN"],
+		)),
 		LinkAPIUser:     strings.TrimSpace(cfg.Env["LINK_API_USER"]),
 		LinkAPIPassword: strings.TrimSpace(cfg.Env["LINK_API_PW"]),
 		LinkAPIBaseURL:  strings.TrimRight(firstNonEmpty(cfg.Env["LINK_API_BASE_URL"], defaultLinkAPIBaseURL), "/"),
@@ -174,7 +177,7 @@ func loadSettings(cfg migrateutil.Config) (settings, error) {
 		DiscordDelay:    time.Duration(envInt(cfg.Env, "DISCORD_REQUEST_DELAY_MS", 250)) * time.Millisecond,
 	}
 	if s.BotToken == "" {
-		return settings{}, errors.New("missing DISCORD_BOT_TOKEN in .env")
+		return settings{}, errors.New("missing DISCORD_BOT_TOKEN/BOT_TOKEN in .env")
 	}
 	if s.LinkAPIUser == "" || s.LinkAPIPassword == "" {
 		return settings{}, errors.New("missing LINK_API_USER/LINK_API_PW in .env")

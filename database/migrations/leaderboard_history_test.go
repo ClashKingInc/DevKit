@@ -4,6 +4,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,7 +35,7 @@ func TestLeaderboardHistorySourcesUseFiveTypedTables(t *testing.T) {
 
 func TestLeaderboardHistoryOneShotPlanUsesAllFiveTables(t *testing.T) {
 	plan := leaderboardHistoryOneShotPlan()
-	if len(plan.ResetSQL) != 5 || len(plan.DropIndexes) != 10 || len(plan.CreateIndexes) != 10 {
+	if len(plan.ResetSQL) != 5 || len(plan.DropIndexes) != 10 || len(plan.CreateIndexes) != 5 {
 		t.Fatalf(
 			"unexpected one-shot lifecycle: reset=%#v drop=%d create=%d",
 			plan.ResetSQL,
@@ -48,6 +49,10 @@ func TestLeaderboardHistoryOneShotPlanUsesAllFiveTables(t *testing.T) {
 			containsAny(statement, "jsonb", " data", " kind") {
 			t.Fatalf("one-shot plan retains generic/JSON history storage: %q", statement)
 		}
+	}
+	created := strings.Join(plan.CreateIndexes, "\n")
+	if strings.Contains(created, "location_rank") || strings.Contains(created, "date DESC") {
+		t.Fatalf("leaderboard import recreates unnecessary indexes: %s", created)
 	}
 }
 

@@ -40,6 +40,13 @@ func TestClanWarFilterMatchesEitherSide(t *testing.T) {
 	}
 }
 
+func TestClanWarFilterGlobalScanUsesValidBSON(t *testing.T) {
+	want := bson.D{{Key: "_id", Value: bson.D{{Key: "$exists", Value: true}}}}
+	if got := clanWarFilter(""); !reflect.DeepEqual(got, want) {
+		t.Fatalf("global clanWarFilter() = %#v, want %#v", got, want)
+	}
+}
+
 func TestCWLWarTagFilterUsesIndexedOfficialTag(t *testing.T) {
 	want := bson.D{{Key: "data.tag", Value: bson.D{{Key: "$in", Value: []string{"#WAR1", "#WAR2"}}}}}
 	if got := cwlWarTagFilter([]string{"#WAR1", "#WAR2"}); !reflect.DeepEqual(got, want) {

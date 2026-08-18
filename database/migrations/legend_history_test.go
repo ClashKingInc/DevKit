@@ -4,6 +4,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -14,8 +15,14 @@ func TestLegendHistoryOneShotPlan(t *testing.T) {
 	if !reflect.DeepEqual(plan.ResetSQL, []string{`TRUNCATE TABLE public.legend_history`}) {
 		t.Fatalf("reset SQL = %#v", plan.ResetSQL)
 	}
-	if len(plan.DropIndexes) != 3 || len(plan.CreateIndexes) != 3 {
+	if len(plan.DropIndexes) != 4 || len(plan.CreateIndexes) != 2 {
 		t.Fatalf("unexpected index lifecycle: drop=%#v create=%#v", plan.DropIndexes, plan.CreateIndexes)
+	}
+	created := strings.Join(plan.CreateIndexes, "\n")
+	if strings.Contains(created, "player_season") ||
+		!strings.Contains(created, "(season, rank)") ||
+		!strings.Contains(created, "(clan_tag, season DESC)") {
+		t.Fatalf("unexpected legend indexes: %s", created)
 	}
 }
 

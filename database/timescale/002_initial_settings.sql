@@ -655,11 +655,11 @@ CREATE TABLE public.giveaways (
 CREATE TABLE public.mobile_notification_accounts (
     user_id text NOT NULL,
     player_tag text NOT NULL,
-    source text NOT NULL,
+    source text DEFAULT 'verified'::text NOT NULL,
     active boolean DEFAULT true NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT mobile_notification_accounts_source_check CHECK ((source = ANY (ARRAY['verified'::text, 'bookmarked'::text])))
+    CONSTRAINT mobile_notification_accounts_source_check CHECK ((source = 'verified'::text))
 );
 
 --
@@ -689,20 +689,21 @@ CREATE TABLE public.mobile_push_devices (
     last_seen_at timestamp with time zone DEFAULT now() NOT NULL,
     authorization_status text DEFAULT 'not_determined'::text NOT NULL,
     locale text DEFAULT ''::text NOT NULL,
-    legend_attacks_enabled boolean DEFAULT false NOT NULL,
-    legend_defenses_enabled boolean DEFAULT false NOT NULL,
     war_attacks_enabled boolean DEFAULT false NOT NULL,
     war_state_enabled boolean DEFAULT false NOT NULL,
     war_reminders_enabled boolean DEFAULT false NOT NULL,
+    raid_reminders_enabled boolean DEFAULT false NOT NULL,
     events_enabled boolean DEFAULT false NOT NULL,
     announcements_enabled boolean DEFAULT false NOT NULL,
     monthly_support_enabled boolean DEFAULT false NOT NULL,
     reminder_timings integer[] DEFAULT '{}'::integer[] NOT NULL,
+    raid_reminder_timings integer[] DEFAULT '{}'::integer[] NOT NULL,
     CONSTRAINT mobile_push_devices_authorization_status_check CHECK ((authorization_status = ANY (ARRAY['authorized'::text, 'provisional'::text, 'denied'::text, 'not_determined'::text]))),
     CONSTRAINT mobile_push_devices_environment_check CHECK ((environment = ANY (ARRAY['sandbox'::text, 'production'::text]))),
     CONSTRAINT mobile_push_devices_platform_check CHECK ((platform = ANY (ARRAY['ios'::text, 'android'::text]))),
     CONSTRAINT mobile_push_devices_provider_check CHECK ((provider = 'fcm'::text)),
-    CONSTRAINT mobile_push_devices_reminder_timings_check CHECK (((cardinality(reminder_timings) <= 3) AND (array_position(reminder_timings, NULL::integer) IS NULL) AND (0 < ALL (reminder_timings)) AND (2820 >= ALL (reminder_timings))))
+    CONSTRAINT mobile_push_devices_reminder_timings_check CHECK (((cardinality(reminder_timings) <= 3) AND (array_position(reminder_timings, NULL::integer) IS NULL) AND (0 < ALL (reminder_timings)) AND (2820 >= ALL (reminder_timings)))),
+    CONSTRAINT mobile_push_devices_raid_reminder_timings_check CHECK (((cardinality(raid_reminder_timings) <= 3) AND (array_position(raid_reminder_timings, NULL::integer) IS NULL) AND (0 < ALL (raid_reminder_timings)) AND (4320 >= ALL (raid_reminder_timings))))
 );
 
 --
@@ -864,7 +865,7 @@ CREATE TABLE public.roster_automation_rules (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     action_type text DEFAULT ''::text NOT NULL,
-    offset_seconds integer DEFAULT 0 NOT NULL,
+    scheduled_at timestamp with time zone NOT NULL,
     discord_channel_id text,
     ping_type text,
     executed boolean DEFAULT false NOT NULL,
@@ -873,6 +874,26 @@ CREATE TABLE public.roster_automation_rules (
     execution_status text,
     last_missed_at bigint,
     roster_id uuid
+);
+
+--
+-- Name: roster_automation_executions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.roster_automation_executions (
+    execution_id text NOT NULL,
+    automation_id text NOT NULL,
+    roster_id uuid NOT NULL,
+    scheduled_at timestamp with time zone NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    attempts integer DEFAULT 0 NOT NULL,
+    next_attempt_at timestamp with time zone NOT NULL,
+    claimed_at timestamp with time zone,
+    completed_at timestamp with time zone,
+    last_error text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT roster_automation_executions_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'processing'::text, 'completed'::text, 'failed'::text, 'missed'::text])))
 );
 
 --
@@ -1891,6 +1912,9 @@ ALTER TABLE public.roster_ai_usage_sponsors
 ALTER TABLE public.roster_automation_rules
     ADD CONSTRAINT roster_automation_rules_pkey PRIMARY KEY (automation_id);
 
+ALTER TABLE public.roster_automation_executions
+    ADD CONSTRAINT roster_automation_executions_pkey PRIMARY KEY (execution_id);
+
 --
 -- Name: roster_groups roster_groups_group_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
@@ -2420,6 +2444,10 @@ CREATE INDEX idx_roster_ai_usage_user_created ON public.roster_ai_usage USING bt
 
 CREATE INDEX idx_roster_automation_rules_server_group ON public.roster_automation_rules USING btree (server_id, group_id);
 
+CREATE INDEX idx_roster_automation_rules_due ON public.roster_automation_rules USING btree (scheduled_at) WHERE ((enabled = true) AND (executed = false));
+
+CREATE INDEX idx_roster_automation_executions_due ON public.roster_automation_executions USING btree (next_attempt_at) WHERE (status = ANY (ARRAY['pending'::text, 'processing'::text]));
+
 --
 -- Name: idx_roster_groups_server; Type: INDEX; Schema: public; Owner: -
 --
@@ -2776,6 +2804,12 @@ ALTER TABLE public.roster_ai_usage
 ALTER TABLE public.roster_automation_rules
     ADD CONSTRAINT roster_automation_rules_roster_id_fkey FOREIGN KEY (roster_id) REFERENCES public.rosters(id) ON DELETE CASCADE;
 
+ALTER TABLE public.roster_automation_executions
+    ADD CONSTRAINT roster_automation_executions_automation_id_fkey FOREIGN KEY (automation_id) REFERENCES public.roster_automation_rules(automation_id) ON DELETE CASCADE;
+
+ALTER TABLE public.roster_automation_executions
+    ADD CONSTRAINT roster_automation_executions_roster_id_fkey FOREIGN KEY (roster_id) REFERENCES public.rosters(id) ON DELETE CASCADE;
+
 --
 -- Name: roster_groups roster_groups_server_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
@@ -3000,6 +3034,7 @@ DROP TABLE IF EXISTS public.reminders CASCADE;
 DROP TABLE IF EXISTS public.roster_ai_usage CASCADE;
 DROP TABLE IF EXISTS public.roster_ai_usage_credits CASCADE;
 DROP TABLE IF EXISTS public.roster_ai_usage_sponsors CASCADE;
+DROP TABLE IF EXISTS public.roster_automation_executions CASCADE;
 DROP TABLE IF EXISTS public.roster_automation_rules CASCADE;
 DROP TABLE IF EXISTS public.roster_groups CASCADE;
 DROP TABLE IF EXISTS public.roster_members CASCADE;

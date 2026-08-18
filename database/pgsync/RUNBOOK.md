@@ -225,11 +225,9 @@ pgsync --config /config/schema.json --daemon
 
 Do not add PGSync's direct `--wal` option. PostgreSQL still uses logical WAL;
 normal daemon mode additionally uses trigger-side configured-column filtering.
-All roughly 50 million player rows are indexed initially. A rolling 30-day TTL
-filter is deliberately not implemented: PGSync schemas have no durable
-time-predicate feature, expiry itself produces no row update, and making
-`battlelogs_tracking_ttl` control membership would contradict the requirement
-that TTL-only changes do not affect Elasticsearch.
+All roughly 50 million player rows are indexed initially. Battle-log tracking
+membership is intentionally absent from `basic_player`; it is derived by the
+tracking service and therefore cannot create irrelevant Elasticsearch updates.
 
 Watch PostgreSQL load, retained WAL, PGSync logs, Elasticsearch heap/CPU/disk,
 bulk failures, indexing rate, and shard sizes throughout the initial load. The
@@ -250,8 +248,8 @@ created the materialized view, index, function, four triggers, and two
 `test_decoding` slots listed above. Initial sync produced one flat document for
 each table in 0.58 seconds.
 
-Configured-field updates advanced Elasticsearch `_seq_no`; player
-`trophies`/`battlelogs_tracking_ttl` and clan `last_active`/`description`
+Configured-field updates advanced Elasticsearch `_seq_no`; player `trophies`
+and clan `last_active`/`description`
 updates left `_seq_no` unchanged. Player autocomplete with combined clan, town
 hall, and league filters returned the row, using the clan tag as the `name`
 query returned no row, and PostgreSQL deletes removed both Elasticsearch
@@ -267,8 +265,7 @@ Player validation:
 
 - Insert, rename, change town hall, change league, change clan, and delete a
   staging player; verify every corresponding document change.
-- Change only `trophies`, then only `battlelogs_tracking_ttl`; verify `_seq_no`
-  does not change.
+- Change only `trophies`; verify `_seq_no` does not change.
 - Use a `bool.must` `match` query on `name`, with optional `bool.filter` `terms`
   clauses on `clan_tag`, `townhall_level`, and `league_id`.
 - Verify one and multiple clan tags, independent and combined numeric filters,

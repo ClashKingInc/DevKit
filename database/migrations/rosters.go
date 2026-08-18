@@ -54,7 +54,7 @@ func rosterOneShotPlan() migrateutil.OneShotPlan {
 	return migrateutil.OneShotPlan{
 		ResetSQL: []string{
 			`DELETE FROM public.rosters`,
-			`TRUNCATE TABLE public.roster_automation_rules, public.roster_groups`,
+			`TRUNCATE TABLE public.roster_automation_executions, public.roster_automation_rules, public.roster_groups`,
 		},
 		DropIndexes: []string{
 			`DROP INDEX IF EXISTS public.idx_roster_automation_rules_server_group`,
@@ -158,22 +158,37 @@ func migrateRosterAutomations(ctx context.Context, cfg migrateutil.Config, pool 
 				rosterID = &resolved
 			}
 		}
+		offsetSeconds := int64(migrateutil.Int(doc["offset_seconds"]))
+		scheduledAt, hasScheduledAt := migrateutil.Time(doc["scheduled_at"])
+		if !hasScheduledAt && rosterID != nil {
+			var eventStart *int64
+			if err := tx.QueryRow(ctx, `SELECT event_start_time FROM rosters WHERE id = $1`, *rosterID).Scan(&eventStart); err != nil {
+				return err
+			}
+			if eventStart != nil {
+				scheduledAt = time.Unix(*eventStart+offsetSeconds, 0).UTC()
+				hasScheduledAt = true
+			}
+		}
+		if !hasScheduledAt {
+			return nil
+		}
 		_, err := tx.Exec(ctx, `
 			INSERT INTO roster_automation_rules (
 				automation_id, server_id, roster_id, group_id, enabled, trigger_type,
-				action_type, offset_seconds, discord_channel_id, ping_type, executed,
+				action_type, scheduled_at, discord_channel_id, ping_type, executed,
 				executed_at, last_triggered_at, execution_status, last_missed_at, created_at, updated_at
 			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now(), now())
 			ON CONFLICT (automation_id) DO UPDATE SET
 				server_id = EXCLUDED.server_id, roster_id = EXCLUDED.roster_id, group_id = EXCLUDED.group_id,
 				enabled = EXCLUDED.enabled, trigger_type = EXCLUDED.trigger_type, action_type = EXCLUDED.action_type,
-				offset_seconds = EXCLUDED.offset_seconds, discord_channel_id = EXCLUDED.discord_channel_id,
+				scheduled_at = EXCLUDED.scheduled_at, discord_channel_id = EXCLUDED.discord_channel_id,
 				ping_type = EXCLUDED.ping_type, executed = EXCLUDED.executed, executed_at = EXCLUDED.executed_at,
 				last_triggered_at = EXCLUDED.last_triggered_at, execution_status = EXCLUDED.execution_status,
 				last_missed_at = EXCLUDED.last_missed_at, updated_at = now()
 		`, automationID, serverID, rosterID, nullableRosterString(doc["group_id"]),
 			boolRosterDefault(doc, "active", true), firstRosterString(doc["trigger_type"]), firstRosterString(doc["action_type"]),
-			migrateutil.Int(doc["offset_seconds"]), nullableRosterString(doc["discord_channel_id"]), nullableRosterString(options["ping_type"]),
+			scheduledAt, nullableRosterString(doc["discord_channel_id"]), nullableRosterString(options["ping_type"]),
 			boolRosterDefault(doc, "executed", false), nullableRosterInt64(doc["executed_at"]), nullableRosterInt64(doc["last_triggered_at"]),
 			nullableRosterString(doc["execution_status"]), nullableRosterInt64(doc["last_missed_at"]))
 		return err
