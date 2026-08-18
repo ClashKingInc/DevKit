@@ -171,9 +171,10 @@ lookup/dedupe, and use `enabled` as the sole device-wide master notification swi
 same row stores the category booleans and up to three reminder timings expressed as integer
 minutes from 1 through 2,820.
 
-`mobile_notification_accounts` stores the user-wide enabled player accounts; each row is
-authoritatively sourced from either a verified player link or a player bookmark. Clan
-notifications derive from those players' current clans rather than a separate clan toggle.
+`mobile_notification_accounts` stores the user-wide enabled verified player accounts; each
+row is authoritatively sourced from a verified player link. Player bookmarks do not create
+notification accounts. Clan notifications derive from verified players' current clans rather
+than a separate clan toggle.
 Delivery requires an enabled device with an authorized or provisional OS authorization
 status and the relevant category enabled on that device.
 
