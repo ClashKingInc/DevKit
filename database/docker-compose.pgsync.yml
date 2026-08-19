@@ -44,10 +44,3 @@ services:
       NUM_WORKERS: "2"
     volumes:
       - ./pgsync/schema.json:/config/schema.json:ro
-    networks:
-      - coolify
-
-networks:
-  coolify:
-    external: true
-    name: coolify
