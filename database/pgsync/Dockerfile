@@ -15,6 +15,8 @@ RUN apt-get update \
     && python -c "from importlib.metadata import version; assert version('pgsync') == '${PGSYNC_VERSION}'" \
     && useradd --no-create-home --shell /usr/sbin/nologin --uid 10001 pgsync
 
+COPY --chown=10001:10001 schema.json /config/schema.json
+
 USER 10001
 
 ENTRYPOINT ["pgsync"]
