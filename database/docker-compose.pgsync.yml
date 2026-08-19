@@ -18,15 +18,15 @@ services:
     environment:
       PG_DRIVER: psycopg2
       PG_HOST: ${TIMESCALE_HOST}
-      PG_PORT: "5432"
+      PG_PORT: ${TIMESCALE_PORT}
       POSTGRES_DB: ${TIMESCALE_DATABASE}
       PG_USER: ${PGSYNC_DB_USER}
       PG_PASSWORD: ${PGSYNC_DB_PASSWORD}
       PG_SSLMODE: ${TIMESCALE_SSLMODE}
       ELASTICSEARCH: "true"
-      ELASTICSEARCH_HOST: elasticsearch
-      ELASTICSEARCH_PORT: "9200"
-      ELASTICSEARCH_SCHEME: http
+      ELASTICSEARCH_HOST: ${ELASTICSEARCH_HOST}
+      ELASTICSEARCH_PORT: ${ELASTICSEARCH_PORT}
+      ELASTICSEARCH_SCHEME: ${ELASTICSEARCH_SCHEME}
       ELASTICSEARCH_API_KEY_ID: ${PGSYNC_ELASTICSEARCH_API_KEY_ID}
       ELASTICSEARCH_API_KEY: ${PGSYNC_ELASTICSEARCH_API_KEY}
       ELASTICSEARCH_RAISE_ON_ERROR: "true"
@@ -36,7 +36,7 @@ services:
       ELASTICSEARCH_MAX_RETRIES: "5"
       REDIS_CHECKPOINT: "true"
       REDIS_HOST: ${VALKEY_HOST}
-      REDIS_PORT: "6379"
+      REDIS_PORT: ${VALKEY_PORT}
       REDIS_DB: "1"
       REDIS_AUTH: ${VALKEY_PASSWORD}
       SQLALCHEMY_POOL_SIZE: "4"
@@ -44,10 +44,10 @@ services:
       NUM_WORKERS: "2"
     volumes:
       - ./pgsync/schema.json:/config/schema.json:ro
-    depends_on:
-      timescale:
-        condition: service_healthy
-      valkey:
-        condition: service_healthy
-      elasticsearch:
-        condition: service_healthy
+    networks:
+      - coolify
+
+networks:
+  coolify:
+    external: true
+    name: coolify
