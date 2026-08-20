@@ -761,7 +761,7 @@ func flushClanWarRows(ctx context.Context, pool clanWarSQL, wars []warIndexInser
 					clan_level, opponent_clan_level, clan_attacks, opponent_attacks,
 					clan_stars, opponent_stars, clan_destruction_percentage, opponent_destruction_percentage
 				FROM src
-				ON CONFLICT (war_id) DO NOTHING
+				ON CONFLICT (war_id, end_time) DO NOTHING
 				RETURNING war_id
 			)
 			INSERT INTO _ck_inserted_wars (war_id)

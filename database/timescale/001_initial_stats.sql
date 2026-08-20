@@ -198,6 +198,14 @@ CREATE TABLE public.wars (
     CONSTRAINT wars_war_type_check CHECK ((war_type = ANY (ARRAY['random'::text, 'cwl'::text, 'friendly'::text])))
 );
 
+SELECT create_hypertable(
+    'wars',
+    'end_time',
+    chunk_time_interval => INTERVAL '3 months',
+    create_default_indexes => FALSE,
+    if_not_exists => TRUE
+);
+
 --
 -- Name: api_global_counts; Type: MATERIALIZED VIEW; Schema: public; Owner: -
 --
@@ -1053,7 +1061,7 @@ ALTER TABLE public.war_reminder_jobs
 --
 
 ALTER TABLE public.wars
-    ADD CONSTRAINT wars_pkey PRIMARY KEY (war_id);
+    ADD CONSTRAINT wars_pkey PRIMARY KEY (war_id, end_time);
 
 --
 -- Name: api_global_counts_id_idx; Type: INDEX; Schema: public; Owner: -

@@ -395,6 +395,19 @@ func StreamAllProjected(
 	return streamCollection(ctx, cfg, label, collection, bson.D{}, projection, handle, flush)
 }
 
+func StreamFilteredProjected(
+	ctx context.Context,
+	cfg Config,
+	label string,
+	collection *mongo.Collection,
+	filter bson.D,
+	projection any,
+	handle func(bson.M) (bool, error),
+	flush func() error,
+) (int64, error) {
+	return streamCollection(ctx, cfg, label, collection, filter, projection, handle, flush)
+}
+
 func streamCollection(
 	ctx context.Context,
 	cfg Config,
