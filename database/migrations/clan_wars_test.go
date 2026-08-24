@@ -85,6 +85,41 @@ func TestClanWarIDRangeValidation(t *testing.T) {
 	}
 }
 
+func TestClanWarEndTimeRangeUsesSortableClashTimestamps(t *testing.T) {
+	value, err := clanWarEndTimeRangeFromEnv(map[string]string{
+		"CLAN_WARS_END_TIME_FROM":   "2026-06-01T00:00:00Z",
+		"CLAN_WARS_END_TIME_BEFORE": "20260701T000000.000Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.from != "20260601T000000.000Z" || value.before != "20260701T000000.000Z" {
+		t.Fatalf("unexpected normalized range: %+v", value)
+	}
+	want := bson.D{
+		{Key: "_id", Value: bson.D{{Key: "$exists", Value: true}}},
+		{Key: "data.endTime", Value: bson.D{
+			{Key: "$gte", Value: "20260601T000000.000Z"},
+			{Key: "$lt", Value: "20260701T000000.000Z"},
+		}},
+	}
+	if got := applyClanWarEndTimeRange(clanWarFilter(""), value); !reflect.DeepEqual(got, want) {
+		t.Fatalf("end-time filter = %#v, want %#v", got, want)
+	}
+	if got := value.checkpointKey("wars"); got != "wars_from_20260601T000000_before_20260701T000000" {
+		t.Fatalf("checkpoint key = %q", got)
+	}
+}
+
+func TestClanWarEndTimeRangeRejectsEmptyOrReversedRange(t *testing.T) {
+	if _, err := clanWarEndTimeRangeFromEnv(map[string]string{
+		"CLAN_WARS_END_TIME_FROM":   "2026-07-01",
+		"CLAN_WARS_END_TIME_BEFORE": "2026-06-01",
+	}); err == nil {
+		t.Fatal("expected reversed end-time range to fail")
+	}
+}
+
 func TestClanWarNumericBSONTypesDecode(t *testing.T) {
 	payload, err := bson.Marshal(bson.D{{Key: "data", Value: bson.D{
 		{Key: "teamSize", Value: int32(15)},

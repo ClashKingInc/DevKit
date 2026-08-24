@@ -53,11 +53,13 @@ func TestWarArchiveBaseline(t *testing.T) {
 	for _, required := range []string{
 		"primary key (player_tag, period_start)",
 		"player_war_history_quarter_check",
-		"foreign key (archive_pack_id) references public.war_archive_packs(pack_id)",
 	} {
 		if !strings.Contains(migration, required) {
 			t.Errorf("war archive baseline missing %q", required)
 		}
+	}
+	if strings.Contains(migration, "foreign key (archive_pack_id) references public.war_archive_packs(pack_id)") {
+		t.Error("wars archive locator retains the high-contention pack foreign key")
 	}
 	for _, removed := range []string{
 		"create table public.war_members",

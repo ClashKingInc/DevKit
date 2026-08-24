@@ -48,6 +48,13 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) error {
 	if err != nil {
 		return err
 	}
+	endTimeRange, err := clanWarEndTimeRangeFromEnv(cfg.Env)
+	if err != nil {
+		return err
+	}
+	if idRange.configured() && endTimeRange.configured() {
+		return errors.New("Mongo _id and end-time ranges cannot be combined")
+	}
 	if clanTag != "" && cwlClanTag != "" {
 		return errors.New("CLAN_WARS_CLAN_TAG and CLAN_WARS_CWL_CLAN_TAG cannot both be set")
 	}
@@ -83,6 +90,9 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) error {
 	if err != nil {
 		return err
 	}
+	if err := cleanupBuildingMigrationPacks(ctx, pool, store); err != nil {
+		return err
+	}
 	mongoClient, err := migrateutil.StatsClient(ctx, cfg)
 	if err != nil {
 		return err
@@ -93,8 +103,13 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 
+	chronological := clanTag == "" && cwlClanTag == "" && !idRange.configured()
 	checkpointKey := clanWarCheckpointKey(clanTag)
 	filter := clanWarFilterWithIDRange(clanTag, idRange)
+	if chronological {
+		checkpointKey = endTimeRange.checkpointKey("clan_war_r2_end_time")
+		filter = applyClanWarEndTimeRange(clanWarFilter(""), endTimeRange)
+	}
 	if cwlClanTag != "" {
 		warTags, err := loadCWLBackfillWarTags(ctx, pool, cwlClanTag)
 		if err != nil {
@@ -138,15 +153,38 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) error {
 		return pipeline.Submit(batch, checkpoint)
 	}
 
-	fmt.Printf("clan_wars: pack_size=%d pack_workers=%d upload_workers=%d sql_workers=%d\n", packSize, packWorkers, uploadWorkers, sqlWorkers)
-	seen, streamErr := streamClanWarDocs(ctx, cfg, cp, checkpointKey, collection, filter, clanWarProjection(), func(doc clanWarDoc) (bool, error) {
-		war, ok := canonicalArchiveWar(doc)
-		if !ok {
-			return false, nil
+	fmt.Printf("clan_wars: pack_size=%d pack_workers=%d upload_workers=%d sql_workers=%d chronological=%t\n", packSize, packWorkers, uploadWorkers, sqlWorkers, chronological)
+	var seen int64
+	var streamErr error
+	if chronological {
+		var pendingEndTime string
+		seen, streamErr = streamClanWarDocsChronological(ctx, cfg, cp, checkpointKey, collection, filter, clanWarProjection(), func(doc clanWarDoc, sourceEndTime string) error {
+			war, ok := canonicalArchiveWar(doc)
+			if !ok {
+				return nil
+			}
+			if len(pending) >= packSize && pendingEndTime != "" && sourceEndTime != pendingEndTime {
+				if err := flush(pendingEndTime); err != nil {
+					return err
+				}
+			}
+			pending = append(pending, war)
+			pendingEndTime = sourceEndTime
+			return nil
+		})
+		if streamErr == nil && len(pending) > 0 {
+			streamErr = flush(pendingEndTime)
 		}
-		pending = append(pending, war)
-		return len(pending) >= packSize, nil
-	}, flush)
+	} else {
+		seen, streamErr = streamClanWarDocs(ctx, cfg, cp, checkpointKey, collection, filter, clanWarProjection(), func(doc clanWarDoc) (bool, error) {
+			war, ok := canonicalArchiveWar(doc)
+			if !ok {
+				return false, nil
+			}
+			pending = append(pending, war)
+			return len(pending) >= packSize, nil
+		}, flush)
+	}
 	pipelineErr := pipeline.Close()
 	if streamErr != nil {
 		return streamErr
@@ -333,7 +371,7 @@ func canonicalArchiveClan(clan warClanDoc) wararchive.Clan {
 	}
 }
 
-func flushArchivePack(ctx context.Context, pool *pgxpool.Pool, store *warArchiveStore, dictionary []byte, input []archiveWar, sqlGate, uploadGate chan struct{}) error {
+func flushArchivePack(ctx context.Context, pool *pgxpool.Pool, store *warArchiveStore, dictionary []byte, input []archiveWar, sqlGate, uploadGate chan struct{}) (returnErr error) {
 	started := time.Now()
 	if err := acquireArchiveGate(ctx, sqlGate); err != nil {
 		return err
@@ -348,6 +386,18 @@ func flushArchivePack(ctx context.Context, pool *pgxpool.Pool, store *warArchive
 	if err != nil {
 		return err
 	}
+	objectKey := wararchive.ObjectKey(uint64(packID))
+	completed := false
+	defer func() {
+		if completed {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		defer cancel()
+		if err := cleanupMigrationPack(cleanupCtx, pool, store, packID, objectKey); err != nil {
+			fmt.Fprintf(os.Stderr, "clan_wars: cleanup warning pack=%d error=%v\n", packID, err)
+		}
+	}()
 	buildStarted := time.Now()
 	builder, err := wararchive.NewPackBuilder(uint64(packID), dictionary)
 	if err != nil {
@@ -374,7 +424,6 @@ func flushArchivePack(ctx context.Context, pool *pgxpool.Pool, store *warArchive
 		return err
 	}
 	uploadStarted := time.Now()
-	objectKey := wararchive.ObjectKey(uint64(packID))
 	if err := store.put(ctx, objectKey, object); err != nil {
 		releaseArchiveGate(uploadGate)
 		return fmt.Errorf("upload archive pack %d: %w", packID, err)
@@ -396,6 +445,7 @@ func flushArchivePack(ctx context.Context, pool *pgxpool.Pool, store *warArchive
 	}
 	finalizeDuration := time.Since(finalizeStarted)
 	releaseArchiveGate(sqlGate)
+	completed = true
 	fmt.Printf("clan_wars: uploaded pack=%d wars=%d attacks=%d raw_bytes=%d compressed_bytes=%d build=%s upload=%s prime=%s finalize=%s total=%s\n",
 		packID, len(wars), stats.TotalAttacks(), sumRawBytes(builder.Locators()), len(object), buildDuration, uploadDuration, primeDuration, finalizeDuration, time.Since(started))
 	return nil
@@ -454,6 +504,50 @@ func reserveMigrationPack(ctx context.Context, pool *pgxpool.Pool) (int64, error
 		RETURNING pack_id
 	`).Scan(&packID)
 	return packID, err
+}
+
+func cleanupBuildingMigrationPacks(ctx context.Context, pool *pgxpool.Pool, store *warArchiveStore) error {
+	rows, err := pool.Query(ctx, `
+		SELECT pack_id
+		FROM war_archive_packs
+		WHERE source = 'migration' AND status = 'building'
+		ORDER BY pack_id
+	`)
+	if err != nil {
+		return err
+	}
+	var packIDs []int64
+	for rows.Next() {
+		var packID int64
+		if err := rows.Scan(&packID); err != nil {
+			rows.Close()
+			return err
+		}
+		packIDs = append(packIDs, packID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, packID := range packIDs {
+		if err := cleanupMigrationPack(ctx, pool, store, packID, wararchive.ObjectKey(uint64(packID))); err != nil {
+			return err
+		}
+		fmt.Printf("clan_wars: removed incomplete pack=%d\n", packID)
+	}
+	return nil
+}
+
+func cleanupMigrationPack(ctx context.Context, pool *pgxpool.Pool, store *warArchiveStore, packID int64, objectKey string) error {
+	if err := store.delete(ctx, objectKey); err != nil {
+		return fmt.Errorf("delete incomplete archive object %s: %w", objectKey, err)
+	}
+	_, err := pool.Exec(ctx, `
+		DELETE FROM war_archive_packs
+		WHERE pack_id = $1 AND source = 'migration' AND status = 'building'
+	`, packID)
+	return err
 }
 
 type warStageRow struct {
@@ -573,6 +667,7 @@ func upsertPlayerWarHistory(ctx context.Context, tx pgx.Tx, wars []archiveWar) e
 		SELECT player_tag, period_start, array_agg(DISTINCT war_id ORDER BY war_id)
 		FROM player_war_history_stage
 		GROUP BY player_tag, period_start
+		ORDER BY player_tag, period_start
 		ON CONFLICT (player_tag, period_start) DO UPDATE SET
 			war_ids = ARRAY(
 				SELECT DISTINCT id
@@ -639,6 +734,13 @@ func (s *warArchiveStore) put(ctx context.Context, key string, payload []byte) e
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(s.bucket), Key: aws.String(key), Body: bytes.NewReader(payload),
 		ContentType: aws.String("application/octet-stream"), CacheControl: aws.String("public, max-age=31536000, immutable"),
+	})
+	return err
+}
+
+func (s *warArchiveStore) delete(ctx context.Context, key string) error {
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket), Key: aws.String(key),
 	})
 	return err
 }
@@ -722,6 +824,65 @@ type clanWarIDRange struct {
 	after  *bson.ObjectID
 	from   *bson.ObjectID
 	before *bson.ObjectID
+}
+
+type clanWarEndTimeRange struct {
+	from   string
+	before string
+}
+
+func clanWarEndTimeRangeFromEnv(env map[string]string) (clanWarEndTimeRange, error) {
+	parse := func(key string) (string, error) {
+		raw := strings.TrimSpace(env[key])
+		if raw == "" {
+			return "", nil
+		}
+		value, ok := migrateutil.Time(raw)
+		if !ok {
+			return "", fmt.Errorf("invalid %s=%q", key, raw)
+		}
+		return value.UTC().Format("20060102T150405.000Z"), nil
+	}
+	from, err := parse("CLAN_WARS_END_TIME_FROM")
+	if err != nil {
+		return clanWarEndTimeRange{}, err
+	}
+	before, err := parse("CLAN_WARS_END_TIME_BEFORE")
+	if err != nil {
+		return clanWarEndTimeRange{}, err
+	}
+	if from != "" && before != "" && from >= before {
+		return clanWarEndTimeRange{}, errors.New("CLAN_WARS_END_TIME_BEFORE must be later than CLAN_WARS_END_TIME_FROM")
+	}
+	return clanWarEndTimeRange{from: from, before: before}, nil
+}
+
+func (r clanWarEndTimeRange) configured() bool { return r.from != "" || r.before != "" }
+
+func (r clanWarEndTimeRange) checkpointKey(base string) string {
+	from := "start"
+	if r.from != "" {
+		from = strings.TrimSuffix(strings.TrimSuffix(r.from, ".000Z"), "Z")
+	}
+	before := "end"
+	if r.before != "" {
+		before = strings.TrimSuffix(strings.TrimSuffix(r.before, ".000Z"), "Z")
+	}
+	return base + "_from_" + from + "_before_" + before
+}
+
+func applyClanWarEndTimeRange(base bson.D, value clanWarEndTimeRange) bson.D {
+	conditions := bson.D{}
+	if value.from != "" {
+		conditions = append(conditions, bson.E{Key: "$gte", Value: value.from})
+	}
+	if value.before != "" {
+		conditions = append(conditions, bson.E{Key: "$lt", Value: value.before})
+	}
+	if len(conditions) == 0 {
+		conditions = append(conditions, bson.E{Key: "$type", Value: "string"})
+	}
+	return append(base, bson.E{Key: "data.endTime", Value: conditions})
 }
 
 func clanWarIDRangeFromEnv(env map[string]string) (clanWarIDRange, error) {
@@ -1019,6 +1180,72 @@ func streamClanWarDocs(ctx context.Context, cfg migrateutil.Config, cp *migrateu
 		if err := flush(checkpoint); err != nil {
 			return seen, err
 		}
+	}
+	if malformed > 0 {
+		fmt.Fprintf(os.Stderr, "clan_wars: skipped_malformed_docs=%d\n", malformed)
+	}
+	return seen, nil
+}
+
+func streamClanWarDocsChronological(ctx context.Context, cfg migrateutil.Config, cp *migrateutil.Checkpoint, cpKey string, collection *mongo.Collection, baseFilter bson.D, projection any, handle func(clanWarDoc, string) error) (int64, error) {
+	filter := append(bson.D(nil), baseFilter...)
+	if checkpoint := strings.TrimSpace(cp.Get(cpKey)); checkpoint != "" {
+		filter = bson.D{{Key: "$and", Value: bson.A{
+			filter,
+			bson.D{{Key: "data.endTime", Value: bson.D{{Key: "$gt", Value: checkpoint}}}},
+		}}}
+	}
+	opts := options.Find().
+		SetSort(bson.D{{Key: "data.endTime", Value: 1}}).
+		SetHint("data.endTime_-1").
+		SetBatchSize(int32(minInt(cfg.BatchSize, 10_000))).
+		SetProjection(projection)
+	cursor, err := collection.Find(ctx, filter, opts)
+	if err != nil {
+		return 0, err
+	}
+	defer cursor.Close(ctx)
+	progress := migrateutil.NewProgress(ctx, cfg, collection, cpKey, filter)
+	var seen int64
+	defer func() { progress.Done(seen) }()
+	var malformed int64
+	var lastEndTime string
+	for cursor.Next(ctx) {
+		raw := cursor.Current
+		sourceEndTime, ok := raw.Lookup("data", "endTime").StringValueOK()
+		if !ok || strings.TrimSpace(sourceEndTime) == "" {
+			malformed++
+			if malformed <= 20 || malformed%1000 == 0 {
+				id := "unknown"
+				if docID, hasObjectID := raw.Lookup("_id").ObjectIDOK(); hasObjectID {
+					id = docID.Hex()
+				}
+				fmt.Fprintf(os.Stderr, "clan_wars: skipping Mongo document without indexed data.endTime _id=%s\n", id)
+			}
+			continue
+		}
+		if cfg.LimitDocs > 0 && seen >= cfg.LimitDocs && lastEndTime != "" && sourceEndTime != lastEndTime {
+			break
+		}
+		seen++
+		lastEndTime = sourceEndTime
+		doc, decodeErr := decodeClanWarDoc(raw)
+		if decodeErr != nil {
+			malformed++
+			if malformed <= 20 || malformed%1000 == 0 {
+				id := "unknown"
+				if docID, hasObjectID := raw.Lookup("_id").ObjectIDOK(); hasObjectID {
+					id = docID.Hex()
+				}
+				fmt.Fprintf(os.Stderr, "clan_wars: skipping malformed Mongo document _id=%s error=%v\n", id, decodeErr)
+			}
+		} else if err := handle(doc, sourceEndTime); err != nil {
+			return seen, err
+		}
+		progress.Tick(seen)
+	}
+	if err := cursor.Err(); err != nil {
+		return seen, err
 	}
 	if malformed > 0 {
 		fmt.Fprintf(os.Stderr, "clan_wars: skipped_malformed_docs=%d\n", malformed)
