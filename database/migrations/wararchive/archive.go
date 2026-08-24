@@ -61,6 +61,35 @@ type Attack struct {
 	Order                 int    `json:"order"`
 }
 
+const (
+	BattleModifierNone       = "none"
+	BattleModifierHardMode   = "hardMode"
+	BattleModifierMinusOne   = "minusOne"
+	BattleModifierMinusTwo   = "minusTwo"
+	BattleModifierMinusThree = "minusThree"
+)
+
+// NormalizeBattleModifier maps absent legacy values and historical spellings
+// onto the camel-case enum emitted by the current Clash API.
+func NormalizeBattleModifier(value string) string {
+	key := strings.ToLower(strings.TrimSpace(value))
+	key = strings.NewReplacer("_", "", "-", "", " ", "").Replace(key)
+	switch key {
+	case "", "null", BattleModifierNone:
+		return BattleModifierNone
+	case "hardmode":
+		return BattleModifierHardMode
+	case "minusone":
+		return BattleModifierMinusOne
+	case "minustwo":
+		return BattleModifierMinusTwo
+	case "minusthree":
+		return BattleModifierMinusThree
+	default:
+		return BattleModifierNone
+	}
+}
+
 type Locator struct {
 	WarID           uuid.UUID `json:"war_id"`
 	PackID          uint64    `json:"pack_id"`

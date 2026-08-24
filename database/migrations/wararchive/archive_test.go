@@ -27,6 +27,25 @@ func TestDeterministicV7IsStableAndOrderIndependent(t *testing.T) {
 	}
 }
 
+func TestNormalizeBattleModifier(t *testing.T) {
+	tests := map[string]string{
+		"":            BattleModifierNone,
+		"null":        BattleModifierNone,
+		"NONE":        BattleModifierNone,
+		"hardMode":    BattleModifierHardMode,
+		"HARD_MODE":   BattleModifierHardMode,
+		"minus_one":   BattleModifierMinusOne,
+		"MINUS_TWO":   BattleModifierMinusTwo,
+		"minus-three": BattleModifierMinusThree,
+		"unknown":     BattleModifierNone,
+	}
+	for input, want := range tests {
+		if got := NormalizeBattleModifier(input); got != want {
+			t.Errorf("NormalizeBattleModifier(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestPackFramesDecodeIndependently(t *testing.T) {
 	builder, err := NewPackBuilder(42, nil)
 	if err != nil {

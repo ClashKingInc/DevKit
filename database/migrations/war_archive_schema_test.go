@@ -30,6 +30,11 @@ func TestWarArchiveBaseline(t *testing.T) {
 		"archive_offset bigint",
 		"archive_compressed_bytes integer",
 		"wars_archive_locator_check",
+		"wars_battle_modifier_check",
+		"'hardmode'::text",
+		"'minusone'::text",
+		"'minustwo'::text",
+		"'minusthree'::text",
 	} {
 		if !strings.Contains(wars, required) {
 			t.Errorf("wars baseline missing %q", required)

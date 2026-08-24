@@ -301,7 +301,7 @@ func canonicalArchiveWar(doc clanWarDoc) (archiveWar, bool) {
 		ID: id, WarTag: warTag, Type: warType, State: strings.ToLower(doc.Data.State),
 		TeamSize: migrateutil.Int(doc.Data.TeamSize), AttacksPerMember: attacksPerMember,
 		PreparationStartTime: prepAt.UTC(), StartTime: startValue, EndTime: endAt.UTC(),
-		BattleModifier: normalizeBattleModifier(doc.Data.BattleModifier),
+		BattleModifier: wararchive.NormalizeBattleModifier(doc.Data.BattleModifier),
 		Clan:           canonicalArchiveClan(clan), Opponent: canonicalArchiveClan(opponent),
 	}
 	return archiveWar{ID: id, War: war}, true
@@ -1052,14 +1052,6 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func normalizeBattleModifier(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" {
-		return "none"
-	}
-	return value
 }
 
 func warFloat(value any) float64 {

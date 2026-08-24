@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"clashking_devkit_database_migrations/migrateutil"
+	"clashking_devkit_database_migrations/wararchive"
 	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -123,6 +124,22 @@ func TestDecodeClanWarDocRejectsMalformedNestedArrays(t *testing.T) {
 	}
 	if _, err := decodeClanWarDoc(payload); err == nil {
 		t.Fatal("expected malformed members to fail typed decoding")
+	}
+}
+
+func TestClanWarNullBattleModifierBecomesNone(t *testing.T) {
+	payload, err := bson.Marshal(bson.D{{Key: "data", Value: bson.D{
+		{Key: "battleModifier", Value: nil},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := decodeClanWarDoc(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wararchive.NormalizeBattleModifier(doc.Data.BattleModifier); got != wararchive.BattleModifierNone {
+		t.Fatalf("null battle modifier normalized to %q, want none", got)
 	}
 }
 
