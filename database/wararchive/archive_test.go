@@ -3,12 +3,45 @@ package wararchive
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+func TestMarshalOnlyOmitsEmptyWarTag(t *testing.T) {
+	payload, err := Marshal(War{
+		BattleModifier: BattleModifierNone,
+		Clan:           Clan{Members: []Member{{Attacks: []Attack{}}}},
+		Opponent:       Clan{Members: []Member{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := decoded["warTag"]; exists {
+		t.Fatal("empty warTag must be omitted")
+	}
+	requireJSONKeys(t, decoded, "startTime", "battleModifier")
+	clan := decoded["clan"].(map[string]any)
+	requireJSONKeys(t, clan, "name", "badgeToken", "clanLevel", "attacks", "stars", "destructionPercentage")
+	member := clan["members"].([]any)[0].(map[string]any)
+	requireJSONKeys(t, member, "name", "townhallLevel", "mapPosition", "attacks")
+}
+
+func requireJSONKeys(t *testing.T, value map[string]any, keys ...string) {
+	t.Helper()
+	for _, key := range keys {
+		if _, exists := value[key]; !exists {
+			t.Errorf("JSON object omitted %q: %#v", key, value)
+		}
+	}
+}
 
 func TestDeterministicV7IsStableAndOrderIndependent(t *testing.T) {
 	prep := time.Date(2026, 8, 23, 12, 30, 0, 0, time.UTC)

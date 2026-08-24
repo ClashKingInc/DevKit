@@ -26,30 +26,30 @@ type War struct {
 	TeamSize             int        `json:"teamSize"`
 	AttacksPerMember     int        `json:"attacksPerMember"`
 	PreparationStartTime time.Time  `json:"preparationStartTime"`
-	StartTime            *time.Time `json:"startTime,omitempty"`
+	StartTime            *time.Time `json:"startTime"`
 	EndTime              time.Time  `json:"endTime"`
-	BattleModifier       string     `json:"battleModifier,omitempty"`
+	BattleModifier       string     `json:"battleModifier"`
 	Clan                 Clan       `json:"clan"`
 	Opponent             Clan       `json:"opponent"`
 }
 
 type Clan struct {
 	Tag                   string   `json:"tag"`
-	Name                  string   `json:"name,omitempty"`
-	BadgeToken            string   `json:"badgeToken,omitempty"`
-	ClanLevel             int      `json:"clanLevel,omitempty"`
-	Attacks               int      `json:"attacks,omitempty"`
-	Stars                 int      `json:"stars,omitempty"`
-	DestructionPercentage float64  `json:"destructionPercentage,omitempty"`
+	Name                  string   `json:"name"`
+	BadgeToken            string   `json:"badgeToken"`
+	ClanLevel             int      `json:"clanLevel"`
+	Attacks               int      `json:"attacks"`
+	Stars                 int      `json:"stars"`
+	DestructionPercentage float64  `json:"destructionPercentage"`
 	Members               []Member `json:"members"`
 }
 
 type Member struct {
 	Tag           string   `json:"tag"`
-	Name          string   `json:"name,omitempty"`
-	TownhallLevel int      `json:"townhallLevel,omitempty"`
-	MapPosition   int      `json:"mapPosition,omitempty"`
-	Attacks       []Attack `json:"attacks,omitempty"`
+	Name          string   `json:"name"`
+	TownhallLevel int      `json:"townhallLevel"`
+	MapPosition   int      `json:"mapPosition"`
+	Attacks       []Attack `json:"attacks"`
 }
 
 // AttackerTag is intentionally omitted because an attack is nested beneath its
