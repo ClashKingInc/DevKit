@@ -85,17 +85,17 @@ func TestClanWarIDRangeValidation(t *testing.T) {
 	}
 }
 
-func TestClanWarLegacyNumericStringsDecode(t *testing.T) {
+func TestClanWarNumericBSONTypesDecode(t *testing.T) {
 	payload, err := bson.Marshal(bson.D{{Key: "data", Value: bson.D{
-		{Key: "teamSize", Value: "15"},
-		{Key: "attacksPerMember", Value: "2"},
+		{Key: "teamSize", Value: int32(15)},
+		{Key: "attacksPerMember", Value: int64(2)},
 		{Key: "clan", Value: bson.D{
-			{Key: "clanLevel", Value: "20"},
-			{Key: "destructionPercentage", Value: "97.25"},
+			{Key: "clanLevel", Value: int64(20)},
+			{Key: "destructionPercentage", Value: 97.25},
 			{Key: "members", Value: bson.A{bson.D{
 				{Key: "tag", Value: "#PLAYER"},
-				{Key: "townhallLevel", Value: "18"},
-				{Key: "mapPosition", Value: "1"},
+				{Key: "townhallLevel", Value: int32(18)},
+				{Key: "mapPosition", Value: int64(1)},
 			}}},
 		}},
 	}}})
@@ -104,14 +104,24 @@ func TestClanWarLegacyNumericStringsDecode(t *testing.T) {
 	}
 	doc, err := decodeClanWarDoc(payload)
 	if err != nil {
-		t.Fatalf("decode legacy numeric strings: %v", err)
+		t.Fatalf("decode BSON numerics: %v", err)
 	}
 	clan := canonicalArchiveClan(doc.Data.Clan)
-	if migrateutil.Int(doc.Data.TeamSize) != 15 || migrateutil.Int(doc.Data.AttacksPerMember) != 2 {
+	if doc.Data.TeamSize != 15 || doc.Data.AttacksPerMember != 2 {
 		t.Fatalf("unexpected war numerics: size=%v attacks=%v", doc.Data.TeamSize, doc.Data.AttacksPerMember)
 	}
 	if clan.ClanLevel != 20 || clan.DestructionPercentage != 97.25 || clan.Members[0].TownhallLevel != 18 {
 		t.Fatalf("unexpected canonical clan: %+v", clan)
+	}
+}
+
+func TestClanWarNumericStringsAreMalformed(t *testing.T) {
+	payload, err := bson.Marshal(bson.D{{Key: "data", Value: bson.D{{Key: "teamSize", Value: "15"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeClanWarDoc(payload); err == nil {
+		t.Fatal("numeric string decoded into typed war document")
 	}
 }
 

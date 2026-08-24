@@ -31,6 +31,8 @@ func TestWarArchiveBaseline(t *testing.T) {
 		"archive_offset bigint",
 		"archive_compressed_bytes integer",
 		"wars_archive_locator_check",
+		"archive_offset is not null",
+		"archive_compressed_bytes is not null",
 		"wars_battle_modifier_check",
 		"'hardmode'::text",
 		"'minusone'::text",

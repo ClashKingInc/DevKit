@@ -220,7 +220,7 @@ CREATE TABLE public.wars (
     archive_pack_id bigint,
     archive_offset bigint,
     archive_compressed_bytes integer,
-    CONSTRAINT wars_archive_locator_check CHECK (((archive_pack_id IS NULL) AND (archive_offset IS NULL) AND (archive_compressed_bytes IS NULL)) OR ((archive_pack_id IS NOT NULL) AND (archive_offset >= 0) AND (archive_compressed_bytes > 0))),
+    CONSTRAINT wars_archive_locator_check CHECK (((archive_pack_id IS NULL) AND (archive_offset IS NULL) AND (archive_compressed_bytes IS NULL)) OR ((archive_pack_id IS NOT NULL) AND (archive_offset IS NOT NULL) AND (archive_compressed_bytes IS NOT NULL) AND (archive_offset >= 0) AND (archive_compressed_bytes > 0))),
     CONSTRAINT wars_battle_modifier_check CHECK ((battle_modifier = ANY (ARRAY['none'::text, 'hardMode'::text, 'minusOne'::text, 'minusTwo'::text, 'minusThree'::text]))),
     CONSTRAINT wars_war_type_check CHECK ((war_type = ANY (ARRAY['random'::text, 'cwl'::text, 'friendly'::text])))
 );

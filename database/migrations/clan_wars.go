@@ -284,7 +284,7 @@ func canonicalArchiveWar(doc clanWarDoc) (archiveWar, bool) {
 			warType = "random"
 		}
 	}
-	attacksPerMember := migrateutil.Int(doc.Data.AttacksPerMember)
+	attacksPerMember := doc.Data.AttacksPerMember
 	if attacksPerMember <= 0 {
 		attacksPerMember = 1
 	}
@@ -295,7 +295,7 @@ func canonicalArchiveWar(doc clanWarDoc) (archiveWar, bool) {
 	}
 	war := wararchive.War{
 		ID: id, WarTag: warTag, State: strings.ToLower(doc.Data.State),
-		TeamSize: migrateutil.Int(doc.Data.TeamSize), AttacksPerMember: attacksPerMember,
+		TeamSize: doc.Data.TeamSize, AttacksPerMember: attacksPerMember,
 		PreparationStartTime: prepAt.UTC(), StartTime: startAt.UTC(), EndTime: endAt.UTC(),
 		BattleModifier: wararchive.NormalizeBattleModifier(doc.Data.BattleModifier),
 		Clan:           canonicalArchiveClan(clan), Opponent: canonicalArchiveClan(opponent),
@@ -315,21 +315,21 @@ func canonicalArchiveClan(clan warClanDoc) wararchive.Clan {
 				continue
 			}
 			attacks = append(attacks, wararchive.Attack{
-				DefenderTag: attack.DefenderTag, Stars: migrateutil.Int(attack.Stars),
-				DestructionPercentage: migrateutil.Int(attack.DestructionPercentage),
-				Duration:              migrateutil.Int(attack.Duration), Order: migrateutil.Int(attack.Order),
+				DefenderTag: attack.DefenderTag, Stars: attack.Stars,
+				DestructionPercentage: attack.DestructionPercentage,
+				Duration:              attack.Duration, Order: attack.Order,
 			})
 		}
 		members = append(members, wararchive.Member{
-			Tag: member.Tag, Name: member.Name, TownhallLevel: migrateutil.Int(member.TownhallLevel),
-			MapPosition: migrateutil.Int(member.MapPosition), Attacks: attacks,
+			Tag: member.Tag, Name: member.Name, TownhallLevel: member.TownhallLevel,
+			MapPosition: member.MapPosition, Attacks: attacks,
 		})
 	}
 	return wararchive.Clan{
 		Tag: clan.Tag, Name: clan.Name,
 		BadgeToken: migrateutil.BadgeToken(clan.BadgeURLs.Large, clan.BadgeURLs.Medium, clan.BadgeURLs.Small),
-		ClanLevel:  migrateutil.Int(clan.ClanLevel), Attacks: migrateutil.Int(clan.Attacks), Stars: migrateutil.Int(clan.Stars),
-		DestructionPercentage: warFloat(clan.DestructionPercentage), Members: members,
+		ClanLevel:  clan.ClanLevel, Attacks: clan.Attacks, Stars: clan.Stars,
+		DestructionPercentage: clan.DestructionPercentage, Members: members,
 	}
 }
 
@@ -901,18 +901,18 @@ type clanWarData struct {
 	EndTime              any        `bson:"endTime"`
 	State                string     `bson:"state"`
 	BattleModifier       string     `bson:"battleModifier"`
-	TeamSize             any        `bson:"teamSize"`
-	AttacksPerMember     any        `bson:"attacksPerMember"`
+	TeamSize             int        `bson:"teamSize"`
+	AttacksPerMember     int        `bson:"attacksPerMember"`
 }
 
 type warClanDoc struct {
 	Tag                   string         `bson:"tag"`
 	Name                  string         `bson:"name"`
 	BadgeURLs             badgeURLsDoc   `bson:"badgeUrls"`
-	ClanLevel             any            `bson:"clanLevel"`
-	Attacks               any            `bson:"attacks"`
-	Stars                 any            `bson:"stars"`
-	DestructionPercentage any            `bson:"destructionPercentage"`
+	ClanLevel             int            `bson:"clanLevel"`
+	Attacks               int            `bson:"attacks"`
+	Stars                 int            `bson:"stars"`
+	DestructionPercentage float64        `bson:"destructionPercentage"`
 	Members               []warMemberDoc `bson:"members"`
 }
 
@@ -925,17 +925,17 @@ type badgeURLsDoc struct {
 type warMemberDoc struct {
 	Tag           string         `bson:"tag"`
 	Name          string         `bson:"name"`
-	TownhallLevel any            `bson:"townhallLevel"`
-	MapPosition   any            `bson:"mapPosition"`
+	TownhallLevel int            `bson:"townhallLevel"`
+	MapPosition   int            `bson:"mapPosition"`
 	Attacks       []warAttackDoc `bson:"attacks"`
 }
 
 type warAttackDoc struct {
 	DefenderTag           string `bson:"defenderTag"`
-	Stars                 any    `bson:"stars"`
-	DestructionPercentage any    `bson:"destructionPercentage"`
-	Duration              any    `bson:"duration"`
-	Order                 any    `bson:"order"`
+	Stars                 int    `bson:"stars"`
+	DestructionPercentage int    `bson:"destructionPercentage"`
+	Duration              int    `bson:"duration"`
+	Order                 int    `bson:"order"`
 }
 
 func decodeClanWarDoc(raw bson.Raw) (clanWarDoc, error) {
@@ -1047,11 +1047,6 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func warFloat(value any) float64 {
-	out, _ := strconv.ParseFloat(migrateutil.String(value), 64)
-	return out
 }
 
 func nullString(value string) any {
