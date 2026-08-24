@@ -21,7 +21,6 @@ type War struct {
 	// ID identifies the SQL row and is never serialized into an archive frame.
 	ID                   uuid.UUID `json:"-"`
 	WarTag               string    `json:"warTag,omitempty"`
-	Type                 string    `json:"type"`
 	State                string    `json:"state"`
 	TeamSize             int       `json:"teamSize"`
 	AttacksPerMember     int       `json:"attacksPerMember"`
@@ -274,8 +273,8 @@ func newClanSideStats() ClanSideStats {
 	return ClanSideStats{MembersByTownhall: map[string]int{}, WarsByStars: map[string]int{}, WarsByAttacksUsed: map[string]int{}}
 }
 
-func (s *PackStats) Add(war War) {
-	warType := defaultDimension(war.Type, "random")
+func (s *PackStats) Add(warType string, war War) {
+	warType = defaultDimension(warType, "random")
 	modifier := defaultDimension(war.BattleModifier, "none")
 	size := fmt.Sprint(war.TeamSize)
 	s.Wars.Total++
@@ -286,8 +285,8 @@ func (s *PackStats) Add(war War) {
 	s.Wars.ByModifierAndSize[modifier+":"+size]++
 	s.addClanSide(&s.Sides.Clan, war.Clan)
 	s.addClanSide(&s.Sides.Opponent, war.Opponent)
-	s.addAttacks(war, war.Clan, war.Opponent)
-	s.addAttacks(war, war.Opponent, war.Clan)
+	s.addAttacks(warType, war, war.Clan, war.Opponent)
+	s.addAttacks(warType, war, war.Opponent, war.Clan)
 }
 
 func (s *PackStats) addClanSide(side *ClanSideStats, clan Clan) {
@@ -298,12 +297,11 @@ func (s *PackStats) addClanSide(side *ClanSideStats, clan Clan) {
 	}
 }
 
-func (s *PackStats) addAttacks(war War, attacking, defending Clan) {
+func (s *PackStats) addAttacks(warType string, war War, attacking, defending Clan) {
 	defenders := make(map[string]int, len(defending.Members))
 	for _, member := range defending.Members {
 		defenders[member.Tag] = member.TownhallLevel
 	}
-	warType := defaultDimension(war.Type, "random")
 	size := fmt.Sprint(war.TeamSize)
 	modifier := defaultDimension(war.BattleModifier, "none")
 	for _, member := range attacking.Members {

@@ -261,8 +261,9 @@ func (p *archivePackPipeline) Close() error {
 }
 
 type archiveWar struct {
-	ID  uuid.UUID
-	War wararchive.War
+	ID      uuid.UUID
+	WarType string
+	War     wararchive.War
 }
 
 func canonicalArchiveWar(doc clanWarDoc) (archiveWar, bool) {
@@ -293,13 +294,13 @@ func canonicalArchiveWar(doc clanWarDoc) (archiveWar, bool) {
 		clan, opponent = opponent, clan
 	}
 	war := wararchive.War{
-		ID: id, WarTag: warTag, Type: warType, State: strings.ToLower(doc.Data.State),
+		ID: id, WarTag: warTag, State: strings.ToLower(doc.Data.State),
 		TeamSize: migrateutil.Int(doc.Data.TeamSize), AttacksPerMember: attacksPerMember,
 		PreparationStartTime: prepAt.UTC(), StartTime: startAt.UTC(), EndTime: endAt.UTC(),
 		BattleModifier: wararchive.NormalizeBattleModifier(doc.Data.BattleModifier),
 		Clan:           canonicalArchiveClan(clan), Opponent: canonicalArchiveClan(opponent),
 	}
-	return archiveWar{ID: id, War: war}, true
+	return archiveWar{ID: id, WarType: warType, War: war}, true
 }
 
 func canonicalArchiveClan(clan warClanDoc) wararchive.Clan {
@@ -359,7 +360,7 @@ func flushArchivePack(ctx context.Context, pool *pgxpool.Pool, store *warArchive
 		if _, err := builder.Add(value.ID, value.War); err != nil {
 			return err
 		}
-		stats.Add(value.War)
+		stats.Add(value.WarType, value.War)
 		if value.War.EndTime.Before(firstEnd) {
 			firstEnd = value.War.EndTime
 		}
@@ -488,7 +489,7 @@ func finalizeArchivePack(ctx context.Context, pool *pgxpool.Pool, packID int64, 
 		war := row.value.War
 		return []any{
 			row.value.ID, war.Clan.Tag, war.Opponent.Tag, war.PreparationStartTime, war.StartTime, war.EndTime,
-			war.TeamSize, war.AttacksPerMember, war.Type, war.State, war.BattleModifier, nullString(war.WarTag),
+			war.TeamSize, war.AttacksPerMember, row.value.WarType, war.State, war.BattleModifier, nullString(war.WarTag),
 			war.Clan.Name, war.Opponent.Name, war.Clan.BadgeToken, war.Opponent.BadgeToken, war.Clan.ClanLevel,
 			war.Opponent.ClanLevel, war.Clan.Attacks, war.Opponent.Attacks, war.Clan.Stars, war.Opponent.Stars,
 			war.Clan.DestructionPercentage, war.Opponent.DestructionPercentage, packID, row.locator.Offset,

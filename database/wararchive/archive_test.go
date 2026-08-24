@@ -28,6 +28,9 @@ func TestMarshalOnlyOmitsEmptyWarTag(t *testing.T) {
 	if _, exists := decoded["warTag"]; exists {
 		t.Fatal("empty warTag must be omitted")
 	}
+	if _, exists := decoded["type"]; exists {
+		t.Fatal("SQL-only war type must not be archived")
+	}
 	requireJSONKeys(t, decoded, "startTime", "battleModifier")
 	clan := decoded["clan"].(map[string]any)
 	requireJSONKeys(t, clan, "name", "badgeToken", "clanLevel", "attacks", "stars", "destructionPercentage")
@@ -93,8 +96,8 @@ func TestPackFramesDecodeIndependently(t *testing.T) {
 	}
 	defer builder.Close()
 	wars := []War{
-		{Type: "random", State: "warended", PreparationStartTime: time.Unix(1, 0), StartTime: time.Unix(2, 0), EndTime: time.Unix(3, 0), Clan: Clan{Tag: "#A", Members: []Member{}}, Opponent: Clan{Tag: "#B", Members: []Member{}}},
-		{Type: "friendly", State: "warended", PreparationStartTime: time.Unix(4, 0), StartTime: time.Unix(5, 0), EndTime: time.Unix(6, 0), Clan: Clan{Tag: "#C", Members: []Member{}}, Opponent: Clan{Tag: "#D", Members: []Member{}}},
+		{State: "warended", PreparationStartTime: time.Unix(1, 0), StartTime: time.Unix(2, 0), EndTime: time.Unix(3, 0), Clan: Clan{Tag: "#A", Members: []Member{}}, Opponent: Clan{Tag: "#B", Members: []Member{}}},
+		{State: "warended", PreparationStartTime: time.Unix(4, 0), StartTime: time.Unix(5, 0), EndTime: time.Unix(6, 0), Clan: Clan{Tag: "#C", Members: []Member{}}, Opponent: Clan{Tag: "#D", Members: []Member{}}},
 	}
 	ids := []uuid.UUID{
 		DeterministicV7("#A", "#B", time.Unix(1, 0), ""),
@@ -127,7 +130,7 @@ func TestCheckedInDictionaryRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	war := War{
-		Type: "random", State: "warended", PreparationStartTime: time.Unix(1, 0), StartTime: time.Unix(2, 0), EndTime: time.Unix(3, 0),
+		State: "warended", PreparationStartTime: time.Unix(1, 0), StartTime: time.Unix(2, 0), EndTime: time.Unix(3, 0),
 		Clan:     Clan{Tag: "#A", Members: []Member{{Tag: "#P1", TownhallLevel: 18}}},
 		Opponent: Clan{Tag: "#B", Members: []Member{{Tag: "#P2", TownhallLevel: 17}}},
 	}
@@ -157,8 +160,8 @@ func TestCheckedInDictionaryRoundTrip(t *testing.T) {
 
 func TestPackStatsAreAdditive(t *testing.T) {
 	stats := NewPackStats()
-	stats.Add(War{
-		Type: "random", TeamSize: 5, BattleModifier: "none",
+	stats.Add("random", War{
+		TeamSize: 5, BattleModifier: "none",
 		Clan:     Clan{Stars: 7, Attacks: 4, Members: []Member{{Tag: "#A", TownhallLevel: 18, Attacks: []Attack{{DefenderTag: "#B", Stars: 3, DestructionPercentage: 100, Duration: 120}}}}},
 		Opponent: Clan{Stars: 5, Attacks: 3, Members: []Member{{Tag: "#B", TownhallLevel: 17}}},
 	})
