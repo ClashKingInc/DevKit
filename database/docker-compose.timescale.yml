@@ -2,7 +2,7 @@ name: clashking_tracking
 
 services:
   timescale:
-    image: timescale/timescaledb:latest-pg18
+    image: timescale/timescaledb:2.29.2-pg18@sha256:9508616d5b941ed931198504c5db3fb47e8f53f790732ea1e889591f1062057c
     container_name: clashking-tracking-timescale
     restart: unless-stopped
     shm_size: 4gb
