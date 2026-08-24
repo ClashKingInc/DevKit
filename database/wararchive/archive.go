@@ -3,14 +3,11 @@ package wararchive
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -19,7 +16,7 @@ import (
 // redundant best-attack fields are not represented.
 type War struct {
 	// ID identifies the SQL row and is never serialized into an archive frame.
-	ID                   uuid.UUID `json:"-"`
+	ID                   int32     `json:"-"`
 	WarTag               string    `json:"warTag,omitempty"`
 	State                string    `json:"state"`
 	TeamSize             int       `json:"teamSize"`
@@ -91,11 +88,11 @@ func NormalizeBattleModifier(value string) string {
 }
 
 type Locator struct {
-	WarID           uuid.UUID `json:"war_id"`
-	PackID          uint64    `json:"pack_id"`
-	Offset          int64     `json:"offset"`
-	CompressedBytes int       `json:"compressed_bytes"`
-	RawBytes        int       `json:"raw_bytes"`
+	WarID           int32  `json:"war_id"`
+	PackID          uint64 `json:"pack_id"`
+	Offset          int64  `json:"offset"`
+	CompressedBytes int    `json:"compressed_bytes"`
+	RawBytes        int    `json:"raw_bytes"`
 }
 
 // PackStats contains additive values only. That lets callers merge statistics
@@ -144,28 +141,6 @@ type RegularWarSizeStats struct {
 	Ties       int            `json:"ties"`
 }
 
-// DeterministicV7 makes historical imports idempotent while retaining the same
-// UUIDv7 shape used by live tracking. The timestamp comes from preparation time
-// and the remaining bits come from stable war identity fields.
-func DeterministicV7(clanTag, opponentTag string, preparation time.Time, warTag string) uuid.UUID {
-	tags := []string{strings.ToUpper(clanTag), strings.ToUpper(opponentTag)}
-	sort.Strings(tags)
-	identity := fmt.Sprintf("%s\x00%s\x00%d\x00%s", tags[0], tags[1], preparation.UTC().UnixMilli(), strings.ToUpper(warTag))
-	hash := sha256.Sum256([]byte(identity))
-	var id uuid.UUID
-	milliseconds := uint64(preparation.UTC().UnixMilli())
-	id[0] = byte(milliseconds >> 40)
-	id[1] = byte(milliseconds >> 32)
-	id[2] = byte(milliseconds >> 24)
-	id[3] = byte(milliseconds >> 16)
-	id[4] = byte(milliseconds >> 8)
-	id[5] = byte(milliseconds)
-	copy(id[6:], hash[:10])
-	id[6] = (id[6] & 0x0f) | 0x70
-	id[8] = (id[8] & 0x3f) | 0x80
-	return id
-}
-
 func Marshal(war War) ([]byte, error) {
 	if war.StartTime.IsZero() {
 		return nil, fmt.Errorf("archive war is missing startTime")
@@ -202,7 +177,7 @@ func NewPackBuilder(id uint64, dictionary []byte) (*PackBuilder, error) {
 	return &PackBuilder{id: id, encoder: encoder}, nil
 }
 
-func (b *PackBuilder) Add(warID uuid.UUID, war War) (Locator, error) {
+func (b *PackBuilder) Add(warID int32, war War) (Locator, error) {
 	raw, err := Marshal(war)
 	if err != nil {
 		return Locator{}, err

@@ -25,7 +25,7 @@ func TestWarArchiveBaseline(t *testing.T) {
 	migration := strings.ToLower(string(raw))
 	wars := strings.ToLower(baselineTableDDL(t, string(raw), "wars"))
 	for _, required := range []string{
-		"war_id uuid not null",
+		"war_id integer default nextval('public.war_id_seq'::regclass) not null",
 		"start_time timestamp with time zone not null",
 		"archive_pack_id bigint",
 		"archive_offset bigint",
@@ -47,6 +47,19 @@ func TestWarArchiveBaseline(t *testing.T) {
 		baselineTableDDL(t, string(raw), table)
 	}
 	playerHistory := strings.ToLower(baselineTableDDL(t, string(raw), "player_war_history"))
+	if !strings.Contains(playerHistory, "war_ids integer[]") {
+		t.Error("player_war_history does not use compact integer war IDs")
+	}
+	for _, table := range []string{"war_archive_pending", "war_schedule"} {
+		ddl := strings.ToLower(baselineTableDDL(t, string(raw), table))
+		if !strings.Contains(ddl, "war_id integer") {
+			t.Errorf("%s does not use the shared integer war ID", table)
+		}
+	}
+	if !strings.Contains(migration, "create sequence public.war_id_seq as integer") ||
+		!strings.Contains(migration, "alter sequence public.war_id_seq owned by public.wars.war_id") {
+		t.Error("war ID sequence is missing or is not owned by wars.war_id")
+	}
 	if strings.Contains(playerHistory, "updated_at") {
 		t.Error("player_war_history retains unused updated_at column")
 	}

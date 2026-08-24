@@ -13,7 +13,6 @@ import (
 
 	"github.com/ClashKingInc/DevKit/database/migrations/migrateutil"
 	"github.com/ClashKingInc/DevKit/database/wararchive"
-	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -262,12 +261,12 @@ func TestArchivePackPipelineCheckpointsCompletedPacksInSourceOrder(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstID, secondID := uuid.New(), uuid.New()
+	firstID, secondID := "first-source", "second-source"
 	firstStarted := make(chan struct{})
 	secondFinished := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	processor := func(_ context.Context, wars []archiveWar, _, _ chan struct{}) error {
-		switch wars[0].ID {
+		switch wars[0].SourceID {
 		case firstID:
 			close(firstStarted)
 			<-releaseFirst
@@ -277,10 +276,10 @@ func TestArchivePackPipelineCheckpointsCompletedPacksInSourceOrder(t *testing.T)
 		return nil
 	}
 	pipeline := newArchivePackPipeline(context.Background(), 2, 1, 1, cp, "ordered", processor)
-	if err := pipeline.Submit([]archiveWar{{ID: firstID}}, "first"); err != nil {
+	if err := pipeline.Submit([]archiveWar{{SourceID: firstID}}, "first"); err != nil {
 		t.Fatal(err)
 	}
-	if err := pipeline.Submit([]archiveWar{{ID: secondID}}, "second"); err != nil {
+	if err := pipeline.Submit([]archiveWar{{SourceID: secondID}}, "second"); err != nil {
 		t.Fatal(err)
 	}
 	<-firstStarted

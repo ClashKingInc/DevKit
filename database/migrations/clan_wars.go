@@ -22,7 +22,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -206,7 +205,7 @@ type archivePackProcessor func(context.Context, []archiveWar, chan struct{}, cha
 
 type archivePackFuture struct {
 	checkpoint string
-	warIDs     []uuid.UUID
+	sourceIDs  []string
 	done       chan error
 }
 
@@ -221,7 +220,7 @@ type archivePackPipeline struct {
 	cp         *migrateutil.Checkpoint
 	cpKey      string
 	process    archivePackProcessor
-	inFlight   map[uuid.UUID]struct{}
+	inFlight   map[string]struct{}
 	futures    []archivePackFuture
 	closeOnce  sync.Once
 	closeErr   error
@@ -232,7 +231,7 @@ func newArchivePackPipeline(ctx context.Context, maxRunning, uploadWorkers, sqlW
 	return &archivePackPipeline{
 		ctx: pipelineCtx, cancel: cancel, maxRunning: maxRunning,
 		sqlGate: make(chan struct{}, sqlWorkers), uploadGate: make(chan struct{}, uploadWorkers),
-		cp: cp, cpKey: cpKey, process: process, inFlight: make(map[uuid.UUID]struct{}, maxRunning*defaultWarArchivePackSize),
+		cp: cp, cpKey: cpKey, process: process, inFlight: make(map[string]struct{}, maxRunning*defaultWarArchivePackSize),
 	}
 }
 
@@ -243,17 +242,17 @@ func (p *archivePackPipeline) Submit(input []archiveWar, checkpoint string) erro
 		}
 	}
 	batch := make([]archiveWar, 0, len(input))
-	ids := make([]uuid.UUID, 0, len(input))
+	ids := make([]string, 0, len(input))
 	for _, value := range input {
-		if _, exists := p.inFlight[value.ID]; exists {
+		if _, exists := p.inFlight[value.SourceID]; exists {
 			continue
 		}
-		p.inFlight[value.ID] = struct{}{}
+		p.inFlight[value.SourceID] = struct{}{}
 		batch = append(batch, value)
-		ids = append(ids, value.ID)
+		ids = append(ids, value.SourceID)
 	}
 	done := make(chan error, 1)
-	p.futures = append(p.futures, archivePackFuture{checkpoint: checkpoint, warIDs: ids, done: done})
+	p.futures = append(p.futures, archivePackFuture{checkpoint: checkpoint, sourceIDs: ids, done: done})
 	go func() {
 		if len(batch) == 0 {
 			done <- nil
@@ -271,7 +270,7 @@ func (p *archivePackPipeline) awaitOldest(checkpoint bool) error {
 	future := p.futures[0]
 	p.futures = p.futures[1:]
 	err := <-future.done
-	for _, id := range future.warIDs {
+	for _, id := range future.sourceIDs {
 		delete(p.inFlight, id)
 	}
 	if err != nil {
@@ -300,9 +299,10 @@ func (p *archivePackPipeline) Close() error {
 }
 
 type archiveWar struct {
-	ID      uuid.UUID
-	WarType string
-	War     wararchive.War
+	ID       int32
+	SourceID string
+	WarType  string
+	War      wararchive.War
 }
 
 func canonicalArchiveWar(doc clanWarDoc) (archiveWar, bool) {
@@ -327,19 +327,18 @@ func canonicalArchiveWar(doc clanWarDoc) (archiveWar, bool) {
 	if attacksPerMember <= 0 {
 		attacksPerMember = 1
 	}
-	id := wararchive.DeterministicV7(clanTag, opponentTag, prepAt, warTag)
 	clan, opponent := doc.Data.Clan, doc.Data.Opponent
 	if clan.Tag > opponent.Tag {
 		clan, opponent = opponent, clan
 	}
 	war := wararchive.War{
-		ID: id, WarTag: warTag, State: strings.ToLower(doc.Data.State),
+		WarTag: warTag, State: strings.ToLower(doc.Data.State),
 		TeamSize: doc.Data.TeamSize, AttacksPerMember: attacksPerMember,
 		PreparationStartTime: prepAt.UTC(), StartTime: startAt.UTC(), EndTime: endAt.UTC(),
 		BattleModifier: wararchive.NormalizeBattleModifier(doc.Data.BattleModifier),
 		Clan:           canonicalArchiveClan(clan), Opponent: canonicalArchiveClan(opponent),
 	}
-	return archiveWar{ID: id, WarType: warType, War: war}, true
+	return archiveWar{SourceID: doc.ID.Hex(), WarType: warType, War: war}, true
 }
 
 func canonicalArchiveClan(clan warClanDoc) wararchive.Clan {
@@ -377,8 +376,12 @@ func flushArchivePack(ctx context.Context, pool *pgxpool.Pool, store *warArchive
 	if err := acquireArchiveGate(ctx, sqlGate); err != nil {
 		return err
 	}
-	wars, err := excludeStoredWars(ctx, pool, input)
-	if err != nil || len(wars) == 0 {
+	wars := append([]archiveWar(nil), input...)
+	if len(wars) == 0 {
+		releaseArchiveGate(sqlGate)
+		return nil
+	}
+	if err := assignWarIDs(ctx, pool, wars); err != nil {
 		releaseArchiveGate(sqlGate)
 		return err
 	}
@@ -463,38 +466,30 @@ func acquireArchiveGate(ctx context.Context, gate chan struct{}) error {
 
 func releaseArchiveGate(gate chan struct{}) { <-gate }
 
-func excludeStoredWars(ctx context.Context, pool *pgxpool.Pool, input []archiveWar) ([]archiveWar, error) {
-	unique := make(map[uuid.UUID]archiveWar, len(input))
-	ids := make([]uuid.UUID, 0, len(input))
-	for _, value := range input {
-		if _, exists := unique[value.ID]; exists {
-			continue
-		}
-		unique[value.ID] = value
-		ids = append(ids, value.ID)
-	}
-	rows, err := pool.Query(ctx, `SELECT DISTINCT war_id FROM wars WHERE war_id = ANY($1::uuid[])`, ids)
+func assignWarIDs(ctx context.Context, pool *pgxpool.Pool, wars []archiveWar) error {
+	rows, err := pool.Query(ctx, `SELECT nextval('public.war_id_seq')::integer FROM generate_series(1, $1)`, len(wars))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
+	index := 0
 	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+		if index >= len(wars) {
+			return errors.New("war ID sequence returned too many values")
 		}
-		delete(unique, id)
+		if err := rows.Scan(&wars[index].ID); err != nil {
+			return err
+		}
+		wars[index].War.ID = wars[index].ID
+		index++
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return err
 	}
-	result := make([]archiveWar, 0, len(unique))
-	for _, id := range ids {
-		if value, exists := unique[id]; exists {
-			result = append(result, value)
-		}
+	if index != len(wars) {
+		return fmt.Errorf("war ID sequence returned %d values, want %d", index, len(wars))
 	}
-	return result, nil
+	return nil
 }
 
 func reserveMigrationPack(ctx context.Context, pool *pgxpool.Pool) (int64, error) {
@@ -629,7 +624,7 @@ func finalizeArchivePack(ctx context.Context, pool *pgxpool.Pool, packID int64, 
 type historyStageRow struct {
 	playerTag   string
 	periodStart time.Time
-	warID       uuid.UUID
+	warID       int32
 }
 
 func upsertPlayerWarHistory(ctx context.Context, tx pgx.Tx, wars []archiveWar) error {
@@ -639,7 +634,7 @@ func upsertPlayerWarHistory(ctx context.Context, tx pgx.Tx, wars []archiveWar) e
 		period := quarterStart(value.War.EndTime)
 		for _, clan := range []wararchive.Clan{value.War.Clan, value.War.Opponent} {
 			for _, member := range clan.Members {
-				key := member.Tag + "\x00" + value.ID.String()
+				key := member.Tag + "\x00" + strconv.FormatInt(int64(value.ID), 10)
 				if member.Tag == "" {
 					continue
 				}
@@ -654,7 +649,7 @@ func upsertPlayerWarHistory(ctx context.Context, tx pgx.Tx, wars []archiveWar) e
 	if len(rows) == 0 {
 		return nil
 	}
-	if _, err := tx.Exec(ctx, `CREATE TEMP TABLE player_war_history_stage (player_tag text, period_start date, war_id uuid) ON COMMIT DROP`); err != nil {
+	if _, err := tx.Exec(ctx, `CREATE TEMP TABLE player_war_history_stage (player_tag text, period_start date, war_id integer) ON COMMIT DROP`); err != nil {
 		return err
 	}
 	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"player_war_history_stage"}, []string{"player_tag", "period_start", "war_id"}, pgx.CopyFromSlice(len(rows), func(index int) ([]any, error) {

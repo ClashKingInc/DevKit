@@ -184,7 +184,7 @@ CREATE TABLE public.war_archive_packs (
 CREATE TABLE public.player_war_history (
     player_tag text NOT NULL,
     period_start date NOT NULL,
-    war_ids uuid[] DEFAULT '{}'::uuid[] NOT NULL,
+    war_ids integer[] DEFAULT '{}'::integer[] NOT NULL,
     CONSTRAINT player_war_history_quarter_check CHECK ((EXTRACT(day FROM period_start) = 1) AND (EXTRACT(month FROM period_start) = ANY (ARRAY[1, 4, 7, 10])))
 );
 
@@ -192,8 +192,10 @@ CREATE TABLE public.player_war_history (
 -- Name: wars; Type: TABLE; Schema: public; Owner: -
 --
 
+CREATE SEQUENCE public.war_id_seq AS integer;
+
 CREATE TABLE public.wars (
-    war_id uuid NOT NULL,
+    war_id integer DEFAULT nextval('public.war_id_seq'::regclass) NOT NULL,
     clan_tag text NOT NULL,
     opponent_tag text NOT NULL,
     prep_time timestamp with time zone NOT NULL,
@@ -238,7 +240,7 @@ SELECT create_hypertable(
 --
 
 CREATE TABLE public.war_archive_pending (
-    war_id uuid NOT NULL,
+    war_id integer NOT NULL,
     end_time timestamp with time zone NOT NULL,
     payload jsonb NOT NULL,
     pack_id bigint,
@@ -809,7 +811,7 @@ CREATE MATERIALIZED VIEW public.war_league_counts AS
 
 CREATE TABLE public.war_schedule (
     schedule_key text NOT NULL,
-    war_id uuid NOT NULL,
+    war_id integer DEFAULT nextval('public.war_id_seq'::regclass) NOT NULL,
     source_clan_tag text NOT NULL,
     opponent_tag text NOT NULL,
     prep_time timestamp with time zone NOT NULL,
@@ -1028,6 +1030,8 @@ ALTER TABLE public.war_reminder_jobs
 
 ALTER TABLE public.wars
     ADD CONSTRAINT wars_pkey PRIMARY KEY (war_id, end_time);
+
+ALTER SEQUENCE public.war_id_seq OWNED BY public.wars.war_id;
 
 ALTER TABLE public.war_archive_pending
     ADD CONSTRAINT war_archive_pending_war_fkey FOREIGN KEY (war_id, end_time) REFERENCES public.wars(war_id, end_time) ON DELETE CASCADE;
@@ -1520,4 +1524,5 @@ DROP TABLE IF EXISTS public.war_reminder_jobs CASCADE;
 DROP TABLE IF EXISTS public.war_schedule CASCADE;
 DROP TABLE IF EXISTS public.wars CASCADE;
 DROP TABLE IF EXISTS public.war_archive_packs CASCADE;
+DROP SEQUENCE IF EXISTS public.war_id_seq CASCADE;
 DROP SEQUENCE IF EXISTS public.tracking_stats_run_id_seq CASCADE;
