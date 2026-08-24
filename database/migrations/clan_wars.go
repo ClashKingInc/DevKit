@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"sort"
@@ -746,17 +747,25 @@ func (s *warArchiveStore) delete(ctx context.Context, key string) error {
 }
 
 func (s *warArchiveStore) prime(ctx context.Context, key string) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodHead, s.publicOrigin+"/"+key, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, s.publicOrigin+"/"+key, nil)
 	if err != nil {
 		return err
 	}
+	request.Header.Set("Range", "bytes=0-0")
 	response, err := s.httpClient.Do(request)
 	if err != nil {
 		return err
 	}
 	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
+	if response.StatusCode != http.StatusPartialContent {
 		return fmt.Errorf("cache prime returned HTTP %d", response.StatusCode)
+	}
+	bytesRead, err := io.Copy(io.Discard, response.Body)
+	if err != nil {
+		return fmt.Errorf("read cache-prime byte: %w", err)
+	}
+	if bytesRead != 1 {
+		return fmt.Errorf("cache prime returned %d bytes, want 1", bytesRead)
 	}
 	if status := strings.ToUpper(strings.TrimSpace(response.Header.Get("CF-Cache-Status"))); status == "BYPASS" || status == "DYNAMIC" {
 		return fmt.Errorf("cache prime was not eligible for caching: %s", status)

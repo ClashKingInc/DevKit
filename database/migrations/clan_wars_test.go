@@ -4,7 +4,10 @@ package main
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +16,36 @@ import (
 	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
+}
+
+func TestWarArchiveCachePrimeUsesOneByteRangeGET(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", request.Method)
+		}
+		if got := request.Header.Get("Range"); got != "bytes=0-0" {
+			t.Errorf("Range = %q, want bytes=0-0", got)
+		}
+		return &http.Response{
+			StatusCode: http.StatusPartialContent,
+			Header: http.Header{
+				"CF-Cache-Status": {"MISS"},
+				"Content-Range":   {"bytes 0-0/1024"},
+			},
+			Body: io.NopCloser(strings.NewReader("x")),
+		}, nil
+	})}
+
+	store := &warArchiveStore{publicOrigin: "https://wars.example", httpClient: client}
+	if err := store.prime(context.Background(), "packs/000001.pack"); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestNormalizeClanWarTag(t *testing.T) {
 	for input, want := range map[string]string{
