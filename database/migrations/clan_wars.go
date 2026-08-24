@@ -397,7 +397,7 @@ func flushArchivePack(ctx context.Context, pool *pgxpool.Pool, store *warArchive
 	finalizeDuration := time.Since(finalizeStarted)
 	releaseArchiveGate(sqlGate)
 	fmt.Printf("clan_wars: uploaded pack=%d wars=%d attacks=%d raw_bytes=%d compressed_bytes=%d build=%s upload=%s prime=%s finalize=%s total=%s\n",
-		packID, len(wars), stats.Attacks.Total, sumRawBytes(builder.Locators()), len(object), buildDuration, uploadDuration, primeDuration, finalizeDuration, time.Since(started))
+		packID, len(wars), stats.TotalAttacks(), sumRawBytes(builder.Locators()), len(object), buildDuration, uploadDuration, primeDuration, finalizeDuration, time.Since(started))
 	return nil
 }
 
@@ -521,7 +521,7 @@ func finalizeArchivePack(ctx context.Context, pool *pgxpool.Pool, packID int64, 
 			compressed_bytes = $5, first_end_time = $6, last_end_time = $7,
 			stats = $8, uploaded_at = now()
 		WHERE pack_id = $1 AND source = 'migration' AND status = 'building'
-	`, packID, len(wars), stats.Attacks.Total, sumRawBytes(locators), sumCompressedBytes(locators), firstEnd, lastEnd, statsJSON)
+	`, packID, len(wars), stats.TotalAttacks(), sumRawBytes(locators), sumCompressedBytes(locators), firstEnd, lastEnd, statsJSON)
 	if err != nil {
 		return err
 	}

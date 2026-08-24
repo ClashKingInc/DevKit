@@ -161,15 +161,74 @@ func TestCheckedInDictionaryRoundTrip(t *testing.T) {
 func TestPackStatsAreAdditive(t *testing.T) {
 	stats := NewPackStats()
 	stats.Add("random", War{
-		TeamSize: 5, BattleModifier: "none",
-		Clan:     Clan{Stars: 7, Attacks: 4, Members: []Member{{Tag: "#A", TownhallLevel: 18, Attacks: []Attack{{DefenderTag: "#B", Stars: 3, DestructionPercentage: 100, Duration: 120}}}}},
-		Opponent: Clan{Stars: 5, Attacks: 3, Members: []Member{{Tag: "#B", TownhallLevel: 17}}},
+		TeamSize: 2, AttacksPerMember: 2, EndTime: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC),
+		Clan: Clan{Stars: 7, DestructionPercentage: 80, Members: []Member{
+			{Tag: "#A1", TownhallLevel: 18, Attacks: []Attack{{DefenderTag: "#B1", Stars: 0, DestructionPercentage: 65, Duration: 90}}},
+			{Tag: "#A2", TownhallLevel: 17, Attacks: []Attack{{DefenderTag: "#B2", Stars: 3, DestructionPercentage: 100, Duration: 120}}},
+		}},
+		Opponent: Clan{Stars: 5, DestructionPercentage: 70, Members: []Member{
+			{Tag: "#B1", TownhallLevel: 18, Attacks: []Attack{{DefenderTag: "#A1", Stars: 2, DestructionPercentage: 85, Duration: 110}}},
+			{Tag: "#B2", TownhallLevel: 17, Attacks: []Attack{{DefenderTag: "#A2", Stars: 1, DestructionPercentage: 50, Duration: 80}}},
+		}},
 	})
-	if stats.Wars.Total != 1 || stats.Attacks.Total != 1 {
-		t.Fatalf("unexpected totals: wars=%d attacks=%d", stats.Wars.Total, stats.Attacks.Total)
+	day := stats.ByDay["2026-08-23"]
+	if day.WarsByType["random"] != 1 || day.WarsBySize["2"] != 1 {
+		t.Fatalf("unexpected war counts: %+v", day)
 	}
-	matchup := stats.Attacks.TownhallMatchups["18:17"]
-	if matchup.Attacks != 1 || matchup.Triples != 1 || matchup.Stars != 3 || matchup.DestructionPercent != 100 {
+	if day.TotalAttacks != 4 || day.TotalMissedAttacks != 4 || stats.TotalAttacks() != 4 {
+		t.Fatalf("unexpected attack totals: attacks=%d missed=%d", day.TotalAttacks, day.TotalMissedAttacks)
+	}
+	matchup := day.RegularHitRates["18:18"]
+	if matchup.Attacks != 2 || matchup.ZeroStars.Attacks != 1 || matchup.ZeroStars.DestructionPercent != 65 || matchup.ZeroStars.DurationSeconds != 90 || matchup.TwoStars.Attacks != 1 || matchup.TwoStars.DestructionPercent != 85 || matchup.TwoStars.DurationSeconds != 110 {
 		t.Fatalf("unexpected matchup: %+v", matchup)
+	}
+	matchup = day.RegularHitRates["17:17"]
+	if matchup.Attacks != 2 || matchup.OneStars.Attacks != 1 || matchup.ThreeStars.Attacks != 1 || matchup.ThreeStars.DurationSeconds != 120 {
+		t.Fatalf("unexpected matchup: %+v", matchup)
+	}
+	bySize := day.RegularByWarSize["2"]
+	if bySize.Wars != 1 || bySize.Townhalls["18"] != 2 || bySize.Townhalls["17"] != 2 || bySize.TotalStars != 12 || bySize.Wins != 1 || bySize.Losses != 1 || bySize.Ties != 0 {
+		t.Fatalf("unexpected regular war size stats: %+v", bySize)
+	}
+}
+
+func TestPackStatsKeepNonRegularWarsOutOfRegularBreakdowns(t *testing.T) {
+	stats := NewPackStats()
+	stats.Add("cwl", War{
+		TeamSize: 1, AttacksPerMember: 1, EndTime: time.Date(2026, 8, 24, 1, 0, 0, 0, time.UTC),
+		Clan:     Clan{Members: []Member{{Tag: "#A", TownhallLevel: 18}}},
+		Opponent: Clan{Members: []Member{{Tag: "#B", TownhallLevel: 18}}},
+	})
+	day := stats.ByDay["2026-08-24"]
+	if day.WarsByType["cwl"] != 1 || day.WarsBySize["1"] != 1 || day.TotalMissedAttacks != 2 {
+		t.Fatalf("unexpected daily totals: %+v", day)
+	}
+	if len(day.RegularHitRates) != 0 || len(day.RegularByWarSize) != 0 {
+		t.Fatalf("CWL leaked into regular-war breakdowns: %+v", day)
+	}
+}
+
+func TestPackStatsRecordTiedRegularWarAsTwoTiedSides(t *testing.T) {
+	stats := NewPackStats()
+	stats.Add("random", War{
+		TeamSize: 1, EndTime: time.Date(2026, 8, 24, 1, 0, 0, 0, time.UTC),
+		Clan:     Clan{Stars: 3, DestructionPercentage: 100, Members: []Member{{Tag: "#A", TownhallLevel: 18}}},
+		Opponent: Clan{Stars: 3, DestructionPercentage: 100, Members: []Member{{Tag: "#B", TownhallLevel: 18}}},
+	})
+	value := stats.ByDay["2026-08-24"].RegularByWarSize["1"]
+	if value.Wars != 1 || value.Wins != 0 || value.Losses != 0 || value.Ties != 2 {
+		t.Fatalf("unexpected tied-war outcomes: %+v", value)
+	}
+}
+
+func TestPackStatsJSONOmitsLegacyShapes(t *testing.T) {
+	raw, err := json.Marshal(NewPackStats())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, legacy := range []string{`"sides"`, `"byWeekTypeMatchup"`, `"stars"`} {
+		if bytes.Contains(raw, []byte(legacy)) {
+			t.Fatalf("legacy field %s remains in %s", legacy, raw)
+		}
 	}
 }

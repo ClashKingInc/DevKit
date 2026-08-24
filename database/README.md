@@ -147,6 +147,15 @@ Cloudflare fetches and stores the complete object while returning only headers
 to the importer. A cache-prime failure is logged but does not invalidate an
 otherwise successful R2 upload.
 
+Every pack stores additive statistics under `stats.byDay`. Each UTC day records
+war counts by type and size plus total and missed attacks. Regular wars also
+record town-hall hit rates with separate zero-, one-, two-, and three-star
+outcomes, and combined lineup/outcome totals by war size. Destruction and
+duration sums are stored for zero through two stars; three-star destruction is
+derived as `attacks * 100`, while its duration sum remains stored. The combined
+outcomes count both war sides, so a decisive war contributes one win and one
+loss and a tied war contributes two ties.
+
 Set `CLAN_WARS_CLAN_TAG` to import only wars where that tag is either the clan
 or opponent. The value is normalized to uppercase and may be provided with or
 without the leading `#`. Clan-scoped runs use their own checkpoint and do not

@@ -102,53 +102,46 @@ type Locator struct {
 // from many packs without reconstructing the archived wars or averaging
 // already-averaged values.
 type PackStats struct {
-	Wars    WarStats    `json:"wars"`
-	Sides   SideStats   `json:"sides"`
-	Attacks AttackStats `json:"attacks"`
+	ByDay map[string]DayStats `json:"byDay"`
 }
 
-type WarStats struct {
-	Total             int            `json:"total"`
-	ByType            map[string]int `json:"byType"`
-	BySize            map[string]int `json:"bySize"`
-	ByBattleModifier  map[string]int `json:"byBattleModifier"`
-	ByTypeAndSize     map[string]int `json:"byTypeAndSize"`
-	ByModifierAndSize map[string]int `json:"byModifierAndSize"`
+type DayStats struct {
+	WarsByType         map[string]int                 `json:"warsByType"`
+	TotalAttacks       int                            `json:"totalAttacks"`
+	TotalMissedAttacks int                            `json:"totalMissedAttacks"`
+	WarsBySize         map[string]int                 `json:"warsBySize"`
+	RegularHitRates    map[string]HitRateStats        `json:"regularHitRates"`
+	RegularByWarSize   map[string]RegularWarSizeStats `json:"regularByWarSize"`
 }
 
-type SideStats struct {
-	Clan     ClanSideStats `json:"clan"`
-	Opponent ClanSideStats `json:"opponent"`
+type HitRateStats struct {
+	Attacks    int                   `json:"attacks"`
+	ZeroStars  StarOutcomeStats      `json:"zeroStars"`
+	OneStars   StarOutcomeStats      `json:"oneStars"`
+	TwoStars   StarOutcomeStats      `json:"twoStars"`
+	ThreeStars ThreeStarOutcomeStats `json:"threeStars"`
 }
 
-type ClanSideStats struct {
-	MembersByTownhall map[string]int `json:"membersByTownhall"`
-	WarsByStars       map[string]int `json:"warsByStars"`
-	WarsByAttacksUsed map[string]int `json:"warsByAttacksUsed"`
-}
-
-type AttackStats struct {
-	Total             int                        `json:"total"`
-	Stars             map[string]int             `json:"stars"`
-	AttackerTownhalls map[string]int             `json:"attackerTownhalls"`
-	DefenderTownhalls map[string]int             `json:"defenderTownhalls"`
-	TownhallMatchups  map[string]AttackAggregate `json:"townhallMatchups"`
-	ByWarType         map[string]AttackAggregate `json:"byWarType"`
-	ByWarSize         map[string]AttackAggregate `json:"byWarSize"`
-	ByBattleModifier  map[string]AttackAggregate `json:"byBattleModifier"`
-	ByWeekTypeMatchup map[string]AttackAggregate `json:"byWeekTypeMatchup"`
-	ByDayTypeMatchup  map[string]AttackAggregate `json:"byDayTypeMatchup"`
-}
-
-type AttackAggregate struct {
+type StarOutcomeStats struct {
 	Attacks            int   `json:"attacks"`
-	Stars              int   `json:"stars"`
-	Triples            int   `json:"triples"`
-	ZeroStars          int   `json:"zeroStars"`
-	OneStars           int   `json:"oneStars"`
-	TwoStars           int   `json:"twoStars"`
 	DestructionPercent int64 `json:"destructionPercent"`
 	DurationSeconds    int64 `json:"durationSeconds"`
+}
+
+// Three-star destruction is always 100 percent per attack, so only its count
+// and duration need to be stored.
+type ThreeStarOutcomeStats struct {
+	Attacks         int   `json:"attacks"`
+	DurationSeconds int64 `json:"durationSeconds"`
+}
+
+type RegularWarSizeStats struct {
+	Wars       int            `json:"wars"`
+	Townhalls  map[string]int `json:"townhalls"`
+	TotalStars int            `json:"totalStars"`
+	Wins       int            `json:"wins"`
+	Losses     int            `json:"losses"`
+	Ties       int            `json:"ties"`
 }
 
 // DeterministicV7 makes historical imports idempotent while retaining the same
@@ -252,93 +245,120 @@ func DecodeFrame(frame, dictionary []byte) ([]byte, error) {
 }
 
 func NewPackStats() PackStats {
-	return PackStats{
-		Wars: WarStats{
-			ByType: map[string]int{}, BySize: map[string]int{}, ByBattleModifier: map[string]int{},
-			ByTypeAndSize: map[string]int{}, ByModifierAndSize: map[string]int{},
-		},
-		Sides: SideStats{
-			Clan: newClanSideStats(), Opponent: newClanSideStats(),
-		},
-		Attacks: AttackStats{
-			Stars: map[string]int{}, AttackerTownhalls: map[string]int{}, DefenderTownhalls: map[string]int{},
-			TownhallMatchups: map[string]AttackAggregate{}, ByWarType: map[string]AttackAggregate{},
-			ByWarSize: map[string]AttackAggregate{}, ByBattleModifier: map[string]AttackAggregate{},
-			ByWeekTypeMatchup: map[string]AttackAggregate{}, ByDayTypeMatchup: map[string]AttackAggregate{},
-		},
-	}
+	return PackStats{ByDay: map[string]DayStats{}}
 }
 
-func newClanSideStats() ClanSideStats {
-	return ClanSideStats{MembersByTownhall: map[string]int{}, WarsByStars: map[string]int{}, WarsByAttacksUsed: map[string]int{}}
+func newDayStats() DayStats {
+	return DayStats{
+		WarsByType:       map[string]int{},
+		WarsBySize:       map[string]int{},
+		RegularHitRates:  map[string]HitRateStats{},
+		RegularByWarSize: map[string]RegularWarSizeStats{},
+	}
 }
 
 func (s *PackStats) Add(warType string, war War) {
 	warType = defaultDimension(warType, "random")
-	modifier := defaultDimension(war.BattleModifier, "none")
-	size := fmt.Sprint(war.TeamSize)
-	s.Wars.Total++
-	s.Wars.ByType[warType]++
-	s.Wars.BySize[size]++
-	s.Wars.ByBattleModifier[modifier]++
-	s.Wars.ByTypeAndSize[warType+":"+size]++
-	s.Wars.ByModifierAndSize[modifier+":"+size]++
-	s.addClanSide(&s.Sides.Clan, war.Clan)
-	s.addClanSide(&s.Sides.Opponent, war.Opponent)
-	s.addAttacks(warType, war, war.Clan, war.Opponent)
-	s.addAttacks(warType, war, war.Opponent, war.Clan)
-}
-
-func (s *PackStats) addClanSide(side *ClanSideStats, clan Clan) {
-	side.WarsByStars[fmt.Sprint(clan.Stars)]++
-	side.WarsByAttacksUsed[fmt.Sprint(clan.Attacks)]++
-	for _, member := range clan.Members {
-		side.MembersByTownhall[fmt.Sprint(member.TownhallLevel)]++
+	dayKey := war.EndTime.UTC().Format("2006-01-02")
+	day, exists := s.ByDay[dayKey]
+	if !exists {
+		day = newDayStats()
 	}
+	size := fmt.Sprint(war.TeamSize)
+	day.WarsByType[warType]++
+	day.WarsBySize[size]++
+	clanAttacks := countAttacks(war.Clan)
+	opponentAttacks := countAttacks(war.Opponent)
+	day.TotalAttacks += clanAttacks + opponentAttacks
+	day.TotalMissedAttacks += missedAttacks(war, clanAttacks) + missedAttacks(war, opponentAttacks)
+	if warType == "random" {
+		addRegularWarSize(&day, size, war)
+		addRegularHitRates(&day, war.Clan, war.Opponent)
+		addRegularHitRates(&day, war.Opponent, war.Clan)
+	}
+	s.ByDay[dayKey] = day
 }
 
-func (s *PackStats) addAttacks(warType string, war War, attacking, defending Clan) {
+func (s PackStats) TotalAttacks() int {
+	total := 0
+	for _, day := range s.ByDay {
+		total += day.TotalAttacks
+	}
+	return total
+}
+
+func countAttacks(clan Clan) int {
+	total := 0
+	for _, member := range clan.Members {
+		total += len(member.Attacks)
+	}
+	return total
+}
+
+func missedAttacks(war War, used int) int {
+	size := war.TeamSize
+	if size <= 0 {
+		size = max(len(war.Clan.Members), len(war.Opponent.Members))
+	}
+	attacksPerMember := war.AttacksPerMember
+	if attacksPerMember <= 0 {
+		attacksPerMember = 1
+	}
+	return max(0, size*attacksPerMember-used)
+}
+
+func addRegularWarSize(day *DayStats, size string, war War) {
+	value, exists := day.RegularByWarSize[size]
+	if !exists {
+		value.Townhalls = map[string]int{}
+	}
+	value.Wars++
+	value.TotalStars += war.Clan.Stars + war.Opponent.Stars
+	for _, clan := range []Clan{war.Clan, war.Opponent} {
+		for _, member := range clan.Members {
+			value.Townhalls[fmt.Sprint(member.TownhallLevel)]++
+		}
+	}
+	if war.Clan.Stars == war.Opponent.Stars && war.Clan.DestructionPercentage == war.Opponent.DestructionPercentage {
+		value.Ties += 2
+	} else {
+		value.Wins++
+		value.Losses++
+	}
+	day.RegularByWarSize[size] = value
+}
+
+func addRegularHitRates(day *DayStats, attacking, defending Clan) {
 	defenders := make(map[string]int, len(defending.Members))
 	for _, member := range defending.Members {
 		defenders[member.Tag] = member.TownhallLevel
 	}
-	size := fmt.Sprint(war.TeamSize)
-	modifier := defaultDimension(war.BattleModifier, "none")
 	for _, member := range attacking.Members {
 		for _, attack := range member.Attacks {
 			defenderTH := defenders[attack.DefenderTag]
-			s.Attacks.Total++
-			s.Attacks.Stars[fmt.Sprint(attack.Stars)]++
-			s.Attacks.AttackerTownhalls[fmt.Sprint(member.TownhallLevel)]++
-			s.Attacks.DefenderTownhalls[fmt.Sprint(defenderTH)]++
-			addAttackAggregate(s.Attacks.TownhallMatchups, fmt.Sprintf("%d:%d", member.TownhallLevel, defenderTH), attack)
-			addAttackAggregate(s.Attacks.ByWarType, warType, attack)
-			addAttackAggregate(s.Attacks.ByWarSize, size, attack)
-			addAttackAggregate(s.Attacks.ByBattleModifier, modifier, attack)
-			week := war.EndTime.UTC().AddDate(0, 0, -int(war.EndTime.UTC().Weekday()+6)%7).Format("2006-01-02")
-			addAttackAggregate(s.Attacks.ByWeekTypeMatchup, fmt.Sprintf("%s|%s|%d|%d", week, warType, member.TownhallLevel, defenderTH), attack)
-			day := war.EndTime.UTC().Format("2006-01-02")
-			addAttackAggregate(s.Attacks.ByDayTypeMatchup, fmt.Sprintf("%s|%s|%d|%d", day, warType, member.TownhallLevel, defenderTH), attack)
+			key := fmt.Sprintf("%d:%d", member.TownhallLevel, defenderTH)
+			value := day.RegularHitRates[key]
+			value.Attacks++
+			switch attack.Stars {
+			case 3:
+				value.ThreeStars.Attacks++
+				value.ThreeStars.DurationSeconds += int64(attack.Duration)
+			case 2:
+				addStarOutcome(&value.TwoStars, attack)
+			case 1:
+				addStarOutcome(&value.OneStars, attack)
+			default:
+				addStarOutcome(&value.ZeroStars, attack)
+			}
+			day.RegularHitRates[key] = value
 		}
 	}
 }
 
-func addAttackAggregate(values map[string]AttackAggregate, key string, attack Attack) {
-	value := values[key]
+func addStarOutcome(value *StarOutcomeStats, attack Attack) {
 	value.Attacks++
-	value.Stars += attack.Stars
-	if attack.Stars == 3 {
-		value.Triples++
-	} else if attack.Stars == 2 {
-		value.TwoStars++
-	} else if attack.Stars == 1 {
-		value.OneStars++
-	} else {
-		value.ZeroStars++
-	}
 	value.DestructionPercent += int64(attack.DestructionPercentage)
 	value.DurationSeconds += int64(attack.Duration)
-	values[key] = value
 }
 
 func defaultDimension(value, fallback string) string {
