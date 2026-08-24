@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"clashking_devkit_database_migrations/migrateutil"
-	"clashking_devkit_database_migrations/wararchive"
+	"github.com/ClashKingInc/DevKit/database/migrations/migrateutil"
+	"github.com/ClashKingInc/DevKit/database/wararchive"
 	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )

@@ -7,7 +7,7 @@ cd "$repo_root"
 
 echo "Validating Go migration tools..."
 (
-  cd database/migrations
+  cd database
   go test ./...
 )
 

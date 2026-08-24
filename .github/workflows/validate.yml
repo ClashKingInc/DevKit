@@ -23,8 +23,8 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: database/migrations/go.mod
-          cache-dependency-path: database/migrations/go.sum
+          go-version-file: database/go.mod
+          cache-dependency-path: database/go.sum
 
       - uses: actions/setup-node@v4
         with:

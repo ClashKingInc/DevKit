@@ -82,7 +82,7 @@ func TestPackFramesDecodeIndependently(t *testing.T) {
 }
 
 func TestCheckedInDictionaryRoundTrip(t *testing.T) {
-	dictionary, err := os.ReadFile("../../war-json.zdict")
+	dictionary, err := os.ReadFile("../war-json.zdict")
 	if err != nil {
 		t.Fatal(err)
 	}

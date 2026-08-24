@@ -52,8 +52,8 @@ Timescale when the database can enforce it.
 
 ## Go backfill flow
 
-Backfills share the module in `database/migrations/go.mod` and configuration in
-`migrateutil`.
+Backfills share the module in `database/go.mod` and configuration in
+`migrations/migrateutil`. Reusable archive code lives in `database/wararchive`.
 
 - Load secrets from `database/.env` or exported environment variables.
 - Keep `.env`, `migration_state.json`, and legacy `.migration_state/` files

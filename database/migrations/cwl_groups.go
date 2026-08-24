@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"clashking_devkit_database_migrations/migrateutil"
+	"github.com/ClashKingInc/DevKit/database/migrations/migrateutil"
 	"github.com/jackc/pgx/v5"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )

@@ -1,3 +1,4 @@
+// Package wararchive defines ClashKing's shared R2 war archive format.
 package wararchive
 
 import (

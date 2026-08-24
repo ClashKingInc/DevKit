@@ -1,4 +1,4 @@
-module clashking_devkit_database_migrations
+module github.com/ClashKingInc/DevKit/database
 
 go 1.25.0
 

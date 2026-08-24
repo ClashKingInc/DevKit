@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"clashking_devkit_database_migrations/migrateutil"
+	"github.com/ClashKingInc/DevKit/database/migrations/migrateutil"
 
 	"github.com/disgoorg/disgo/discord"
 	disgo "github.com/disgoorg/disgo/rest"
