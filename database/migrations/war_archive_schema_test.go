@@ -44,6 +44,10 @@ func TestWarArchiveBaseline(t *testing.T) {
 	for _, table := range []string{"war_archive_pending", "war_archive_packs", "player_war_history"} {
 		baselineTableDDL(t, string(raw), table)
 	}
+	playerHistory := strings.ToLower(baselineTableDDL(t, string(raw), "player_war_history"))
+	if strings.Contains(playerHistory, "updated_at") {
+		t.Error("player_war_history retains unused updated_at column")
+	}
 	for _, required := range []string{
 		"primary key (player_tag, period_start)",
 		"player_war_history_quarter_check",

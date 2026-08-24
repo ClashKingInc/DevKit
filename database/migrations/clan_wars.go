@@ -578,8 +578,7 @@ func upsertPlayerWarHistory(ctx context.Context, tx pgx.Tx, wars []archiveWar) e
 				SELECT DISTINCT id
 				FROM unnest(player_war_history.war_ids || EXCLUDED.war_ids) AS id
 				ORDER BY id
-			),
-			updated_at = now()
+			)
 	`)
 	return err
 }

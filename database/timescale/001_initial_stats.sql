@@ -185,7 +185,6 @@ CREATE TABLE public.player_war_history (
     player_tag text NOT NULL,
     period_start date NOT NULL,
     war_ids uuid[] DEFAULT '{}'::uuid[] NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT player_war_history_quarter_check CHECK ((EXTRACT(day FROM period_start) = 1) AND (EXTRACT(month FROM period_start) = ANY (ARRAY[1, 4, 7, 10])))
 );
 
