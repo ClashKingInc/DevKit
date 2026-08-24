@@ -19,18 +19,18 @@ import (
 // redundant best-attack fields are not represented.
 type War struct {
 	// ID identifies the SQL row and is never serialized into an archive frame.
-	ID                   uuid.UUID  `json:"-"`
-	WarTag               string     `json:"warTag,omitempty"`
-	Type                 string     `json:"type"`
-	State                string     `json:"state"`
-	TeamSize             int        `json:"teamSize"`
-	AttacksPerMember     int        `json:"attacksPerMember"`
-	PreparationStartTime time.Time  `json:"preparationStartTime"`
-	StartTime            *time.Time `json:"startTime"`
-	EndTime              time.Time  `json:"endTime"`
-	BattleModifier       string     `json:"battleModifier"`
-	Clan                 Clan       `json:"clan"`
-	Opponent             Clan       `json:"opponent"`
+	ID                   uuid.UUID `json:"-"`
+	WarTag               string    `json:"warTag,omitempty"`
+	Type                 string    `json:"type"`
+	State                string    `json:"state"`
+	TeamSize             int       `json:"teamSize"`
+	AttacksPerMember     int       `json:"attacksPerMember"`
+	PreparationStartTime time.Time `json:"preparationStartTime"`
+	StartTime            time.Time `json:"startTime"`
+	EndTime              time.Time `json:"endTime"`
+	BattleModifier       string    `json:"battleModifier"`
+	Clan                 Clan      `json:"clan"`
+	Opponent             Clan      `json:"opponent"`
 }
 
 type Clan struct {
@@ -175,6 +175,9 @@ func DeterministicV7(clanTag, opponentTag string, preparation time.Time, warTag 
 }
 
 func Marshal(war War) ([]byte, error) {
+	if war.StartTime.IsZero() {
+		return nil, fmt.Errorf("archive war is missing startTime")
+	}
 	return json.Marshal(war)
 }
 

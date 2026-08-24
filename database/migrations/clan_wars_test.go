@@ -143,6 +143,24 @@ func TestClanWarNullBattleModifierBecomesNone(t *testing.T) {
 	}
 }
 
+func TestCanonicalArchiveWarRequiresStartTime(t *testing.T) {
+	doc := clanWarDoc{Data: clanWarData{
+		Clan:                 warClanDoc{Tag: "#AAA"},
+		Opponent:             warClanDoc{Tag: "#BBB"},
+		PreparationStartTime: time.Unix(1, 0),
+		EndTime:              time.Unix(3, 0),
+		State:                "warended",
+	}}
+	if _, ok := canonicalArchiveWar(doc); ok {
+		t.Fatal("finished war without startTime was accepted")
+	}
+	doc.Data.StartTime = time.Unix(2, 0)
+	war, ok := canonicalArchiveWar(doc)
+	if !ok || !war.War.StartTime.Equal(time.Unix(2, 0).UTC()) {
+		t.Fatalf("valid startTime was not preserved: %#v", war)
+	}
+}
+
 func TestDecodeCWLBackfillWarTags(t *testing.T) {
 	tests := []struct {
 		name string

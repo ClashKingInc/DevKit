@@ -198,7 +198,7 @@ CREATE TABLE public.wars (
     clan_tag text NOT NULL,
     opponent_tag text NOT NULL,
     prep_time timestamp with time zone NOT NULL,
-    start_time timestamp with time zone,
+    start_time timestamp with time zone NOT NULL,
     end_time timestamp with time zone NOT NULL,
     size integer NOT NULL,
     attacks_per_member integer DEFAULT 1 NOT NULL,

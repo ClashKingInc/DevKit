@@ -26,6 +26,7 @@ func TestWarArchiveBaseline(t *testing.T) {
 	wars := strings.ToLower(baselineTableDDL(t, string(raw), "wars"))
 	for _, required := range []string{
 		"war_id uuid not null",
+		"start_time timestamp with time zone not null",
 		"archive_pack_id bigint",
 		"archive_offset bigint",
 		"archive_compressed_bytes integer",

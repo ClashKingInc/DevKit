@@ -269,15 +269,10 @@ func canonicalArchiveWar(doc clanWarDoc) (archiveWar, bool) {
 	clanTag := doc.Data.Clan.Tag
 	opponentTag := doc.Data.Opponent.Tag
 	prepAt, prepOK := migrateutil.Time(doc.Data.PreparationStartTime)
-	endAt, endOK := migrateutil.Time(firstWar(doc.Data.EndTime, doc.EndTime))
-	if clanTag == "" || opponentTag == "" || !prepOK || !endOK || !isFinishedWar(doc.Data.State) {
-		return archiveWar{}, false
-	}
 	startAt, startOK := migrateutil.Time(doc.Data.StartTime)
-	var startValue *time.Time
-	if startOK {
-		startAt = startAt.UTC()
-		startValue = &startAt
+	endAt, endOK := migrateutil.Time(firstWar(doc.Data.EndTime, doc.EndTime))
+	if clanTag == "" || opponentTag == "" || !prepOK || !startOK || !endOK || !isFinishedWar(doc.Data.State) {
+		return archiveWar{}, false
 	}
 	warTag := firstNonEmptyString(doc.Data.Tag, doc.Data.WarTag, doc.Data.WarTagSnake, doc.WarTag)
 	warType := strings.ToLower(firstNonEmptyString(doc.Type, doc.Data.Type))
@@ -300,7 +295,7 @@ func canonicalArchiveWar(doc clanWarDoc) (archiveWar, bool) {
 	war := wararchive.War{
 		ID: id, WarTag: warTag, Type: warType, State: strings.ToLower(doc.Data.State),
 		TeamSize: migrateutil.Int(doc.Data.TeamSize), AttacksPerMember: attacksPerMember,
-		PreparationStartTime: prepAt.UTC(), StartTime: startValue, EndTime: endAt.UTC(),
+		PreparationStartTime: prepAt.UTC(), StartTime: startAt.UTC(), EndTime: endAt.UTC(),
 		BattleModifier: wararchive.NormalizeBattleModifier(doc.Data.BattleModifier),
 		Clan:           canonicalArchiveClan(clan), Opponent: canonicalArchiveClan(opponent),
 	}
