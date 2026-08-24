@@ -172,3 +172,27 @@ func TestClanWarsCheckpointLivesAtRepositoryRoot(t *testing.T) {
 		t.Fatalf("database/migration_state.json should not be used, stat err=%v", err)
 	}
 }
+
+func TestClanWarsCheckpointSupportsIndependentWorkerFiles(t *testing.T) {
+	repositoryRoot := t.TempDir()
+	databaseRoot := filepath.Join(repositoryRoot, "database")
+	if err := os.MkdirAll(databaseRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := LoadCheckpoint(Config{
+		Root: databaseRoot,
+		Env:  map[string]string{"MIGRATION_STATE_FILE": "worker-a.json"},
+	}, "clan_wars")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkpoint.Set("range-a", "64b000000000000000000001"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(repositoryRoot, "worker-a.json")); err != nil {
+		t.Fatalf("worker checkpoint was not written: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repositoryRoot, "migration_state.json")); !os.IsNotExist(err) {
+		t.Fatalf("default checkpoint should not be used, stat err=%v", err)
+	}
+}

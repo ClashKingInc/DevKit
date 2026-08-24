@@ -95,6 +95,58 @@ cd migrations
 go run clan_wars.go
 ```
 
+The war importer writes immutable 10,000-war Zstd packs to R2, stores only the
+searchable war metadata and byte-range locator in Timescale, and builds
+quarterly player-to-war UUID arrays for every lineup member. It never changes
+the source Mongo collection. Configure `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, and
+`R2_SECRET_ACCESS_KEY`; the bucket defaults to `clashking-wars` and can be
+overridden with `WAR_ARCHIVE_BUCKET`. `WAR_ARCHIVE_S3_ENDPOINT` can replace the
+account-derived endpoint, while `WAR_ARCHIVE_DICTIONARY` can replace the
+checked-in `database/war-json.zdict` path.
+
+The full migration pipelines packs instead of waiting for each pack to finish
+before reading the next one. `WAR_ARCHIVE_PACK_WORKERS` controls total packs in
+flight (default: 24),
+`WAR_ARCHIVE_UPLOAD_WORKERS` limits concurrent R2 PUTs (default: 8), and
+`WAR_ARCHIVE_SQL_WORKERS` limits concurrent SQL preparation/finalization
+(default: 4). Checkpoints still advance in Mongo `_id` order. The 10,000-war
+per-second target therefore keeps 10,000-war packs and uses enough parallel
+pack work to hide construction, upload, and SQL latency without allowing
+unbounded memory, R2 requests, or database transactions.
+
+Large backfills can be split into non-overlapping Mongo ObjectID ranges with
+`CLAN_WARS_ID_FROM` (inclusive) or `CLAN_WARS_ID_AFTER` (exclusive), plus the
+exclusive `CLAN_WARS_ID_BEFORE` upper bound. Each range derives its own
+checkpoint key; set `CLAN_WARS_CHECKPOINT_KEY` to name it explicitly and set a
+different `MIGRATION_STATE_FILE` for every concurrent process so worker writes
+cannot replace one another. Relative checkpoint paths resolve from the
+repository root. A worker resumes after its last fully uploaded and committed
+pack, and already stored deterministic war UUIDs are ignored safely.
+
+For a parallel full import, run the prepare-only command once to drop the three
+`wars` secondary indexes:
+
+```bash
+CLAN_WARS_PREPARE_ONLY=true go run clan_wars.go
+```
+
+Run every range worker with `CLAN_WARS_SKIP_INDEX_MANAGEMENT=true`, then run
+`CLAN_WARS_FINALIZE_ONLY=true go run clan_wars.go` once after all workers
+succeed. Index finalization creates each missing index separately, so rerunning
+it resumes after a failed statement. A single unfiltered worker manages this
+drop-and-recreate lifecycle automatically.
+
+Legacy numeric strings are converted while canonicalizing a war. Documents
+whose nested BSON shape still cannot be decoded are reported and skipped, and
+their ObjectID remains eligible for checkpoint advancement so one malformed
+record cannot block the rest of a bounded worker.
+
+After each durable PUT, the importer performs one best-effort HEAD through
+`WAR_ARCHIVE_ORIGIN` (default: `https://wars.clashk.ing`). On a cache miss,
+Cloudflare fetches and stores the complete object while returning only headers
+to the importer. A cache-prime failure is logged but does not invalidate an
+otherwise successful R2 upload.
+
 Set `CLAN_WARS_CLAN_TAG` to import only wars where that tag is either the clan
 or opponent. The value is normalized to uppercase and may be provided with or
 without the leading `#`. Clan-scoped runs use their own checkpoint and do not
@@ -114,10 +166,9 @@ tag, preserves unrelated SQL wars, and cannot be combined with truncation:
 CLAN_WARS_CWL_CLAN_TAG="#VY2J0LL" CLAN_WARS_TRUNCATE=false go run clan_wars.go
 ```
 
-`CLAN_WARS_TRUNCATE=true` still clears all four destination war tables before a
-clan-scoped import, leaving the local database with only that clan's wars. Set
-it to `false` to preserve existing wars and resume from the clan-specific
-checkpoint.
+`CLAN_WARS_TRUNCATE=true` is intentionally rejected. Archive objects and their
+SQL locators must remain paired, so destructive rebuilds require an explicit
+operator-managed cleanup rather than a migration flag.
 
 Join/leave history can likewise be rebuilt for one clan. This importer is
 always a one-shot rebuild, so it truncates `join_leave_history` before loading

@@ -230,7 +230,12 @@ func LoadCheckpoint(cfg Config, script string) (*Checkpoint, error) {
 	if script != "clan_wars" {
 		return nil, fmt.Errorf("%s does not support checkpoints; only clan_wars is resumable", script)
 	}
-	path := filepath.Join(filepath.Dir(cfg.Root), "migration_state.json")
+	path := strings.TrimSpace(cfg.Env["MIGRATION_STATE_FILE"])
+	if path == "" {
+		path = filepath.Join(filepath.Dir(cfg.Root), "migration_state.json")
+	} else if !filepath.IsAbs(path) {
+		path = filepath.Join(filepath.Dir(cfg.Root), path)
+	}
 	cp := &Checkpoint{
 		path:   path,
 		script: script,

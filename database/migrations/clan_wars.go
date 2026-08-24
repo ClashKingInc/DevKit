@@ -3,151 +3,714 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"clashking_devkit_database_migrations/migrateutil"
+	"clashking_devkit_database_migrations/wararchive"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+)
+
+const (
+	defaultWarArchivePackSize      = 10_000
+	defaultWarArchivePackWorkers   = 24
+	defaultWarArchiveUploadWorkers = 8
+	defaultWarArchiveSQLWorkers    = 4
 )
 
 func main() {
 	migrateutil.Main("clan_wars", runClanWars)
 }
 
-func runClanWars(ctx context.Context, cfg migrateutil.Config) (err error) {
-	profile := envBool(cfg.Env, "CLAN_WARS_PROFILE")
+func runClanWars(ctx context.Context, cfg migrateutil.Config) error {
 	clanTag := normalizeClanWarTag(cfg.Env["CLAN_WARS_CLAN_TAG"])
 	cwlClanTag := normalizeClanWarTag(cfg.Env["CLAN_WARS_CWL_CLAN_TAG"])
+	idRange, err := clanWarIDRangeFromEnv(cfg.Env)
+	if err != nil {
+		return err
+	}
 	if clanTag != "" && cwlClanTag != "" {
-		return fmt.Errorf("CLAN_WARS_CLAN_TAG and CLAN_WARS_CWL_CLAN_TAG cannot both be set")
+		return errors.New("CLAN_WARS_CLAN_TAG and CLAN_WARS_CWL_CLAN_TAG cannot both be set")
 	}
-	checkpointKey := clanWarCheckpointKey(clanTag)
-	if cwlClanTag != "" {
-		checkpointKey = "clan_war_cwl_2025_08_2026_07_id_" + strings.TrimPrefix(cwlClanTag, "#")
+	if envBool(cfg.Env, "CLAN_WARS_TRUNCATE") {
+		return errors.New("CLAN_WARS_TRUNCATE is intentionally unsupported by the R2 archive migration")
 	}
-	manageIndexes := clanTag == "" && cwlClanTag == ""
-	truncate := envBool(cfg.Env, "CLAN_WARS_TRUNCATE")
-	if truncate && cwlClanTag != "" {
-		return fmt.Errorf("CLAN_WARS_TRUNCATE cannot be used with CLAN_WARS_CWL_CLAN_TAG")
+	prepareOnly := envBool(cfg.Env, "CLAN_WARS_PREPARE_ONLY")
+	finalizeOnly := envBool(cfg.Env, "CLAN_WARS_FINALIZE_ONLY")
+	if prepareOnly && finalizeOnly {
+		return errors.New("CLAN_WARS_PREPARE_ONLY and CLAN_WARS_FINALIZE_ONLY cannot both be set")
 	}
-	started := time.Now()
-	if profile {
-		defer func() {
-			printClanWarProfile(time.Since(started))
-		}()
+	pool, err := migrateutil.TimescalePool(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	if prepareOnly {
+		return dropClanWarSecondaryIndexes(ctx, pool)
+	}
+	if finalizeOnly {
+		return recreateClanWarSecondaryIndexes(ctx, pool)
+	}
+
+	dictionaryPath := strings.TrimSpace(cfg.Env["WAR_ARCHIVE_DICTIONARY"])
+	if dictionaryPath == "" {
+		dictionaryPath = "../war-json.zdict"
+	}
+	dictionary, err := os.ReadFile(dictionaryPath)
+	if err != nil {
+		return fmt.Errorf("read archive dictionary %s: %w", dictionaryPath, err)
+	}
+	store, err := newWarArchiveStore(cfg.Env)
+	if err != nil {
+		return err
 	}
 	mongoClient, err := migrateutil.StatsClient(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	defer mongoClient.Disconnect(ctx)
-	pool, err := migrateutil.TimescalePool(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	defer pool.Close()
 	cp, err := migrateutil.LoadCheckpoint(cfg, "clan_wars")
 	if err != nil {
 		return err
 	}
-	if truncate {
-		if clanTag != "" {
-			fmt.Fprintf(os.Stderr, "clan_wars: truncating all war tables before clan-scoped import for %s\n", clanTag)
-		}
-		if err := cp.Clear(); err != nil {
-			return err
-		}
-		if _, err := pool.Exec(ctx, `TRUNCATE TABLE war_attacks, war_members, war_missed_attacks, wars`); err != nil {
-			return err
-		}
-		chunkInterval := strings.TrimSpace(cfg.Env["CLAN_WARS_CHUNK_INTERVAL"])
-		if chunkInterval == "" {
-			chunkInterval = "3 months"
-		}
-		if _, err := pool.Exec(ctx, `SELECT set_chunk_time_interval('war_attacks', $1::interval)`, chunkInterval); err != nil {
-			return err
-		}
-		if _, err := pool.Exec(ctx, `SELECT drop_chunks('war_attacks', older_than => TIMESTAMPTZ '9999-12-31')`); err != nil {
-			return err
-		}
-	}
-	if manageIndexes {
-		if err := dropClanWarIndexes(ctx, pool); err != nil {
-			return err
-		}
-	}
-	collection := mongoClient.Database("looper").Collection("clan_war")
-	filter := clanWarFilter(clanTag)
+
+	checkpointKey := clanWarCheckpointKey(clanTag)
+	filter := clanWarFilterWithIDRange(clanTag, idRange)
 	if cwlClanTag != "" {
 		warTags, err := loadCWLBackfillWarTags(ctx, pool, cwlClanTag)
 		if err != nil {
 			return err
 		}
-		filter = cwlWarTagFilter(warTags)
-		fmt.Printf("clan_wars: cwl_clan_tag=%s requested_war_tags=%d\n", cwlClanTag, len(warTags))
+		checkpointKey = "clan_war_cwl_2025_08_2026_07_id_" + strings.TrimPrefix(cwlClanTag, "#")
+		filter = applyClanWarIDRange(cwlWarTagFilter(warTags), idRange)
 	}
-	var wars []warIndexInsert
-	var members []warMemberInsert
-	var attacks []warAttackInsert
-	var missedAttacks []warMissedAttackInsert
-	var docsInBatch int
-	docBatchSize := clanWarEnvInt(cfg.Env, "CLAN_WARS_BATCH_DOCS", 50000)
-	maxRowsInBatch := clanWarEnvInt(cfg.Env, "CLAN_WARS_MAX_ROWS", 2500000)
-	flush := func() error {
-		if len(wars) == 0 && len(members) == 0 && len(attacks) == 0 && len(missedAttacks) == 0 {
-			return nil
-		}
-		err := flushClanWarRows(ctx, pool, wars, members, missedAttacks, attacks)
-		wars = nil
-		members = nil
-		missedAttacks = nil
-		attacks = nil
-		docsInBatch = 0
-		return err
+	if explicit := strings.TrimSpace(cfg.Env["CLAN_WARS_CHECKPOINT_KEY"]); explicit != "" {
+		checkpointKey = explicit
+	} else if idRange.configured() {
+		checkpointKey = idRange.checkpointKey(checkpointKey)
 	}
-	seen, err := streamClanWarDocs(ctx, cfg, cp, checkpointKey, collection, filter, clanWarProjection(), func(doc clanWarDoc) (bool, error) {
-		accepted, err := appendClanWarDoc(doc, &wars, &members, &missedAttacks, &attacks)
-		if err != nil || !accepted {
-			return false, err
-		}
-		docsInBatch++
-		return docsInBatch >= docBatchSize || len(wars)+len(members)+len(missedAttacks)+len(attacks) >= maxRowsInBatch, nil
-	}, flush)
-	if err != nil {
-		return err
+	packSize := envInt(cfg.Env, "WAR_ARCHIVE_PACK_WARS", defaultWarArchivePackSize)
+	if packSize <= 0 {
+		return errors.New("WAR_ARCHIVE_PACK_WARS must be positive")
 	}
+	packWorkers := envInt(cfg.Env, "WAR_ARCHIVE_PACK_WORKERS", defaultWarArchivePackWorkers)
+	uploadWorkers := envInt(cfg.Env, "WAR_ARCHIVE_UPLOAD_WORKERS", minInt(defaultWarArchiveUploadWorkers, packWorkers))
+	sqlWorkers := envInt(cfg.Env, "WAR_ARCHIVE_SQL_WORKERS", minInt(defaultWarArchiveSQLWorkers, packWorkers))
+	if packWorkers <= 0 || uploadWorkers <= 0 || sqlWorkers <= 0 {
+		return errors.New("WAR_ARCHIVE_PACK_WORKERS, WAR_ARCHIVE_UPLOAD_WORKERS, and WAR_ARCHIVE_SQL_WORKERS must be positive")
+	}
+	manageIndexes := clanTag == "" && cwlClanTag == "" && !envBool(cfg.Env, "CLAN_WARS_SKIP_INDEX_MANAGEMENT")
 	if manageIndexes {
-		if err := recreateClanWarIndexes(ctx, pool); err != nil {
+		if err := dropClanWarSecondaryIndexes(ctx, pool); err != nil {
 			return err
 		}
 	}
-	if cwlClanTag != "" {
-		fmt.Printf("clan_wars: cwl_clan_tag=%s scanned_docs=%d\n", cwlClanTag, seen)
-	} else if clanTag != "" {
-		fmt.Printf("clan_wars: clan_tag=%s scanned_docs=%d\n", clanTag, seen)
-	} else {
-		fmt.Printf("clan_wars: scanned_docs=%d\n", seen)
+
+	pipeline := newArchivePackPipeline(ctx, packWorkers, uploadWorkers, sqlWorkers, cp, checkpointKey,
+		func(processCtx context.Context, batch []archiveWar, sqlGate, uploadGate chan struct{}) error {
+			return flushArchivePack(processCtx, pool, store, dictionary, batch, sqlGate, uploadGate)
+		})
+	defer pipeline.Close()
+	collection := mongoClient.Database("looper").Collection("clan_war")
+	pending := make([]archiveWar, 0, packSize)
+	flush := func(checkpoint string) error {
+		batch := append([]archiveWar(nil), pending...)
+		pending = pending[:0]
+		return pipeline.Submit(batch, checkpoint)
+	}
+
+	fmt.Printf("clan_wars: pack_size=%d pack_workers=%d upload_workers=%d sql_workers=%d\n", packSize, packWorkers, uploadWorkers, sqlWorkers)
+	seen, streamErr := streamClanWarDocs(ctx, cfg, cp, checkpointKey, collection, filter, clanWarProjection(), func(doc clanWarDoc) (bool, error) {
+		war, ok := canonicalArchiveWar(doc)
+		if !ok {
+			return false, nil
+		}
+		pending = append(pending, war)
+		return len(pending) >= packSize, nil
+	}, flush)
+	pipelineErr := pipeline.Close()
+	if streamErr != nil {
+		return streamErr
+	}
+	if pipelineErr != nil {
+		return pipelineErr
+	}
+	if manageIndexes {
+		if err := recreateClanWarSecondaryIndexes(ctx, pool); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("clan_wars: scanned_docs=%d archive_pack_size=%d pack_workers=%d\n", seen, packSize, packWorkers)
+	return nil
+}
+
+type archivePackProcessor func(context.Context, []archiveWar, chan struct{}, chan struct{}) error
+
+type archivePackFuture struct {
+	checkpoint string
+	warIDs     []uuid.UUID
+	done       chan error
+}
+
+// archivePackPipeline overlaps pack work while advancing the source checkpoint
+// only after every preceding pack has completed successfully.
+type archivePackPipeline struct {
+	ctx        context.Context
+	cancel     context.CancelFunc
+	maxRunning int
+	sqlGate    chan struct{}
+	uploadGate chan struct{}
+	cp         *migrateutil.Checkpoint
+	cpKey      string
+	process    archivePackProcessor
+	inFlight   map[uuid.UUID]struct{}
+	futures    []archivePackFuture
+	closeOnce  sync.Once
+	closeErr   error
+}
+
+func newArchivePackPipeline(ctx context.Context, maxRunning, uploadWorkers, sqlWorkers int, cp *migrateutil.Checkpoint, cpKey string, process archivePackProcessor) *archivePackPipeline {
+	pipelineCtx, cancel := context.WithCancel(ctx)
+	return &archivePackPipeline{
+		ctx: pipelineCtx, cancel: cancel, maxRunning: maxRunning,
+		sqlGate: make(chan struct{}, sqlWorkers), uploadGate: make(chan struct{}, uploadWorkers),
+		cp: cp, cpKey: cpKey, process: process, inFlight: make(map[uuid.UUID]struct{}, maxRunning*defaultWarArchivePackSize),
+	}
+}
+
+func (p *archivePackPipeline) Submit(input []archiveWar, checkpoint string) error {
+	if len(p.futures) >= p.maxRunning {
+		if err := p.awaitOldest(true); err != nil {
+			return err
+		}
+	}
+	batch := make([]archiveWar, 0, len(input))
+	ids := make([]uuid.UUID, 0, len(input))
+	for _, value := range input {
+		if _, exists := p.inFlight[value.ID]; exists {
+			continue
+		}
+		p.inFlight[value.ID] = struct{}{}
+		batch = append(batch, value)
+		ids = append(ids, value.ID)
+	}
+	done := make(chan error, 1)
+	p.futures = append(p.futures, archivePackFuture{checkpoint: checkpoint, warIDs: ids, done: done})
+	go func() {
+		if len(batch) == 0 {
+			done <- nil
+			return
+		}
+		done <- p.process(p.ctx, batch, p.sqlGate, p.uploadGate)
+	}()
+	return nil
+}
+
+func (p *archivePackPipeline) awaitOldest(checkpoint bool) error {
+	if len(p.futures) == 0 {
+		return nil
+	}
+	future := p.futures[0]
+	p.futures = p.futures[1:]
+	err := <-future.done
+	for _, id := range future.warIDs {
+		delete(p.inFlight, id)
+	}
+	if err != nil {
+		p.cancel()
+		return err
+	}
+	if checkpoint && future.checkpoint != "" {
+		if err := p.cp.Set(p.cpKey, future.checkpoint); err != nil {
+			p.cancel()
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *archivePackPipeline) Close() error {
+	p.closeOnce.Do(func() {
+		for len(p.futures) > 0 {
+			if err := p.awaitOldest(p.closeErr == nil); err != nil && p.closeErr == nil {
+				p.closeErr = err
+			}
+		}
+		p.cancel()
+	})
+	return p.closeErr
+}
+
+type archiveWar struct {
+	ID  uuid.UUID
+	War wararchive.War
+}
+
+func canonicalArchiveWar(doc clanWarDoc) (archiveWar, bool) {
+	clanTag := doc.Data.Clan.Tag
+	opponentTag := doc.Data.Opponent.Tag
+	prepAt, prepOK := migrateutil.Time(doc.Data.PreparationStartTime)
+	endAt, endOK := migrateutil.Time(firstWar(doc.Data.EndTime, doc.EndTime))
+	if clanTag == "" || opponentTag == "" || !prepOK || !endOK || !isFinishedWar(doc.Data.State) {
+		return archiveWar{}, false
+	}
+	startAt, startOK := migrateutil.Time(doc.Data.StartTime)
+	var startValue *time.Time
+	if startOK {
+		startAt = startAt.UTC()
+		startValue = &startAt
+	}
+	warTag := firstNonEmptyString(doc.Data.Tag, doc.Data.WarTag, doc.Data.WarTagSnake, doc.WarTag)
+	warType := strings.ToLower(firstNonEmptyString(doc.Type, doc.Data.Type))
+	if warType == "" {
+		if warTag != "" {
+			warType = "cwl"
+		} else {
+			warType = "random"
+		}
+	}
+	attacksPerMember := migrateutil.Int(doc.Data.AttacksPerMember)
+	if attacksPerMember <= 0 {
+		attacksPerMember = 1
+	}
+	id := wararchive.DeterministicV7(clanTag, opponentTag, prepAt, warTag)
+	clan, opponent := doc.Data.Clan, doc.Data.Opponent
+	if clan.Tag > opponent.Tag {
+		clan, opponent = opponent, clan
+	}
+	war := wararchive.War{
+		ID: id, WarTag: warTag, Type: warType, State: strings.ToLower(doc.Data.State),
+		TeamSize: migrateutil.Int(doc.Data.TeamSize), AttacksPerMember: attacksPerMember,
+		PreparationStartTime: prepAt.UTC(), StartTime: startValue, EndTime: endAt.UTC(),
+		BattleModifier: normalizeBattleModifier(doc.Data.BattleModifier),
+		Clan:           canonicalArchiveClan(clan), Opponent: canonicalArchiveClan(opponent),
+	}
+	return archiveWar{ID: id, War: war}, true
+}
+
+func canonicalArchiveClan(clan warClanDoc) wararchive.Clan {
+	members := make([]wararchive.Member, 0, len(clan.Members))
+	for _, member := range clan.Members {
+		if member.Tag == "" {
+			continue
+		}
+		attacks := make([]wararchive.Attack, 0, len(member.Attacks))
+		for _, attack := range member.Attacks {
+			if attack.DefenderTag == "" {
+				continue
+			}
+			attacks = append(attacks, wararchive.Attack{
+				DefenderTag: attack.DefenderTag, Stars: migrateutil.Int(attack.Stars),
+				DestructionPercentage: migrateutil.Int(attack.DestructionPercentage),
+				Duration:              migrateutil.Int(attack.Duration), Order: migrateutil.Int(attack.Order),
+			})
+		}
+		members = append(members, wararchive.Member{
+			Tag: member.Tag, Name: member.Name, TownhallLevel: migrateutil.Int(member.TownhallLevel),
+			MapPosition: migrateutil.Int(member.MapPosition), Attacks: attacks,
+		})
+	}
+	return wararchive.Clan{
+		Tag: clan.Tag, Name: clan.Name,
+		BadgeToken: migrateutil.BadgeToken(clan.BadgeURLs.Large, clan.BadgeURLs.Medium, clan.BadgeURLs.Small),
+		ClanLevel:  migrateutil.Int(clan.ClanLevel), Attacks: migrateutil.Int(clan.Attacks), Stars: migrateutil.Int(clan.Stars),
+		DestructionPercentage: warFloat(clan.DestructionPercentage), Members: members,
+	}
+}
+
+func flushArchivePack(ctx context.Context, pool *pgxpool.Pool, store *warArchiveStore, dictionary []byte, input []archiveWar, sqlGate, uploadGate chan struct{}) error {
+	started := time.Now()
+	if err := acquireArchiveGate(ctx, sqlGate); err != nil {
+		return err
+	}
+	wars, err := excludeStoredWars(ctx, pool, input)
+	if err != nil || len(wars) == 0 {
+		releaseArchiveGate(sqlGate)
+		return err
+	}
+	packID, err := reserveMigrationPack(ctx, pool)
+	releaseArchiveGate(sqlGate)
+	if err != nil {
+		return err
+	}
+	buildStarted := time.Now()
+	builder, err := wararchive.NewPackBuilder(uint64(packID), dictionary)
+	if err != nil {
+		return err
+	}
+	defer builder.Close()
+	stats := wararchive.NewPackStats()
+	firstEnd, lastEnd := wars[0].War.EndTime, wars[0].War.EndTime
+	for _, value := range wars {
+		if _, err := builder.Add(value.ID, value.War); err != nil {
+			return err
+		}
+		stats.Add(value.War)
+		if value.War.EndTime.Before(firstEnd) {
+			firstEnd = value.War.EndTime
+		}
+		if value.War.EndTime.After(lastEnd) {
+			lastEnd = value.War.EndTime
+		}
+	}
+	object := bytes.Clone(builder.Bytes())
+	buildDuration := time.Since(buildStarted)
+	if err := acquireArchiveGate(ctx, uploadGate); err != nil {
+		return err
+	}
+	uploadStarted := time.Now()
+	objectKey := wararchive.ObjectKey(uint64(packID))
+	if err := store.put(ctx, objectKey, object); err != nil {
+		releaseArchiveGate(uploadGate)
+		return fmt.Errorf("upload archive pack %d: %w", packID, err)
+	}
+	uploadDuration := time.Since(uploadStarted)
+	primeStarted := time.Now()
+	if err := store.prime(ctx, objectKey); err != nil {
+		fmt.Printf("clan_wars: cache prime warning pack=%d error=%v\n", packID, err)
+	}
+	primeDuration := time.Since(primeStarted)
+	releaseArchiveGate(uploadGate)
+	if err := acquireArchiveGate(ctx, sqlGate); err != nil {
+		return err
+	}
+	finalizeStarted := time.Now()
+	if err := finalizeArchivePack(ctx, pool, packID, wars, builder.Locators(), stats, firstEnd, lastEnd); err != nil {
+		releaseArchiveGate(sqlGate)
+		return err
+	}
+	finalizeDuration := time.Since(finalizeStarted)
+	releaseArchiveGate(sqlGate)
+	fmt.Printf("clan_wars: uploaded pack=%d wars=%d attacks=%d raw_bytes=%d compressed_bytes=%d build=%s upload=%s prime=%s finalize=%s total=%s\n",
+		packID, len(wars), stats.Attacks.Total, sumRawBytes(builder.Locators()), len(object), buildDuration, uploadDuration, primeDuration, finalizeDuration, time.Since(started))
+	return nil
+}
+
+func acquireArchiveGate(ctx context.Context, gate chan struct{}) error {
+	select {
+	case gate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func releaseArchiveGate(gate chan struct{}) { <-gate }
+
+func excludeStoredWars(ctx context.Context, pool *pgxpool.Pool, input []archiveWar) ([]archiveWar, error) {
+	unique := make(map[uuid.UUID]archiveWar, len(input))
+	ids := make([]uuid.UUID, 0, len(input))
+	for _, value := range input {
+		if _, exists := unique[value.ID]; exists {
+			continue
+		}
+		unique[value.ID] = value
+		ids = append(ids, value.ID)
+	}
+	rows, err := pool.Query(ctx, `SELECT DISTINCT war_id FROM wars WHERE war_id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		delete(unique, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	result := make([]archiveWar, 0, len(unique))
+	for _, id := range ids {
+		if value, exists := unique[id]; exists {
+			result = append(result, value)
+		}
+	}
+	return result, nil
+}
+
+func reserveMigrationPack(ctx context.Context, pool *pgxpool.Pool) (int64, error) {
+	var packID int64
+	err := pool.QueryRow(ctx, `
+		INSERT INTO war_archive_packs (source, status)
+		VALUES ('migration', 'building')
+		RETURNING pack_id
+	`).Scan(&packID)
+	return packID, err
+}
+
+type warStageRow struct {
+	value   archiveWar
+	locator wararchive.Locator
+}
+
+func finalizeArchivePack(ctx context.Context, pool *pgxpool.Pool, packID int64, wars []archiveWar, locators []wararchive.Locator, stats wararchive.PackStats, firstEnd, lastEnd time.Time) error {
+	if len(wars) != len(locators) {
+		return errors.New("archive war and locator counts differ")
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `CREATE TEMP TABLE war_archive_stage (LIKE wars INCLUDING DEFAULTS) ON COMMIT DROP`); err != nil {
+		return err
+	}
+	rows := make([]warStageRow, len(wars))
+	for index := range wars {
+		rows[index] = warStageRow{value: wars[index], locator: locators[index]}
+	}
+	columns := []string{
+		"war_id", "clan_tag", "opponent_tag", "prep_time", "start_time", "end_time", "size", "attacks_per_member",
+		"war_type", "state", "battle_modifier", "war_tag", "clan_name", "opponent_name", "clan_badge_token",
+		"opponent_badge_token", "clan_level", "opponent_clan_level", "clan_attacks", "opponent_attacks", "clan_stars",
+		"opponent_stars", "clan_destruction_percentage", "opponent_destruction_percentage", "archive_pack_id",
+		"archive_offset", "archive_compressed_bytes",
+	}
+	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"war_archive_stage"}, columns, pgx.CopyFromSlice(len(rows), func(index int) ([]any, error) {
+		row := rows[index]
+		war := row.value.War
+		return []any{
+			row.value.ID, war.Clan.Tag, war.Opponent.Tag, war.PreparationStartTime, war.StartTime, war.EndTime,
+			war.TeamSize, war.AttacksPerMember, war.Type, war.State, war.BattleModifier, nullString(war.WarTag),
+			war.Clan.Name, war.Opponent.Name, war.Clan.BadgeToken, war.Opponent.BadgeToken, war.Clan.ClanLevel,
+			war.Opponent.ClanLevel, war.Clan.Attacks, war.Opponent.Attacks, war.Clan.Stars, war.Opponent.Stars,
+			war.Clan.DestructionPercentage, war.Opponent.DestructionPercentage, packID, row.locator.Offset,
+			row.locator.CompressedBytes,
+		}, nil
+	})); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO wars (`+strings.Join(columns, ", ")+`)
+		SELECT `+strings.Join(columns, ", ")+` FROM war_archive_stage
+		ON CONFLICT (war_id, end_time) DO UPDATE SET
+			archive_pack_id = EXCLUDED.archive_pack_id,
+			archive_offset = EXCLUDED.archive_offset,
+			archive_compressed_bytes = EXCLUDED.archive_compressed_bytes
+	`); err != nil {
+		return err
+	}
+	if err := upsertPlayerWarHistory(ctx, tx, wars); err != nil {
+		return err
+	}
+	statsJSON, err := json.Marshal(stats)
+	if err != nil {
+		return err
+	}
+	result, err := tx.Exec(ctx, `
+		UPDATE war_archive_packs
+		SET status = 'uploaded', war_count = $2, attack_count = $3, raw_bytes = $4,
+			compressed_bytes = $5, first_end_time = $6, last_end_time = $7,
+			stats = $8, uploaded_at = now()
+		WHERE pack_id = $1 AND source = 'migration' AND status = 'building'
+	`, packID, len(wars), stats.Attacks.Total, sumRawBytes(locators), sumCompressedBytes(locators), firstEnd, lastEnd, statsJSON)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("finalized %d migration pack rows, expected 1", result.RowsAffected())
+	}
+	return tx.Commit(ctx)
+}
+
+type historyStageRow struct {
+	playerTag   string
+	periodStart time.Time
+	warID       uuid.UUID
+}
+
+func upsertPlayerWarHistory(ctx context.Context, tx pgx.Tx, wars []archiveWar) error {
+	rows := make([]historyStageRow, 0, len(wars)*50)
+	seen := make(map[string]struct{}, len(wars)*50)
+	for _, value := range wars {
+		period := quarterStart(value.War.EndTime)
+		for _, clan := range []wararchive.Clan{value.War.Clan, value.War.Opponent} {
+			for _, member := range clan.Members {
+				key := member.Tag + "\x00" + value.ID.String()
+				if member.Tag == "" {
+					continue
+				}
+				if _, exists := seen[key]; exists {
+					continue
+				}
+				seen[key] = struct{}{}
+				rows = append(rows, historyStageRow{playerTag: member.Tag, periodStart: period, warID: value.ID})
+			}
+		}
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `CREATE TEMP TABLE player_war_history_stage (player_tag text, period_start date, war_id uuid) ON COMMIT DROP`); err != nil {
+		return err
+	}
+	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"player_war_history_stage"}, []string{"player_tag", "period_start", "war_id"}, pgx.CopyFromSlice(len(rows), func(index int) ([]any, error) {
+		row := rows[index]
+		return []any{row.playerTag, row.periodStart, row.warID}, nil
+	})); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `
+		INSERT INTO player_war_history (player_tag, period_start, war_ids)
+		SELECT player_tag, period_start, array_agg(DISTINCT war_id ORDER BY war_id)
+		FROM player_war_history_stage
+		GROUP BY player_tag, period_start
+		ON CONFLICT (player_tag, period_start) DO UPDATE SET
+			war_ids = ARRAY(
+				SELECT DISTINCT id
+				FROM unnest(player_war_history.war_ids || EXCLUDED.war_ids) AS id
+				ORDER BY id
+			),
+			updated_at = now()
+	`)
+	return err
+}
+
+func quarterStart(value time.Time) time.Time {
+	value = value.UTC()
+	month := time.Month(((int(value.Month()) - 1) / 3 * 3) + 1)
+	return time.Date(value.Year(), month, 1, 0, 0, 0, 0, time.UTC)
+}
+
+func sumRawBytes(rows []wararchive.Locator) int64 {
+	var total int64
+	for _, row := range rows {
+		total += int64(row.RawBytes)
+	}
+	return total
+}
+
+func sumCompressedBytes(rows []wararchive.Locator) int64 {
+	var total int64
+	for _, row := range rows {
+		total += int64(row.CompressedBytes)
+	}
+	return total
+}
+
+type warArchiveStore struct {
+	client       *s3.Client
+	bucket       string
+	publicOrigin string
+	httpClient   *http.Client
+}
+
+func newWarArchiveStore(env map[string]string) (*warArchiveStore, error) {
+	endpoint := firstNonEmptyString(env["WAR_ARCHIVE_S3_ENDPOINT"], env["R2_ENDPOINT"], env["R2_ENDPOINT_URL"])
+	if endpoint == "" && strings.TrimSpace(env["R2_ACCOUNT_ID"]) != "" {
+		endpoint = "https://" + strings.TrimSpace(env["R2_ACCOUNT_ID"]) + ".r2.cloudflarestorage.com"
+	}
+	bucket := firstNonEmptyString(env["WAR_ARCHIVE_BUCKET"], env["R2_WARS_BUCKET"], "clashking-wars")
+	publicOrigin := strings.TrimRight(firstNonEmptyString(env["WAR_ARCHIVE_ORIGIN"], "https://wars.clashk.ing"), "/")
+	access := strings.TrimSpace(env["R2_ACCESS_KEY_ID"])
+	secret := strings.TrimSpace(env["R2_SECRET_ACCESS_KEY"])
+	if endpoint == "" || bucket == "" || access == "" || secret == "" {
+		return nil, errors.New("R2 endpoint/account, archive bucket, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY are required")
+	}
+	awsConfig := aws.Config{
+		Region: "auto", Credentials: credentials.NewStaticCredentialsProvider(access, secret, ""),
+		HTTPClient: &http.Client{Timeout: 2 * time.Minute},
+	}
+	client := s3.NewFromConfig(awsConfig, func(options *s3.Options) {
+		options.BaseEndpoint = aws.String(endpoint)
+		options.UsePathStyle = true
+	})
+	return &warArchiveStore{client: client, bucket: bucket, publicOrigin: publicOrigin, httpClient: &http.Client{Timeout: 2 * time.Minute}}, nil
+}
+
+func (s *warArchiveStore) put(ctx context.Context, key string, payload []byte) error {
+	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(s.bucket), Key: aws.String(key), Body: bytes.NewReader(payload),
+		ContentType: aws.String("application/octet-stream"), CacheControl: aws.String("public, max-age=31536000, immutable"),
+	})
+	return err
+}
+
+func (s *warArchiveStore) prime(ctx context.Context, key string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodHead, s.publicOrigin+"/"+key, nil)
+	if err != nil {
+		return err
+	}
+	response, err := s.httpClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fmt.Errorf("cache prime returned HTTP %d", response.StatusCode)
+	}
+	if status := strings.ToUpper(strings.TrimSpace(response.Header.Get("CF-Cache-Status"))); status == "BYPASS" || status == "DYNAMIC" {
+		return fmt.Errorf("cache prime was not eligible for caching: %s", status)
+	}
+	return nil
+}
+
+type clanWarIndexDB interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+func dropClanWarSecondaryIndexes(ctx context.Context, db clanWarIndexDB) error {
+	started := time.Now()
+	fmt.Fprint(os.Stderr, "clan_wars: dropping secondary indexes ...")
+	_, err := db.Exec(ctx, `
+		DROP INDEX IF EXISTS public.idx_wars_clan_end_time;
+		DROP INDEX IF EXISTS public.idx_wars_opponent_end_time;
+		DROP INDEX IF EXISTS public.idx_wars_war_tag;
+	`)
+	if err != nil {
+		fmt.Fprintln(os.Stderr)
+		return err
+	}
+	fmt.Fprintf(os.Stderr, " done in %s\n", time.Since(started).Round(time.Millisecond))
+	return nil
+}
+
+func recreateClanWarSecondaryIndexes(ctx context.Context, db clanWarIndexDB) error {
+	statements := []struct {
+		name string
+		sql  string
+	}{
+		{name: "idx_wars_clan_end_time", sql: `CREATE INDEX IF NOT EXISTS idx_wars_clan_end_time ON public.wars USING btree (clan_tag, end_time DESC)`},
+		{name: "idx_wars_opponent_end_time", sql: `CREATE INDEX IF NOT EXISTS idx_wars_opponent_end_time ON public.wars USING btree (opponent_tag, end_time DESC)`},
+		{name: "idx_wars_war_tag", sql: `CREATE INDEX IF NOT EXISTS idx_wars_war_tag ON public.wars USING btree (war_tag) WHERE (war_tag IS NOT NULL)`},
+	}
+	for _, statement := range statements {
+		started := time.Now()
+		fmt.Fprintf(os.Stderr, "clan_wars: creating %s ...", statement.name)
+		if _, err := db.Exec(ctx, statement.sql); err != nil {
+			fmt.Fprintln(os.Stderr)
+			return fmt.Errorf("create %s: %w", statement.name, err)
+		}
+		fmt.Fprintf(os.Stderr, " done in %s\n", time.Since(started).Round(time.Millisecond))
 	}
 	return nil
 }
 
 func normalizeClanWarTag(value string) string {
 	value = strings.ToUpper(strings.TrimSpace(value))
-	if value == "" {
-		return ""
-	}
-	if !strings.HasPrefix(value, "#") {
+	if value != "" && !strings.HasPrefix(value, "#") {
 		value = "#" + value
 	}
 	return value
@@ -155,16 +718,97 @@ func normalizeClanWarTag(value string) string {
 
 func clanWarCheckpointKey(clanTag string) string {
 	if clanTag == "" {
-		return "clan_war_id"
+		return "clan_war_r2_id"
 	}
-	return "clan_war_id_" + strings.TrimPrefix(clanTag, "#")
+	return "clan_war_r2_id_" + strings.TrimPrefix(clanTag, "#")
+}
+
+type clanWarIDRange struct {
+	after  *bson.ObjectID
+	from   *bson.ObjectID
+	before *bson.ObjectID
+}
+
+func clanWarIDRangeFromEnv(env map[string]string) (clanWarIDRange, error) {
+	parse := func(key string) (*bson.ObjectID, error) {
+		raw := strings.TrimSpace(env[key])
+		if raw == "" {
+			return nil, nil
+		}
+		id, err := bson.ObjectIDFromHex(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s=%q: %w", key, raw, err)
+		}
+		return &id, nil
+	}
+	after, err := parse("CLAN_WARS_ID_AFTER")
+	if err != nil {
+		return clanWarIDRange{}, err
+	}
+	from, err := parse("CLAN_WARS_ID_FROM")
+	if err != nil {
+		return clanWarIDRange{}, err
+	}
+	before, err := parse("CLAN_WARS_ID_BEFORE")
+	if err != nil {
+		return clanWarIDRange{}, err
+	}
+	if after != nil && from != nil {
+		return clanWarIDRange{}, errors.New("CLAN_WARS_ID_AFTER and CLAN_WARS_ID_FROM cannot both be set")
+	}
+	lower := after
+	if lower == nil {
+		lower = from
+	}
+	if lower != nil && before != nil && bytes.Compare(lower[:], before[:]) >= 0 {
+		return clanWarIDRange{}, errors.New("the CLAN_WARS_ID_BEFORE bound must be greater than the lower ObjectID bound")
+	}
+	return clanWarIDRange{after: after, from: from, before: before}, nil
+}
+
+func (r clanWarIDRange) configured() bool {
+	return r.after != nil || r.from != nil || r.before != nil
+}
+
+func (r clanWarIDRange) checkpointKey(base string) string {
+	lower := "start"
+	if r.after != nil {
+		lower = "after_" + r.after.Hex()
+	} else if r.from != nil {
+		lower = "from_" + r.from.Hex()
+	}
+	upper := "end"
+	if r.before != nil {
+		upper = "before_" + r.before.Hex()
+	}
+	return base + "_" + lower + "_" + upper
+}
+
+func clanWarFilterWithIDRange(clanTag string, idRange clanWarIDRange) bson.D {
+	return applyClanWarIDRange(clanWarFilter(clanTag), idRange)
+}
+
+func applyClanWarIDRange(base bson.D, idRange clanWarIDRange) bson.D {
+	if !idRange.configured() {
+		return base
+	}
+	conditions := bson.D{}
+	if idRange.after != nil {
+		conditions = append(conditions, bson.E{Key: "$gt", Value: *idRange.after})
+	} else if idRange.from != nil {
+		conditions = append(conditions, bson.E{Key: "$gte", Value: *idRange.from})
+	}
+	if idRange.before != nil {
+		conditions = append(conditions, bson.E{Key: "$lt", Value: *idRange.before})
+	}
+	if len(base) == 1 && base[0].Key == "_id" {
+		return bson.D{{Key: "_id", Value: conditions}}
+	}
+	return append(base, bson.E{Key: "_id", Value: conditions})
 }
 
 func clanWarFilter(clanTag string) bson.D {
 	if clanTag == "" {
-		// Mongo driver v2 cannot encode an empty bson.D as a top-level Find
-		// filter. Every stored document has an _id, so this remains an
-		// unfiltered, indexable global scan while producing valid BSON.
 		return bson.D{{Key: "_id", Value: bson.D{{Key: "$exists", Value: true}}}}
 	}
 	return bson.D{{Key: "$or", Value: bson.A{
@@ -193,239 +837,140 @@ func loadCWLBackfillWarTags(ctx context.Context, pool interface {
 	}
 	defer rows.Close()
 	seen := map[string]struct{}{}
-	warTags := make([]string, 0)
+	var result []string
 	for rows.Next() {
 		var raw []byte
 		if err := rows.Scan(&raw); err != nil {
 			return nil, err
 		}
-		for _, warTag := range decodeCWLBackfillWarTags(raw) {
-			if warTag == "" || warTag == "#0" {
+		for _, tag := range decodeCWLBackfillWarTags(raw) {
+			if tag == "" || tag == "#0" {
 				continue
 			}
-			if _, exists := seen[warTag]; exists {
+			if _, exists := seen[tag]; exists {
 				continue
 			}
-			seen[warTag] = struct{}{}
-			warTags = append(warTags, warTag)
+			seen[tag] = struct{}{}
+			result = append(result, tag)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if len(warTags) == 0 {
+	if len(result) == 0 {
 		return nil, fmt.Errorf("no August 2025 through July 2026 CWL war tags found for %s", clanTag)
 	}
-	sort.Strings(warTags)
-	return warTags, nil
+	sort.Strings(result)
+	return result, nil
 }
 
 func decodeCWLBackfillWarTags(raw []byte) []string {
 	var official []struct {
 		WarTags []string `json:"warTags"`
 	}
-	if err := json.Unmarshal(raw, &official); err == nil {
-		warTags := make([]string, 0)
+	if json.Unmarshal(raw, &official) == nil {
+		var result []string
 		for _, round := range official {
-			warTags = append(warTags, round.WarTags...)
+			result = append(result, round.WarTags...)
 		}
-		return warTags
+		return result
 	}
 	var nested [][]string
-	if err := json.Unmarshal(raw, &nested); err == nil {
-		warTags := make([]string, 0)
+	if json.Unmarshal(raw, &nested) == nil {
+		var result []string
 		for _, round := range nested {
-			warTags = append(warTags, round...)
+			result = append(result, round...)
 		}
-		return warTags
+		return result
 	}
 	return nil
 }
 
-func appendClanWarDoc(doc clanWarDoc, wars *[]warIndexInsert, members *[]warMemberInsert, missedAttacks *[]warMissedAttackInsert, attacks *[]warAttackInsert) (bool, error) {
-	clanTag := doc.Data.Clan.Tag
-	opponentTag := doc.Data.Opponent.Tag
-	prepAt, prepOK := migrateutil.Time(doc.Data.PreparationStartTime)
-	endAt, endOK := migrateutil.Time(firstWar(doc.Data.EndTime, doc.EndTime))
-	if clanTag == "" || opponentTag == "" || !prepOK || !endOK {
-		return false, nil
-	}
-	warID := computeWarKey(clanTag, opponentTag, prepAt)
-	startAt, _ := migrateutil.Time(doc.Data.StartTime)
-	var startValue *time.Time
-	if !startAt.IsZero() {
-		startValue = &startAt
-	}
-	warType := firstNonEmptyString(doc.Type, doc.Data.Type)
-	warTag := firstNonEmptyString(doc.Data.Tag, doc.Data.WarTag, doc.Data.WarTagSnake, doc.WarTag)
-	if warType == "" {
-		if warTag != "" {
-			warType = "cwl"
-		} else {
-			warType = "random"
-		}
-	}
-	state := doc.Data.State
-	battleModifier := normalizeBattleModifier(doc.Data.BattleModifier)
-	size := doc.Data.TeamSize
-	attacksPerMember := doc.Data.AttacksPerMember
-	if attacksPerMember <= 0 {
-		attacksPerMember = 1
-	}
-	if !isFinishedWar(state) {
-		return false, nil
-	}
-	*wars = append(*wars,
-		warIndexRow(warID, doc.Data.Clan, doc.Data.Opponent, prepAt, startValue, endAt, size, attacksPerMember, warType, state, battleModifier, warTag),
-	)
-	appendWarMemberRows(members, warID, endAt, doc.Data.Clan, doc.Data.Opponent)
-	appendWarMissedAttackRows(missedAttacks, warID, endAt, attacksPerMember, doc.Data.Clan, doc.Data.Opponent)
-	appendWarAttackRows(attacks, warID, endAt, warType, size, battleModifier, doc.Data.Clan, doc.Data.Opponent)
-	return true, nil
-}
-
-type clanWarSQL interface {
-	Begin(context.Context) (pgx.Tx, error)
-}
-
 type clanWarDoc struct {
-	ID       bson.ObjectID `bson:"_id"`
-	Type     string        `bson:"type"`
-	WarTag   string        `bson:"war_tag"`
-	EndTime  any           `bson:"endTime"`
-	Data     clanWarData   `bson:"data"`
-	CustomID string        `bson:"custom_id"`
-	WarID    string        `bson:"war_id"`
+	ID      bson.ObjectID `bson:"_id"`
+	Type    string        `bson:"type"`
+	WarTag  string        `bson:"war_tag"`
+	EndTime any           `bson:"endTime"`
+	Data    clanWarData   `bson:"data"`
 }
 
 type clanWarData struct {
-	Tag                  string     `bson:"tag" json:"tag,omitempty"`
-	WarTag               string     `bson:"warTag" json:"warTag,omitempty"`
-	WarTagSnake          string     `bson:"war_tag" json:"war_tag,omitempty"`
-	Type                 string     `bson:"type" json:"type,omitempty"`
-	Clan                 warClanDoc `bson:"clan" json:"clan"`
-	Opponent             warClanDoc `bson:"opponent" json:"opponent"`
-	PreparationStartTime any        `bson:"preparationStartTime" json:"preparationStartTime"`
-	StartTime            any        `bson:"startTime" json:"startTime,omitempty"`
-	EndTime              any        `bson:"endTime" json:"endTime"`
-	State                string     `bson:"state" json:"state"`
-	BattleModifier       string     `bson:"battleModifier" json:"battleModifier,omitempty"`
-	TeamSize             int        `bson:"teamSize" json:"teamSize"`
-	AttacksPerMember     int        `bson:"attacksPerMember" json:"attacksPerMember,omitempty"`
+	Tag                  string     `bson:"tag"`
+	WarTag               string     `bson:"warTag"`
+	WarTagSnake          string     `bson:"war_tag"`
+	Type                 string     `bson:"type"`
+	Clan                 warClanDoc `bson:"clan"`
+	Opponent             warClanDoc `bson:"opponent"`
+	PreparationStartTime any        `bson:"preparationStartTime"`
+	StartTime            any        `bson:"startTime"`
+	EndTime              any        `bson:"endTime"`
+	State                string     `bson:"state"`
+	BattleModifier       string     `bson:"battleModifier"`
+	TeamSize             any        `bson:"teamSize"`
+	AttacksPerMember     any        `bson:"attacksPerMember"`
 }
 
 type warClanDoc struct {
-	Tag                   string         `bson:"tag" json:"tag"`
-	Name                  string         `bson:"name" json:"name,omitempty"`
-	BadgeURLs             badgeURLsDoc   `bson:"badgeUrls" json:"badgeUrls,omitempty"`
-	ClanLevel             int            `bson:"clanLevel" json:"clanLevel,omitempty"`
-	Attacks               int            `bson:"attacks" json:"attacks,omitempty"`
-	Stars                 int            `bson:"stars" json:"stars,omitempty"`
-	DestructionPercentage float64        `bson:"destructionPercentage" json:"destructionPercentage,omitempty"`
-	Members               []warMemberDoc `bson:"members" json:"members,omitempty"`
+	Tag                   string         `bson:"tag"`
+	Name                  string         `bson:"name"`
+	BadgeURLs             badgeURLsDoc   `bson:"badgeUrls"`
+	ClanLevel             any            `bson:"clanLevel"`
+	Attacks               any            `bson:"attacks"`
+	Stars                 any            `bson:"stars"`
+	DestructionPercentage any            `bson:"destructionPercentage"`
+	Members               []warMemberDoc `bson:"members"`
 }
 
 type badgeURLsDoc struct {
-	Small  string `bson:"small" json:"small,omitempty"`
-	Medium string `bson:"medium" json:"medium,omitempty"`
-	Large  string `bson:"large" json:"large,omitempty"`
+	Small  string `bson:"small"`
+	Medium string `bson:"medium"`
+	Large  string `bson:"large"`
 }
 
 type warMemberDoc struct {
-	Tag           string         `bson:"tag" json:"tag"`
-	Name          string         `bson:"name" json:"name,omitempty"`
-	TownhallLevel int            `bson:"townhallLevel" json:"townhallLevel,omitempty"`
-	MapPosition   int            `bson:"mapPosition" json:"mapPosition,omitempty"`
-	Attacks       []warAttackDoc `bson:"attacks" json:"attacks,omitempty"`
+	Tag           string         `bson:"tag"`
+	Name          string         `bson:"name"`
+	TownhallLevel any            `bson:"townhallLevel"`
+	MapPosition   any            `bson:"mapPosition"`
+	Attacks       []warAttackDoc `bson:"attacks"`
 }
 
 type warAttackDoc struct {
-	AttackerTag           string `bson:"attackerTag" json:"attackerTag"`
-	DefenderTag           string `bson:"defenderTag" json:"defenderTag"`
-	Stars                 int    `bson:"stars" json:"stars"`
-	DestructionPercentage int    `bson:"destructionPercentage" json:"destructionPercentage"`
-	Duration              int    `bson:"duration" json:"duration"`
-	Order                 int    `bson:"order" json:"order"`
+	DefenderTag           string `bson:"defenderTag"`
+	Stars                 any    `bson:"stars"`
+	DestructionPercentage any    `bson:"destructionPercentage"`
+	Duration              any    `bson:"duration"`
+	Order                 any    `bson:"order"`
+}
+
+func decodeClanWarDoc(raw bson.Raw) (clanWarDoc, error) {
+	var doc clanWarDoc
+	err := bson.Unmarshal(raw, &doc)
+	return doc, err
 }
 
 func clanWarProjection() bson.M {
 	return bson.M{
-		"data.clan.tag":                                       1,
-		"data.clan.name":                                      1,
-		"data.clan.badgeUrls":                                 1,
-		"data.clan.clanLevel":                                 1,
-		"data.clan.attacks":                                   1,
-		"data.clan.stars":                                     1,
-		"data.clan.destructionPercentage":                     1,
-		"data.clan.members.tag":                               1,
-		"data.clan.members.name":                              1,
-		"data.clan.members.townhallLevel":                     1,
-		"data.clan.members.mapPosition":                       1,
-		"data.clan.members.attacks.attackerTag":               1,
-		"data.clan.members.attacks.defenderTag":               1,
-		"data.clan.members.attacks.stars":                     1,
-		"data.clan.members.attacks.destructionPercentage":     1,
-		"data.clan.members.attacks.duration":                  1,
-		"data.clan.members.attacks.order":                     1,
-		"data.opponent.tag":                                   1,
-		"data.opponent.name":                                  1,
-		"data.opponent.badgeUrls":                             1,
-		"data.opponent.clanLevel":                             1,
-		"data.opponent.attacks":                               1,
-		"data.opponent.stars":                                 1,
-		"data.opponent.destructionPercentage":                 1,
-		"data.opponent.members.tag":                           1,
-		"data.opponent.members.name":                          1,
-		"data.opponent.members.townhallLevel":                 1,
-		"data.opponent.members.mapPosition":                   1,
-		"data.opponent.members.attacks.attackerTag":           1,
-		"data.opponent.members.attacks.defenderTag":           1,
-		"data.opponent.members.attacks.stars":                 1,
-		"data.opponent.members.attacks.destructionPercentage": 1,
-		"data.opponent.members.attacks.duration":              1,
-		"data.opponent.members.attacks.order":                 1,
-		"data.preparationStartTime":                           1,
-		"data.startTime":                                      1,
-		"data.endTime":                                        1,
-		"data.state":                                          1,
-		"data.battleModifier":                                 1,
-		"data.teamSize":                                       1,
-		"data.attacksPerMember":                               1,
-		"data.tag":                                            1,
-		"data.warTag":                                         1,
-		"data.war_tag":                                        1,
-		"data.type":                                           1,
-		"type":                                                1,
-		"war_tag":                                             1,
-		"custom_id":                                           1,
-		"war_id":                                              1,
-		"endTime":                                             1,
+		"data.clan": 1, "data.opponent": 1, "data.preparationStartTime": 1, "data.startTime": 1,
+		"data.endTime": 1, "data.state": 1, "data.battleModifier": 1, "data.teamSize": 1,
+		"data.attacksPerMember": 1, "data.tag": 1, "data.warTag": 1, "data.war_tag": 1,
+		"data.type": 1, "type": 1, "war_tag": 1, "endTime": 1,
 	}
 }
 
-func streamClanWarDocs(
-	ctx context.Context,
-	cfg migrateutil.Config,
-	cp *migrateutil.Checkpoint,
-	cpKey string,
-	collection *mongo.Collection,
-	baseFilter bson.D,
-	projection any,
-	handle func(clanWarDoc) (bool, error),
-	flush func() error,
-) (int64, error) {
+func streamClanWarDocs(ctx context.Context, cfg migrateutil.Config, cp *migrateutil.Checkpoint, cpKey string, collection *mongo.Collection, baseFilter bson.D, projection any, handle func(clanWarDoc) (bool, error), flush func(string) error) (int64, error) {
 	filter := append(bson.D(nil), baseFilter...)
 	if raw := cp.Get(cpKey); raw != "" {
 		id, err := bson.ObjectIDFromHex(raw)
 		if err != nil {
 			return 0, fmt.Errorf("bad checkpoint %s=%q: %w", cpKey, raw, err)
 		}
-		filter = append(filter, bson.E{Key: "_id", Value: bson.D{{Key: "$gt", Value: id}}})
+		filter = bson.D{{Key: "$and", Value: bson.A{
+			filter,
+			bson.D{{Key: "_id", Value: bson.D{{Key: "$gt", Value: id}}}},
+		}}}
 	}
-	opts := options.Find().
-		SetSort(bson.D{{Key: "_id", Value: 1}}).
-		SetBatchSize(int32(minInt(cfg.BatchSize, 10000))).
-		SetProjection(projection)
+	opts := options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}).SetBatchSize(int32(minInt(cfg.BatchSize, 10_000))).SetProjection(projection)
 	cursor, err := collection.Find(ctx, filter, opts)
 	if err != nil {
 		return 0, err
@@ -433,33 +978,39 @@ func streamClanWarDocs(
 	defer cursor.Close(ctx)
 	progress := migrateutil.NewProgress(ctx, cfg, collection, cpKey, filter)
 	var seen int64
-	var checkpointID string
-	defer func() {
-		progress.Done(seen)
-	}()
+	defer func() { progress.Done(seen) }()
+	var checkpoint string
+	var malformed int64
 	for cursor.Next(ctx) {
-		var doc clanWarDoc
-		if err := cursor.Decode(&doc); err != nil {
-			return seen, err
-		}
-		ready, err := handle(doc)
-		if err != nil {
-			return seen, err
-		}
 		seen++
-		if !doc.ID.IsZero() {
-			checkpointID = doc.ID.Hex()
+		raw := cursor.Current
+		docID, hasObjectID := raw.Lookup("_id").ObjectIDOK()
+		if hasObjectID {
+			checkpoint = docID.Hex()
 		}
-		if ready {
-			if err := flush(); err != nil {
+		doc, decodeErr := decodeClanWarDoc(raw)
+		ready := false
+		if decodeErr != nil {
+			malformed++
+			if malformed <= 20 || malformed%1000 == 0 {
+				id := "unknown"
+				if hasObjectID {
+					id = docID.Hex()
+				}
+				fmt.Fprintf(os.Stderr, "clan_wars: skipping malformed Mongo document _id=%s error=%v\n", id, decodeErr)
+			}
+		} else {
+			var err error
+			ready, err = handle(doc)
+			if err != nil {
 				return seen, err
 			}
-			if checkpointID != "" {
-				if err := cp.Set(cpKey, checkpointID); err != nil {
-					return seen, err
-				}
-				checkpointID = ""
+		}
+		if ready {
+			if err := flush(checkpoint); err != nil {
+				return seen, err
 			}
+			checkpoint = ""
 		}
 		progress.Tick(seen)
 		if cfg.LimitDocs > 0 && seen >= cfg.LimitDocs {
@@ -469,701 +1020,56 @@ func streamClanWarDocs(
 	if err := cursor.Err(); err != nil {
 		return seen, err
 	}
-	if checkpointID != "" {
-		if err := flush(); err != nil {
+	if checkpoint != "" {
+		if err := flush(checkpoint); err != nil {
 			return seen, err
 		}
-		if err := cp.Set(cpKey, checkpointID); err != nil {
-			return seen, err
-		}
+	}
+	if malformed > 0 {
+		fmt.Fprintf(os.Stderr, "clan_wars: skipped_malformed_docs=%d\n", malformed)
 	}
 	return seen, nil
 }
 
-type warIndexInsert struct {
-	warID                         string
-	clanTag                       string
-	opponentTag                   string
-	prepAt                        time.Time
-	startAt                       *time.Time
-	endAt                         time.Time
-	size                          int
-	attacksPerMember              int
-	warType                       string
-	state                         string
-	battleModifier                string
-	warTag                        string
-	clanName                      string
-	opponentName                  string
-	clanBadgeToken                string
-	opponentBadgeToken            string
-	clanLevel                     int
-	opponentClanLevel             int
-	clanAttacks                   int
-	opponentAttacks               int
-	clanStars                     int
-	opponentStars                 int
-	clanDestructionPercentage     float64
-	opponentDestructionPercentage float64
-}
-
-type warMissedAttackInsert struct {
-	warID           string
-	warEndAt        time.Time
-	clanTag         string
-	opponentTag     string
-	playerTag       string
-	playerName      string
-	townhall        int
-	mapPosition     int
-	expectedAttacks int
-	attackCount     int
-	missedAttacks   int
-}
-
-type warMemberInsert struct {
-	warID       string
-	warEndAt    time.Time
-	clanTag     string
-	opponentTag string
-	playerTag   string
-	playerName  string
-	townhall    int
-	mapPosition int
-}
-
-type warAttackInsert struct {
-	warID                 string
-	warEndAt              time.Time
-	warType               string
-	warSize               int
-	attackingClanTag      string
-	defendingClanTag      string
-	attackerTag           string
-	attackerName          string
-	defenderTag           string
-	defenderName          string
-	attackerTownhall      int
-	defenderTownhall      int
-	attackerMapPosition   int
-	defenderMapPosition   int
-	stars                 int
-	destructionPercentage int
-	duration              int
-	attackOrder           int
-	battleModifier        string
-}
-
-func warIndexRow(warID string, clan warClanDoc, opponent warClanDoc, prepAt time.Time, startValue *time.Time, endAt time.Time, size int, attacksPerMember int, warType, state, battleModifier, warTag string) warIndexInsert {
-	return warIndexInsert{
-		warID:                         warID,
-		clanTag:                       clan.Tag,
-		opponentTag:                   opponent.Tag,
-		prepAt:                        prepAt,
-		startAt:                       startValue,
-		endAt:                         endAt,
-		size:                          size,
-		attacksPerMember:              attacksPerMember,
-		warType:                       warType,
-		state:                         state,
-		battleModifier:                battleModifier,
-		warTag:                        warTag,
-		clanName:                      clan.Name,
-		opponentName:                  opponent.Name,
-		clanBadgeToken:                badgeToken(clan.BadgeURLs),
-		opponentBadgeToken:            badgeToken(opponent.BadgeURLs),
-		clanLevel:                     clan.ClanLevel,
-		opponentClanLevel:             opponent.ClanLevel,
-		clanAttacks:                   clan.Attacks,
-		opponentAttacks:               opponent.Attacks,
-		clanStars:                     clan.Stars,
-		opponentStars:                 opponent.Stars,
-		clanDestructionPercentage:     clan.DestructionPercentage,
-		opponentDestructionPercentage: opponent.DestructionPercentage,
-	}
-}
-
-func badgeToken(badge badgeURLsDoc) string {
-	return migrateutil.BadgeToken(badge.Large, badge.Medium, badge.Small)
-}
-
-func appendWarMemberRows(out *[]warMemberInsert, warID string, endAt time.Time, clan, opponent warClanDoc) {
-	appendSide := func(source warClanDoc, other warClanDoc) {
-		for _, member := range source.Members {
-			if member.Tag == "" {
-				continue
-			}
-			*out = append(*out, warMemberInsert{
-				warID:       warID,
-				warEndAt:    endAt,
-				clanTag:     source.Tag,
-				opponentTag: other.Tag,
-				playerTag:   member.Tag,
-				playerName:  member.Name,
-				townhall:    member.TownhallLevel,
-				mapPosition: member.MapPosition,
-			})
-		}
-	}
-	appendSide(clan, opponent)
-	appendSide(opponent, clan)
-}
-
-func appendWarMissedAttackRows(out *[]warMissedAttackInsert, warID string, endAt time.Time, attacksPerMember int, clan, opponent warClanDoc) {
-	appendSide := func(source warClanDoc, other warClanDoc) {
-		for i := range source.Members {
-			member := source.Members[i]
-			if member.Tag == "" {
-				continue
-			}
-			attackCount := len(member.Attacks)
-			missed := attacksPerMember - attackCount
-			if missed <= 0 {
-				continue
-			}
-			*out = append(*out, warMissedAttackInsert{
-				warID:           warID,
-				warEndAt:        endAt,
-				clanTag:         source.Tag,
-				opponentTag:     other.Tag,
-				playerTag:       member.Tag,
-				playerName:      member.Name,
-				townhall:        member.TownhallLevel,
-				mapPosition:     member.MapPosition,
-				expectedAttacks: attacksPerMember,
-				attackCount:     attackCount,
-				missedAttacks:   missed,
-			})
-		}
-	}
-	appendSide(clan, opponent)
-	appendSide(opponent, clan)
-}
-
-func appendWarAttackRows(out *[]warAttackInsert, warID string, endAt time.Time, warType string, size int, battleModifier string, clan, opponent warClanDoc) {
-	type memberInfo struct {
-		clanTag       string
-		name          string
-		townhallLevel int
-		mapPosition   int
-	}
-	members := make(map[string]memberInfo, len(clan.Members)+len(opponent.Members))
-	addMembers := func(tag string, rawMembers []warMemberDoc) {
-		for i := range rawMembers {
-			member := rawMembers[i]
-			if member.Tag == "" {
-				continue
-			}
-			members[member.Tag] = memberInfo{
-				clanTag:       tag,
-				name:          member.Name,
-				townhallLevel: member.TownhallLevel,
-				mapPosition:   member.MapPosition,
-			}
-		}
-	}
-	addMembers(clan.Tag, clan.Members)
-	addMembers(opponent.Tag, opponent.Members)
-	appendAttacks := func(attackingClanTag string, rawMembers []warMemberDoc) {
-		for i := range rawMembers {
-			member := rawMembers[i]
-			memberTag := member.Tag
-			if memberTag == "" {
-				continue
-			}
-			memberInfo := members[memberTag]
-			for _, attack := range member.Attacks {
-				attackerTag := memberTag
-				attacker := memberInfo
-				defenderTag := attack.DefenderTag
-				defender := members[defenderTag]
-				if defenderTag == "" {
-					continue
-				}
-				if attack.AttackerTag != "" && attack.AttackerTag != memberTag {
-					attackerTag = attack.AttackerTag
-					attacker = members[attackerTag]
-				}
-				*out = append(*out, warAttackInsert{
-					warID:                 warID,
-					warEndAt:              endAt,
-					warType:               warType,
-					warSize:               size,
-					attackingClanTag:      firstNonEmptyString(attacker.clanTag, attackingClanTag),
-					defendingClanTag:      defender.clanTag,
-					attackerTag:           attackerTag,
-					attackerName:          attacker.name,
-					defenderTag:           defenderTag,
-					defenderName:          defender.name,
-					attackerTownhall:      attacker.townhallLevel,
-					defenderTownhall:      defender.townhallLevel,
-					attackerMapPosition:   attacker.mapPosition,
-					defenderMapPosition:   defender.mapPosition,
-					stars:                 attack.Stars,
-					destructionPercentage: attack.DestructionPercentage,
-					duration:              attack.Duration,
-					attackOrder:           attack.Order,
-					battleModifier:        battleModifier,
-				})
-			}
-		}
-	}
-	appendAttacks(clan.Tag, clan.Members)
-	appendAttacks(opponent.Tag, opponent.Members)
-}
-
-func flushClanWarRows(ctx context.Context, pool clanWarSQL, wars []warIndexInsert, members []warMemberInsert, missedAttacks []warMissedAttackInsert, attacks []warAttackInsert) error {
-	flushStarted := time.Now()
-	defer func() {
-		clanWarProfile.flushNanos.Add(time.Since(flushStarted).Nanoseconds())
-	}()
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SET LOCAL synchronous_commit = off`); err != nil {
-		return err
-	}
-	if len(wars) > 0 {
-		copyStarted := time.Now()
-		if _, err := tx.Exec(ctx, `
-			CREATE TEMP TABLE _ck_wars (LIKE public.wars INCLUDING DEFAULTS) ON COMMIT DROP;
-			CREATE TEMP TABLE _ck_inserted_wars (war_id text PRIMARY KEY) ON COMMIT DROP;
-		`); err != nil {
-			return err
-		}
-		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"_ck_wars"}, warIndexCopyColumns, newWarIndexCopySource(wars)); err != nil {
-			return err
-		}
-		tag, err := tx.Exec(ctx, `
-			WITH src AS (
-				SELECT DISTINCT ON (war_id)
-					war_id, clan_tag, opponent_tag, prep_time, start_time, end_time,
-					size, attacks_per_member, war_type, state, battle_modifier, war_tag,
-					clan_name, opponent_name, clan_badge_token, opponent_badge_token,
-					clan_level, opponent_clan_level, clan_attacks, opponent_attacks,
-					clan_stars, opponent_stars, clan_destruction_percentage, opponent_destruction_percentage
-				FROM _ck_wars
-				ORDER BY war_id, end_time DESC
-			), inserted AS (
-				INSERT INTO public.wars (
-					war_id, clan_tag, opponent_tag, prep_time, start_time, end_time,
-					size, attacks_per_member, war_type, state, battle_modifier, war_tag,
-					clan_name, opponent_name, clan_badge_token, opponent_badge_token,
-					clan_level, opponent_clan_level, clan_attacks, opponent_attacks,
-					clan_stars, opponent_stars, clan_destruction_percentage, opponent_destruction_percentage
-				)
-				SELECT
-					war_id, clan_tag, opponent_tag, prep_time, start_time, end_time,
-					size, attacks_per_member, war_type, state, battle_modifier, NULLIF(war_tag, ''),
-					clan_name, opponent_name, clan_badge_token, opponent_badge_token,
-					clan_level, opponent_clan_level, clan_attacks, opponent_attacks,
-					clan_stars, opponent_stars, clan_destruction_percentage, opponent_destruction_percentage
-				FROM src
-				ON CONFLICT (war_id, end_time) DO NOTHING
-				RETURNING war_id
-			)
-			INSERT INTO _ck_inserted_wars (war_id)
-			SELECT war_id FROM inserted
-		`)
-		if err != nil {
-			return err
-		}
-		clanWarProfile.warsCopyNanos.Add(time.Since(copyStarted).Nanoseconds())
-		clanWarProfile.warRows.Add(tag.RowsAffected())
-		if _, err := tx.Exec(ctx, `
-			WITH observed AS (
-				SELECT clan_tag AS tag, max(end_time) AS last_war_at
-				FROM _ck_wars
-				WHERE clan_tag <> ''
-				GROUP BY clan_tag
-				UNION ALL
-				SELECT opponent_tag AS tag, max(end_time) AS last_war_at
-				FROM _ck_wars
-				WHERE opponent_tag <> ''
-				GROUP BY opponent_tag
-			), latest AS (
-				SELECT tag, max(last_war_at) AS last_war_at
-				FROM observed
-				GROUP BY tag
-			)
-			UPDATE public.basic_clan AS clan
-			SET last_war_at = GREATEST(
-				COALESCE(clan.last_war_at, '-infinity'::timestamptz),
-				latest.last_war_at
-			)
-			FROM latest
-			WHERE clan.tag = latest.tag
-			  AND clan.last_war_at IS DISTINCT FROM GREATEST(
-				COALESCE(clan.last_war_at, '-infinity'::timestamptz),
-				latest.last_war_at
-			  )
-		`); err != nil {
-			return err
-		}
-	}
-	if len(missedAttacks) > 0 {
-		if _, err := tx.Exec(ctx, `CREATE TEMP TABLE _ck_war_missed_attacks (LIKE public.war_missed_attacks INCLUDING DEFAULTS) ON COMMIT DROP`); err != nil {
-			return err
-		}
-		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"_ck_war_missed_attacks"}, warMissedAttackCopyColumns, newWarMissedAttackCopySource(missedAttacks)); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO public.war_missed_attacks (
-				war_id, war_end_time, clan_tag, opponent_tag, player_tag, player_name, townhall_level, map_position,
-				expected_attacks, attack_count, missed_attacks
-			)
-			SELECT DISTINCT ON (m.war_id, m.war_end_time, m.player_tag)
-				m.war_id, m.war_end_time, m.clan_tag, m.opponent_tag, m.player_tag, m.player_name,
-				m.townhall_level, m.map_position, m.expected_attacks, m.attack_count, m.missed_attacks
-			FROM _ck_war_missed_attacks m
-			JOIN _ck_inserted_wars i ON i.war_id = m.war_id
-			ORDER BY m.war_id, m.war_end_time, m.player_tag
-		`); err != nil {
-			return err
-		}
-	}
-	if len(members) > 0 {
-		if _, err := tx.Exec(ctx, `CREATE TEMP TABLE _ck_war_members (LIKE public.war_members INCLUDING DEFAULTS) ON COMMIT DROP`); err != nil {
-			return err
-		}
-		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"_ck_war_members"}, warMemberCopyColumns, newWarMemberCopySource(members)); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO public.war_members (
-				war_id, war_end_time, clan_tag, opponent_tag, player_tag, player_name,
-				townhall_level, map_position
-			)
-			SELECT DISTINCT ON (m.war_id, m.war_end_time, m.clan_tag, m.player_tag)
-				m.war_id, m.war_end_time, m.clan_tag, m.opponent_tag, m.player_tag, m.player_name,
-				m.townhall_level, m.map_position
-			FROM _ck_war_members m
-			JOIN _ck_inserted_wars i ON i.war_id = m.war_id
-			ORDER BY m.war_id, m.war_end_time, m.clan_tag, m.player_tag
-		`); err != nil {
-			return err
-		}
-	}
-	if len(attacks) > 0 {
-		copyStarted := time.Now()
-		if _, err := tx.Exec(ctx, `CREATE TEMP TABLE _ck_war_attacks (LIKE public.war_attacks INCLUDING DEFAULTS) ON COMMIT DROP`); err != nil {
-			return err
-		}
-		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"_ck_war_attacks"}, warAttackCopyColumns, newWarAttackCopySource(attacks)); err != nil {
-			return err
-		}
-		tag, err := tx.Exec(ctx, `
-			INSERT INTO public.war_attacks (
-				war_id, war_end_time, war_type, war_size, attacking_clan_tag, defending_clan_tag,
-				attacker_tag, attacker_name, defender_tag, defender_name, attacker_townhall, defender_townhall,
-				attacker_map_position, defender_map_position, stars, destruction_percentage,
-				duration, attack_order, battle_modifier
-			)
-			SELECT DISTINCT ON (a.war_id, a.war_end_time, a.attacker_tag, a.defender_tag, a.attack_order)
-				a.war_id, a.war_end_time, a.war_type, a.war_size, a.attacking_clan_tag, a.defending_clan_tag,
-				a.attacker_tag, a.attacker_name, a.defender_tag, a.defender_name, a.attacker_townhall, a.defender_townhall,
-				a.attacker_map_position, a.defender_map_position, a.stars, a.destruction_percentage,
-				a.duration, a.attack_order, a.battle_modifier
-			FROM _ck_war_attacks a
-			JOIN _ck_inserted_wars i ON i.war_id = a.war_id
-			ORDER BY a.war_id, a.war_end_time, a.attacker_tag, a.defender_tag, a.attack_order
-		`)
-		if err != nil {
-			return err
-		}
-		clanWarProfile.attacksCopyNanos.Add(time.Since(copyStarted).Nanoseconds())
-		clanWarProfile.attackRows.Add(tag.RowsAffected())
-	}
-	return tx.Commit(ctx)
-}
-
-var warIndexCopyColumns = []string{
-	"war_id", "clan_tag", "opponent_tag", "prep_time", "start_time", "end_time",
-	"size", "attacks_per_member", "war_type", "state", "battle_modifier", "war_tag",
-	"clan_name", "opponent_name", "clan_badge_token", "opponent_badge_token",
-	"clan_level", "opponent_clan_level", "clan_attacks", "opponent_attacks",
-	"clan_stars", "opponent_stars", "clan_destruction_percentage", "opponent_destruction_percentage",
-}
-
-var warAttackCopyColumns = []string{
-	"war_id", "war_end_time", "war_type", "war_size", "attacking_clan_tag", "defending_clan_tag",
-	"attacker_tag", "attacker_name", "defender_tag", "defender_name", "attacker_townhall", "defender_townhall",
-	"attacker_map_position", "defender_map_position", "stars", "destruction_percentage",
-	"duration", "attack_order", "battle_modifier",
-}
-
-var warMemberCopyColumns = []string{
-	"war_id", "war_end_time", "clan_tag", "opponent_tag", "player_tag", "player_name",
-	"townhall_level", "map_position",
-}
-
-var warMissedAttackCopyColumns = []string{
-	"war_id", "war_end_time", "clan_tag", "opponent_tag", "player_tag", "player_name", "townhall_level", "map_position",
-	"expected_attacks", "attack_count", "missed_attacks",
-}
-
-type warIndexCopySource struct {
-	rows   []warIndexInsert
-	idx    int
-	values []any
-}
-
-func newWarIndexCopySource(rows []warIndexInsert) *warIndexCopySource {
-	return &warIndexCopySource{rows: rows, idx: -1, values: make([]any, 24)}
-}
-
-func (s *warIndexCopySource) Next() bool {
-	s.idx++
-	return s.idx < len(s.rows)
-}
-
-func (s *warIndexCopySource) Values() ([]any, error) {
-	row := s.rows[s.idx]
-	s.values[0] = row.warID
-	s.values[1] = row.clanTag
-	s.values[2] = row.opponentTag
-	s.values[3] = row.prepAt
-	s.values[4] = row.startAt
-	s.values[5] = row.endAt
-	s.values[6] = row.size
-	s.values[7] = row.attacksPerMember
-	s.values[8] = row.warType
-	s.values[9] = row.state
-	s.values[10] = row.battleModifier
-	s.values[11] = row.warTag
-	s.values[12] = row.clanName
-	s.values[13] = row.opponentName
-	s.values[14] = row.clanBadgeToken
-	s.values[15] = row.opponentBadgeToken
-	s.values[16] = row.clanLevel
-	s.values[17] = row.opponentClanLevel
-	s.values[18] = row.clanAttacks
-	s.values[19] = row.opponentAttacks
-	s.values[20] = row.clanStars
-	s.values[21] = row.opponentStars
-	s.values[22] = row.clanDestructionPercentage
-	s.values[23] = row.opponentDestructionPercentage
-	return s.values, nil
-}
-
-func (s *warIndexCopySource) Err() error { return nil }
-
-type warMemberCopySource struct {
-	rows   []warMemberInsert
-	idx    int
-	values []any
-}
-
-func newWarMemberCopySource(rows []warMemberInsert) *warMemberCopySource {
-	return &warMemberCopySource{rows: rows, idx: -1, values: make([]any, 8)}
-}
-
-func (s *warMemberCopySource) Next() bool {
-	s.idx++
-	return s.idx < len(s.rows)
-}
-
-func (s *warMemberCopySource) Values() ([]any, error) {
-	row := s.rows[s.idx]
-	s.values[0] = row.warID
-	s.values[1] = row.warEndAt
-	s.values[2] = row.clanTag
-	s.values[3] = row.opponentTag
-	s.values[4] = row.playerTag
-	s.values[5] = row.playerName
-	s.values[6] = row.townhall
-	s.values[7] = row.mapPosition
-	return s.values, nil
-}
-
-func (s *warMemberCopySource) Err() error { return nil }
-
-type warMissedAttackCopySource struct {
-	rows   []warMissedAttackInsert
-	idx    int
-	values []any
-}
-
-func newWarMissedAttackCopySource(rows []warMissedAttackInsert) *warMissedAttackCopySource {
-	return &warMissedAttackCopySource{rows: rows, idx: -1, values: make([]any, 11)}
-}
-
-func (s *warMissedAttackCopySource) Next() bool {
-	s.idx++
-	return s.idx < len(s.rows)
-}
-
-func (s *warMissedAttackCopySource) Values() ([]any, error) {
-	row := s.rows[s.idx]
-	s.values[0] = row.warID
-	s.values[1] = row.warEndAt
-	s.values[2] = row.clanTag
-	s.values[3] = row.opponentTag
-	s.values[4] = row.playerTag
-	s.values[5] = row.playerName
-	s.values[6] = row.townhall
-	s.values[7] = row.mapPosition
-	s.values[8] = row.expectedAttacks
-	s.values[9] = row.attackCount
-	s.values[10] = row.missedAttacks
-	return s.values, nil
-}
-
-func (s *warMissedAttackCopySource) Err() error { return nil }
-
-type warAttackCopySource struct {
-	rows   []warAttackInsert
-	idx    int
-	values []any
-}
-
-func newWarAttackCopySource(rows []warAttackInsert) *warAttackCopySource {
-	return &warAttackCopySource{rows: rows, idx: -1, values: make([]any, 19)}
-}
-
-func (s *warAttackCopySource) Next() bool {
-	s.idx++
-	return s.idx < len(s.rows)
-}
-
-func (s *warAttackCopySource) Values() ([]any, error) {
-	row := s.rows[s.idx]
-	s.values[0] = row.warID
-	s.values[1] = row.warEndAt
-	s.values[2] = row.warType
-	s.values[3] = row.warSize
-	s.values[4] = row.attackingClanTag
-	s.values[5] = row.defendingClanTag
-	s.values[6] = row.attackerTag
-	s.values[7] = row.attackerName
-	s.values[8] = row.defenderTag
-	s.values[9] = row.defenderName
-	s.values[10] = row.attackerTownhall
-	s.values[11] = row.defenderTownhall
-	s.values[12] = row.attackerMapPosition
-	s.values[13] = row.defenderMapPosition
-	s.values[14] = row.stars
-	s.values[15] = row.destructionPercentage
-	s.values[16] = row.duration
-	s.values[17] = row.attackOrder
-	s.values[18] = row.battleModifier
-	return s.values, nil
-}
-
-func (s *warAttackCopySource) Err() error { return nil }
-
-func dropClanWarIndexes(ctx context.Context, db interface {
-	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
-}) error {
-	_, err := db.Exec(ctx, `
-		ALTER TABLE public.war_attacks DROP CONSTRAINT IF EXISTS war_attacks_pkey;
-		ALTER TABLE public.war_members DROP CONSTRAINT IF EXISTS war_members_pkey;
-		ALTER TABLE public.war_missed_attacks DROP CONSTRAINT IF EXISTS war_missed_attacks_pkey;
-		DROP INDEX IF EXISTS public.idx_war_attacks_clan_time;
-		DROP INDEX IF EXISTS public.idx_war_attacks_hitrate;
-		DROP INDEX IF EXISTS public.idx_war_attacks_player_time;
-		DROP INDEX IF EXISTS public.war_attacks_war_end_time_idx;
-		DROP INDEX IF EXISTS public.idx_war_members_player_time;
-		DROP INDEX IF EXISTS public.idx_war_missed_attacks_clan_time;
-		DROP INDEX IF EXISTS public.idx_war_missed_attacks_player_time;
-		DROP INDEX IF EXISTS public.idx_wars_clan_end_time;
-		DROP INDEX IF EXISTS public.idx_wars_opponent_end_time;
-		DROP INDEX IF EXISTS public.idx_wars_war_tag;
-	`)
-	return err
-}
-
-func recreateClanWarIndexes(ctx context.Context, db interface {
-	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
-}) error {
-	started := time.Now()
-	defer func() {
-		clanWarProfile.recreateNanos.Add(time.Since(started).Nanoseconds())
-	}()
-	_, err := db.Exec(ctx, `
-		SET maintenance_work_mem = '1GB';
-		SET max_parallel_maintenance_workers = 4;
-		ALTER TABLE public.war_attacks ADD CONSTRAINT war_attacks_pkey PRIMARY KEY (war_id, war_end_time, attacker_tag, defender_tag, attack_order);
-		ALTER TABLE public.war_members ADD CONSTRAINT war_members_pkey PRIMARY KEY (war_id, war_end_time, clan_tag, player_tag);
-		ALTER TABLE public.war_missed_attacks ADD CONSTRAINT war_missed_attacks_pkey PRIMARY KEY (war_id, war_end_time, player_tag);
-		CREATE INDEX IF NOT EXISTS idx_war_attacks_clan_time ON public.war_attacks USING btree (attacking_clan_tag, war_end_time DESC);
-		CREATE INDEX IF NOT EXISTS idx_war_attacks_hitrate ON public.war_attacks USING btree (attacker_townhall, defender_townhall, war_type, war_end_time DESC);
-		CREATE INDEX IF NOT EXISTS idx_war_attacks_player_time ON public.war_attacks USING btree (attacker_tag, war_end_time DESC);
-		CREATE INDEX IF NOT EXISTS idx_war_members_player_time ON public.war_members USING btree (player_tag, war_end_time DESC);
-		CREATE INDEX IF NOT EXISTS idx_war_missed_attacks_clan_time ON public.war_missed_attacks USING btree (clan_tag, war_end_time DESC);
-		CREATE INDEX IF NOT EXISTS idx_war_missed_attacks_player_time ON public.war_missed_attacks USING btree (player_tag, war_end_time DESC);
-		CREATE INDEX IF NOT EXISTS idx_wars_clan_end_time ON public.wars USING btree (clan_tag, end_time DESC);
-		CREATE INDEX IF NOT EXISTS idx_wars_opponent_end_time ON public.wars USING btree (opponent_tag, end_time DESC);
-		CREATE INDEX IF NOT EXISTS idx_wars_war_tag ON public.wars USING btree (war_tag) WHERE (war_tag IS NOT NULL);
-	`)
-	return err
-}
-
-var clanWarProfile clanWarProfileCounters
-
-type clanWarProfileCounters struct {
-	scanNanos        atomic.Int64
-	flushNanos       atomic.Int64
-	warsCopyNanos    atomic.Int64
-	attacksCopyNanos atomic.Int64
-	recreateNanos    atomic.Int64
-	warRows          atomic.Int64
-	attackRows       atomic.Int64
-}
-
-func printClanWarProfile(total time.Duration) {
-	fmt.Fprintf(os.Stderr,
-		"\nprofile total=%s scan_worker_sum=%s flush_sum=%s copy_wars=%s(%d rows) copy_attacks=%s(%d rows) recreate=%s\n",
-		total.Round(time.Millisecond),
-		time.Duration(clanWarProfile.scanNanos.Load()).Round(time.Millisecond),
-		time.Duration(clanWarProfile.flushNanos.Load()).Round(time.Millisecond),
-		time.Duration(clanWarProfile.warsCopyNanos.Load()).Round(time.Millisecond),
-		clanWarProfile.warRows.Load(),
-		time.Duration(clanWarProfile.attacksCopyNanos.Load()).Round(time.Millisecond),
-		clanWarProfile.attackRows.Load(),
-		time.Duration(clanWarProfile.recreateNanos.Load()).Round(time.Millisecond),
-	)
-}
-
-func isFinishedWar(state string) bool {
-	return state == "warEnded" || state == "ended" || state == "notInWar"
-}
-
-func computeWarKey(left, right string, prepAt time.Time) string {
-	tags := []string{left, right}
-	sort.Strings(tags)
-	return tags[0] + "-" + tags[1] + "-" + fmt.Sprintf("%d", prepAt.Unix())
+func isFinishedWar(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return value == "warended" || value == "ended"
 }
 
 func firstWar(values ...any) any {
 	for _, value := range values {
-		if migrateutil.String(value) != "" {
+		if value != nil {
 			return value
 		}
 	}
 	return nil
 }
 
-func firstWarString(values ...any) string {
-	return migrateutil.String(firstWar(values...))
-}
-
 func firstNonEmptyString(values ...string) string {
 	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
+		if value = strings.TrimSpace(value); value != "" {
+			return value
 		}
 	}
 	return ""
 }
 
 func normalizeBattleModifier(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" || strings.EqualFold(value, "null") {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
 		return "none"
+	}
+	return value
+}
+
+func warFloat(value any) float64 {
+	out, _ := strconv.ParseFloat(migrateutil.String(value), 64)
+	return out
+}
+
+func nullString(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
 	}
 	return value
 }
@@ -1175,30 +1081,19 @@ func minInt(left, right int) int {
 	return right
 }
 
-func maxInt(left, right int) int {
-	if left > right {
-		return left
+func envInt(env map[string]string, key string, fallback int) int {
+	value := strings.TrimSpace(env[key])
+	if value == "" {
+		return fallback
 	}
-	return right
-}
-
-func ceilDiv(value, by int) int {
-	if by <= 0 {
-		return value
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
 	}
-	return (value + by - 1) / by
-}
-
-func clanWarEnvInt(env map[string]string, key string, fallback int) int {
-	if raw := migrateutil.String(env[key]); raw != "" {
-		if out, err := strconv.Atoi(raw); err == nil {
-			return out
-		}
-	}
-	return fallback
+	return parsed
 }
 
 func envBool(env map[string]string, key string) bool {
-	value := strings.TrimSpace(strings.ToLower(env[key]))
-	return value == "1" || value == "true" || value == "yes"
+	value, _ := strconv.ParseBool(strings.TrimSpace(env[key]))
+	return value
 }

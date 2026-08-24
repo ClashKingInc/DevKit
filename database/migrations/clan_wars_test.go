@@ -3,9 +3,13 @@
 package main
 
 import (
+	"context"
 	"reflect"
 	"testing"
+	"time"
 
+	"clashking_devkit_database_migrations/migrateutil"
+	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -22,10 +26,10 @@ func TestNormalizeClanWarTag(t *testing.T) {
 }
 
 func TestClanWarCheckpointKeyIsScoped(t *testing.T) {
-	if got := clanWarCheckpointKey(""); got != "clan_war_id" {
+	if got := clanWarCheckpointKey(""); got != "clan_war_r2_id" {
 		t.Fatalf("unfiltered checkpoint key = %q", got)
 	}
-	if got := clanWarCheckpointKey("#VY2J0LL"); got != "clan_war_id_VY2J0LL" {
+	if got := clanWarCheckpointKey("#VY2J0LL"); got != "clan_war_r2_id_VY2J0LL" {
 		t.Fatalf("filtered checkpoint key = %q", got)
 	}
 }
@@ -47,10 +51,78 @@ func TestClanWarFilterGlobalScanUsesValidBSON(t *testing.T) {
 	}
 }
 
-func TestCWLWarTagFilterUsesIndexedOfficialTag(t *testing.T) {
-	want := bson.D{{Key: "data.tag", Value: bson.D{{Key: "$in", Value: []string{"#WAR1", "#WAR2"}}}}}
-	if got := cwlWarTagFilter([]string{"#WAR1", "#WAR2"}); !reflect.DeepEqual(got, want) {
-		t.Fatalf("cwlWarTagFilter() = %#v, want %#v", got, want)
+func TestClanWarFilterAppliesObjectIDRange(t *testing.T) {
+	from, _ := bson.ObjectIDFromHex("000000000000000000000001")
+	before, _ := bson.ObjectIDFromHex("000000000000000000000010")
+	idRange := clanWarIDRange{from: &from, before: &before}
+	want := bson.D{{Key: "_id", Value: bson.D{
+		{Key: "$gte", Value: from},
+		{Key: "$lt", Value: before},
+	}}}
+	if got := clanWarFilterWithIDRange("", idRange); !reflect.DeepEqual(got, want) {
+		t.Fatalf("clanWarFilterWithIDRange() = %#v, want %#v", got, want)
+	}
+	wantCheckpoint := "clan_war_r2_id_from_" + from.Hex() + "_before_" + before.Hex()
+	if got := idRange.checkpointKey(clanWarCheckpointKey("")); got != wantCheckpoint {
+		t.Fatalf("range checkpoint key = %q, want %q", got, wantCheckpoint)
+	}
+}
+
+func TestClanWarIDRangeValidation(t *testing.T) {
+	id := "000000000000000000000010"
+	if _, err := clanWarIDRangeFromEnv(map[string]string{
+		"CLAN_WARS_ID_AFTER": id,
+		"CLAN_WARS_ID_FROM":  id,
+	}); err == nil {
+		t.Fatal("expected conflicting lower bounds to fail")
+	}
+	if _, err := clanWarIDRangeFromEnv(map[string]string{
+		"CLAN_WARS_ID_FROM":   id,
+		"CLAN_WARS_ID_BEFORE": id,
+	}); err == nil {
+		t.Fatal("expected an empty ObjectID range to fail")
+	}
+}
+
+func TestClanWarLegacyNumericStringsDecode(t *testing.T) {
+	payload, err := bson.Marshal(bson.D{{Key: "data", Value: bson.D{
+		{Key: "teamSize", Value: "15"},
+		{Key: "attacksPerMember", Value: "2"},
+		{Key: "clan", Value: bson.D{
+			{Key: "clanLevel", Value: "20"},
+			{Key: "destructionPercentage", Value: "97.25"},
+			{Key: "members", Value: bson.A{bson.D{
+				{Key: "tag", Value: "#PLAYER"},
+				{Key: "townhallLevel", Value: "18"},
+				{Key: "mapPosition", Value: "1"},
+			}}},
+		}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := decodeClanWarDoc(payload)
+	if err != nil {
+		t.Fatalf("decode legacy numeric strings: %v", err)
+	}
+	clan := canonicalArchiveClan(doc.Data.Clan)
+	if migrateutil.Int(doc.Data.TeamSize) != 15 || migrateutil.Int(doc.Data.AttacksPerMember) != 2 {
+		t.Fatalf("unexpected war numerics: size=%v attacks=%v", doc.Data.TeamSize, doc.Data.AttacksPerMember)
+	}
+	if clan.ClanLevel != 20 || clan.DestructionPercentage != 97.25 || clan.Members[0].TownhallLevel != 18 {
+		t.Fatalf("unexpected canonical clan: %+v", clan)
+	}
+}
+
+func TestDecodeClanWarDocRejectsMalformedNestedArrays(t *testing.T) {
+	payload, err := bson.Marshal(bson.D{{Key: "data", Value: bson.D{
+		{Key: "clan", Value: bson.D{{Key: "members", Value: "not-an-array"}}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeClanWarDoc(payload); err == nil {
+		t.Fatal("expected malformed members to fail typed decoding")
 	}
 }
 
@@ -69,5 +141,49 @@ func TestDecodeCWLBackfillWarTags(t *testing.T) {
 				t.Fatalf("decodeCWLBackfillWarTags() = %#v, want %#v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestArchivePackPipelineCheckpointsCompletedPacksInSourceOrder(t *testing.T) {
+	cp, err := migrateutil.LoadCheckpoint(migrateutil.Config{Root: t.TempDir() + "/migrations"}, "clan_wars")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstID, secondID := uuid.New(), uuid.New()
+	firstStarted := make(chan struct{})
+	secondFinished := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	processor := func(_ context.Context, wars []archiveWar, _, _ chan struct{}) error {
+		switch wars[0].ID {
+		case firstID:
+			close(firstStarted)
+			<-releaseFirst
+		case secondID:
+			close(secondFinished)
+		}
+		return nil
+	}
+	pipeline := newArchivePackPipeline(context.Background(), 2, 1, 1, cp, "ordered", processor)
+	if err := pipeline.Submit([]archiveWar{{ID: firstID}}, "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pipeline.Submit([]archiveWar{{ID: secondID}}, "second"); err != nil {
+		t.Fatal(err)
+	}
+	<-firstStarted
+	<-secondFinished
+	closed := make(chan error, 1)
+	go func() { closed <- pipeline.Close() }()
+	select {
+	case err := <-closed:
+		t.Fatalf("pipeline closed before the first pack completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseFirst)
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	if got := cp.Get("ordered"); got != "second" {
+		t.Fatalf("checkpoint = %q, want second", got)
 	}
 }
