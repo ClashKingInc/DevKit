@@ -25,14 +25,19 @@ Configure these in the staging Coolify environment. Never commit their values.
 
 - `ELASTIC_PASSWORD`: Elasticsearch bootstrap administrator password. Use it
   only to provision mappings, aliases, and the restricted API key.
-- `PGSYNC_ELASTICSEARCH_API_KEY_ID` and
-  `PGSYNC_ELASTICSEARCH_API_KEY`: restricted runtime API-key parts returned by
+- `ELASTICSEARCH_API_KEY_ID` and
+  `ELASTICSEARCH_API_KEY`: restricted runtime API-key parts returned by
   Elasticsearch.
 - `PGSYNC_BOOTSTRAP_DB_USER` and `PGSYNC_BOOTSTRAP_DB_PASSWORD`: one-time
   database owner/bootstrap credential.
-- `PGSYNC_DB_USER` and `PGSYNC_DB_PASSWORD`: runtime logical-replication role.
-- Existing `TIMESCALE_DATABASE` and `VALKEY_PASSWORD` values. Compose exposes
-  the former to PGSync internally as `POSTGRES_DB` for schema substitution.
+- `PG_USER` and `PG_PASSWORD`: runtime logical-replication role.
+- `PG_HOST`, `PG_PORT`, `POSTGRES_DB`, and `PG_SSLMODE`: PostgreSQL connection.
+- `REDIS_HOST`, `REDIS_PORT`, and `REDIS_AUTH`: Valkey connection and password.
+
+The Compose service uses PGSync's native variable names directly. In Coolify,
+set each service variable to the corresponding shared server-variable reference;
+do not add a second `TIMESCALE_*`, `VALKEY_*`, or `PGSYNC_*` layer to the PGSync
+application.
 
 The PGSync container connects only through the private Compose network. None of
 PGSync, Elasticsearch, or Valkey should have a public port.
