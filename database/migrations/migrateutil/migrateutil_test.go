@@ -70,13 +70,24 @@ func TestTimescaleURLFromCanonicalEnvironment(t *testing.T) {
 	}
 }
 
-func TestTimescaleURLDoesNotAcceptLegacyURLVariables(t *testing.T) {
+func TestTimescaleURLFromExplicitURL(t *testing.T) {
+	const want = "postgres://tracking:secret@127.0.0.1:5432/clashking?sslmode=disable"
+	got, err := timescaleURLFromEnv(map[string]string{"TIMESCALE_URL": want})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("timescaleURLFromEnv() = %q, want %q", got, want)
+	}
+}
+
+func TestTimescaleURLRejectsIncompleteExplicitURL(t *testing.T) {
 	_, err := timescaleURLFromEnv(map[string]string{
 		"TIMESCALE_URL": "postgres://legacy",
 		"DATABASE_URL":  "postgres://legacy",
 	})
 	if err == nil {
-		t.Fatal("timescaleURLFromEnv() accepted legacy URL variables")
+		t.Fatal("timescaleURLFromEnv() accepted an explicit URL without a database")
 	}
 }
 
