@@ -575,19 +575,23 @@ CREATE TABLE public.legend_history (
 --
 
 CREATE TABLE public.player_change_history (
-    event_time timestamp with time zone DEFAULT now() CONSTRAINT player_profile_changes_event_time_not_null NOT NULL,
-    player_tag text CONSTRAINT player_profile_changes_player_tag_not_null NOT NULL,
-    clan_tag text DEFAULT ''::text CONSTRAINT player_profile_changes_clan_tag_not_null NOT NULL,
-    townhall_level integer DEFAULT 0 CONSTRAINT player_profile_changes_townhall_level_not_null NOT NULL,
-    change_type text CONSTRAINT player_profile_changes_change_type_not_null NOT NULL,
-    previous_value jsonb,
-    current_value jsonb
+    event_time timestamp with time zone NOT NULL,
+    player_tag text NOT NULL,
+    change_type smallint NOT NULL,
+    item_id smallint,
+    townhall_level smallint,
+    previous_value text NOT NULL,
+    current_value text NOT NULL,
+    CONSTRAINT player_change_history_change_type_check CHECK ((change_type >= 1) AND (change_type <= 12)),
+    CONSTRAINT player_change_history_item_id_check CHECK ((((change_type >= 1) AND (change_type <= 6) AND (item_id IS NOT NULL) AND (item_id >= 0)) OR ((change_type >= 7) AND (item_id IS NULL)))),
+    CONSTRAINT player_change_history_player_tag_check CHECK ((btrim(player_tag) <> ''::text)),
+    CONSTRAINT player_change_history_townhall_level_check CHECK (((townhall_level IS NULL) OR (townhall_level > 0)))
 );
 
 SELECT create_hypertable(
     'player_change_history',
     'event_time',
-    chunk_time_interval => INTERVAL '7 days',
+    chunk_time_interval => INTERVAL '3 months',
     create_default_indexes => FALSE,
     if_not_exists => TRUE
 );
@@ -1297,10 +1301,10 @@ CREATE INDEX idx_legend_rankings_current_rank ON public.legend_rankings_current 
 CREATE INDEX idx_player_change_history_player_time ON public.player_change_history USING btree (player_tag, event_time DESC);
 
 --
--- Name: idx_player_change_history_type_time; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_player_change_history_player_type_time; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_player_change_history_type_time ON public.player_change_history USING btree (change_type, event_time DESC);
+CREATE INDEX idx_player_change_history_player_type_time ON public.player_change_history USING btree (player_tag, change_type, event_time DESC);
 
 --
 -- Name: idx_player_online_events_clan_time; Type: INDEX; Schema: public; Owner: -
@@ -1446,12 +1450,6 @@ CREATE INDEX idx_wars_opponent_end_time ON public.wars USING btree (opponent_tag
 --
 
 CREATE INDEX idx_wars_war_tag ON public.wars USING btree (war_tag) WHERE (war_tag IS NOT NULL);
-
---
--- Name: player_change_history_event_time_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX player_change_history_event_time_idx ON public.player_change_history USING btree (event_time DESC);
 
 --
 -- Name: townhall_counts_level_idx; Type: INDEX; Schema: public; Owner: -

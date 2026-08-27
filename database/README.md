@@ -227,6 +227,37 @@ Each tool documents its required environment keys in code and fails closed when
 required values are absent. Never commit the local `.env` file or migration
 checkpoint data.
 
+Player change history is imported from `new_looper.player_history` into the
+normalized `player_change_history` hypertable. The importer is resumable: every
+committed SQL batch advances a SQL-side Mongo ObjectID checkpoint in the same
+transaction, and the temporary checkpoint row is removed after both destination
+indexes are rebuilt. It resolves compact item IDs from the ClashKing static-data
+JSON files; set `PLAYER_CHANGE_HISTORY_STATIC_DATA_DIR` when the assets repository
+is not in the usual sibling location.
+
+```bash
+cd migrations
+go run player_change_history.go
+```
+
+For a destructive validation import, `PLAYER_CHANGE_HISTORY_SAMPLE_DOCS` divides
+the requested document count across 40 evenly spaced ObjectID time windows by
+default. This still truncates only `player_change_history`, so use it only on a
+local or otherwise disposable destination:
+
+```bash
+PLAYER_CHANGE_HISTORY_SAMPLE_DOCS=1000000 go run player_change_history.go
+```
+
+The stored change type IDs are: troop level `1`, super-troop boost `2`, hero
+level `3`, spell level `4`, pet level `5`, equipment level `6`, Town Hall level
+`7`, best trophies `8`, best Builder Base trophies `9`, experience level `10`,
+war preference `11`, and player name `12`. Super boosts are normalized to
+`0 -> 1`; non-super equal values, decreases, missing previous values, broad
+equal-value snapshot clusters, and explicitly excluded legacy profile types are
+reported and skipped. The destination uses three-month hypertable chunks without
+a compression or Hypercore policy.
+
 The Goose baseline includes the consolidated canonical `servers`
 configuration schema.
 After it is applied, run the settings imports in this order:
