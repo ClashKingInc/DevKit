@@ -298,9 +298,20 @@ Historical official leaderboard data has two dedicated one-shot imports:
 
 ```bash
 cd migrations
+go run player_rankings_current.go
 go run leaderboard_history.go
 go run legend_history.go
 ```
+
+`player_rankings_current.go` reads `new_looper.leaderboard_db`, resolves its
+retained country name/code through the Clash locations catalog, and writes the
+normalized Home Village and Builder Base rows. The legacy collection clears
+rank fields when a player leaves a local leaderboard but deliberately keeps the
+last known country. The importer preserves that fact as a numeric-location row
+with nullable rank and points; global rows exist only for active global ranks.
+Legacy documents do not contain trophy values, so migrated placements retain
+their rank with a null `points` value. Set `PLAYER_RANKINGS_LOCATIONS_URL` only
+when the default ClashKing proxy locations endpoint must be replaced.
 
 Historical CWL league changes have a separate one-shot staging import:
 

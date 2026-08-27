@@ -626,7 +626,7 @@ CREATE TABLE public.player_rankings_current (
     points integer,
     CONSTRAINT player_rankings_current_global_rank_check CHECK (((location_id <> 'global'::text) OR (rank IS NOT NULL))),
     CONSTRAINT player_rankings_current_location_id_check CHECK (((location_id = 'global'::text) OR (location_id ~ '^[0-9]+$'::text))),
-    CONSTRAINT player_rankings_current_placement_check CHECK ((((rank IS NULL) AND (points IS NULL)) OR ((rank IS NOT NULL) AND (points IS NOT NULL) AND (rank > 0) AND (points >= 0)))),
+    CONSTRAINT player_rankings_current_placement_check CHECK ((((rank IS NULL) AND (points IS NULL)) OR ((rank IS NOT NULL) AND (rank > 0) AND ((points IS NULL) OR (points >= 0))))),
     CONSTRAINT player_rankings_current_ranking_type_check CHECK ((ranking_type = ANY (ARRAY['home'::text, 'builder_base'::text])))
 );
 
