@@ -170,6 +170,8 @@ CREATE TABLE public.war_archive_packs (
     compressed_bytes bigint DEFAULT 0 NOT NULL,
     first_end_time timestamp with time zone,
     last_end_time timestamp with time zone,
+    checkpoint_key text,
+    source_checkpoint text,
     stats jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     uploaded_at timestamp with time zone,
@@ -183,9 +185,7 @@ CREATE TABLE public.war_archive_packs (
 
 CREATE TABLE public.player_war_history (
     player_tag text NOT NULL,
-    period_start date NOT NULL,
-    war_ids integer[] DEFAULT '{}'::integer[] NOT NULL,
-    CONSTRAINT player_war_history_quarter_check CHECK ((EXTRACT(day FROM period_start) = 1) AND (EXTRACT(month FROM period_start) = ANY (ARRAY[1, 4, 7, 10])))
+    war_ids integer[] DEFAULT '{}'::integer[] NOT NULL
 );
 
 --
@@ -1005,7 +1005,7 @@ ALTER TABLE public.war_archive_pending
 --
 
 ALTER TABLE public.player_war_history
-    ADD CONSTRAINT player_war_history_pkey PRIMARY KEY (player_tag, period_start);
+    ADD CONSTRAINT player_war_history_pkey PRIMARY KEY (player_tag);
 
 --
 -- Name: war_schedule war_schedule_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -1403,6 +1403,10 @@ CREATE INDEX idx_war_archive_pending_unclaimed ON public.war_archive_pending USI
 --
 
 CREATE INDEX idx_war_archive_pending_pack ON public.war_archive_pending USING btree (pack_id, war_id) WHERE (pack_id IS NOT NULL);
+
+CREATE UNIQUE INDEX idx_war_archive_packs_migration_checkpoint
+    ON public.war_archive_packs USING btree (checkpoint_key, source_checkpoint)
+    WHERE ((source = 'migration'::text) AND (checkpoint_key IS NOT NULL) AND (source_checkpoint IS NOT NULL));
 
 --
 -- Name: idx_war_schedule_next_run; Type: INDEX; Schema: public; Owner: -

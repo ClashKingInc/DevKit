@@ -97,7 +97,7 @@ go run clan_wars.go
 
 The war importer writes immutable 10,000-war Zstd packs to R2, stores only the
 searchable war metadata and byte-range locator in Timescale, and builds
-quarterly player-to-war UUID arrays for every lineup member. It never changes
+integer war-ID arrays for every lineup member. It never changes
 the source Mongo collection. Configure `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, and
 `R2_SECRET_ACCESS_KEY`; the bucket defaults to `clashking-wars` and can be
 overridden with `WAR_ARCHIVE_BUCKET`. `WAR_ARCHIVE_S3_ENDPOINT` can replace the
@@ -109,7 +109,10 @@ before reading the next one. `WAR_ARCHIVE_PACK_WORKERS` controls total packs in
 flight (default: 24),
 `WAR_ARCHIVE_UPLOAD_WORKERS` limits concurrent R2 PUTs (default: 8), and
 `WAR_ARCHIVE_SQL_WORKERS` limits concurrent SQL preparation/finalization
-(default: 4). Checkpoints still advance in Mongo `_id` order. The 10,000-war
+(default: 4). Chronological backfills decode BSON in ordered batches using
+`WAR_ARCHIVE_DECODE_WORKERS` workers (default: 4), so pack boundaries and
+checkpoints remain in source order: `data.endTime` for chronological backfills
+and Mongo `_id` for explicitly split ranges. The 10,000-war
 per-second target therefore keeps 10,000-war packs and uses enough parallel
 pack work to hide construction, upload, and SQL latency without allowing
 unbounded memory, R2 requests, or database transactions.
@@ -121,7 +124,36 @@ checkpoint key; set `CLAN_WARS_CHECKPOINT_KEY` to name it explicitly and set a
 different `MIGRATION_STATE_FILE` for every concurrent process so worker writes
 cannot replace one another. Relative checkpoint paths resolve from the
 repository root. A worker resumes after its last fully uploaded and committed
-pack, and already stored deterministic war UUIDs are ignored safely.
+pack, and an already committed pack can recover its assigned war IDs from SQL
+without downloading the archive object.
+
+For the full backfill, set `WAR_ARCHIVE_DEFER_PLAYER_HISTORY=true`. Each archive
+worker then appends `(player_tag, war_id)` mappings to 256 hash shards under
+`WAR_ARCHIVE_HISTORY_SHARD_DIR`. A window becomes ready after 5,000,000 wars;
+the final partial window is also made ready when its archive worker exits.
+`WAR_ARCHIVE_HISTORY_RUN_ID` must be unique for each concurrently running source
+range, while the checkpoint key is used by default. The shard and window sizes
+can be changed with `WAR_ARCHIVE_HISTORY_SHARDS` and
+`WAR_ARCHIVE_HISTORY_WINDOW_WARS`. The shard directory is required and should
+be on persistent local storage. By default an archiver pauses before starting
+another mapping window while two ready or processing windows remain queued;
+`WAR_ARCHIVE_HISTORY_MAX_READY_WINDOWS` changes that bounded backlog.
+
+Run the history consumer alongside the archive workers so temporary mappings
+stay bounded instead of accumulating until the whole migration completes:
+
+```bash
+PLAYER_WAR_HISTORY_CONTINUOUS=true go run player_war_history.go
+```
+
+The consumer claims each ready window, reads only one hash shard at a time,
+deduplicates and sorts that shard's war IDs, and upserts one array per player.
+It writes a completion marker after each committed shard, so a restart resumes
+the remaining shards. The merge itself is idempotent, covering a stop between
+the SQL commit and its marker. A completed window is deleted only after every
+shard commits successfully. `PLAYER_WAR_HISTORY_WORKERS` controls parallel
+shard loads (default: 2), and `PLAYER_WAR_HISTORY_POLL_SECONDS` controls how
+often the continuous consumer looks for newly ready windows (default: 5).
 
 For a parallel full import, run the prepare-only command once to drop the three
 `wars` secondary indexes:
@@ -141,10 +173,10 @@ whose nested BSON shape still cannot be decoded are reported and skipped, and
 their ObjectID remains eligible for checkpoint advancement so one malformed
 record cannot block the rest of a bounded worker.
 
-After each durable PUT, the importer performs one best-effort HEAD through
+After each durable PUT, the importer performs one best-effort one-byte GET through
 `WAR_ARCHIVE_ORIGIN` (default: `https://wars.clashk.ing`). On a cache miss,
-Cloudflare fetches and stores the complete object while returning only headers
-to the importer. A cache-prime failure is logged but does not invalidate an
+Cloudflare fetches and stores the complete object while returning only the
+requested byte to the importer. A cache-prime failure is logged but does not invalidate an
 otherwise successful R2 upload.
 
 Every pack stores additive statistics under `stats.byDay`. Each UTC day records
