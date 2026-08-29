@@ -97,7 +97,7 @@ go run clan_wars.go
 
 The war importer writes immutable 10,000-war Zstd packs to R2, stores only the
 searchable war metadata and byte-range locator in Timescale, and builds
-quarterly player-to-war UUID arrays for every lineup member. It never changes
+integer war-ID arrays for every lineup member. It never changes
 the source Mongo collection. Configure `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, and
 `R2_SECRET_ACCESS_KEY`; the bucket defaults to `clashking-wars` and can be
 overridden with `WAR_ARCHIVE_BUCKET`. `WAR_ARCHIVE_S3_ENDPOINT` can replace the
@@ -109,7 +109,10 @@ before reading the next one. `WAR_ARCHIVE_PACK_WORKERS` controls total packs in
 flight (default: 24),
 `WAR_ARCHIVE_UPLOAD_WORKERS` limits concurrent R2 PUTs (default: 8), and
 `WAR_ARCHIVE_SQL_WORKERS` limits concurrent SQL preparation/finalization
-(default: 4). Checkpoints still advance in Mongo `_id` order. The 10,000-war
+(default: 4). Chronological backfills decode BSON in ordered batches using
+`WAR_ARCHIVE_DECODE_WORKERS` workers (default: 4), so pack boundaries and
+checkpoints remain in source order: `data.endTime` for chronological backfills
+and Mongo `_id` for explicitly split ranges. The 10,000-war
 per-second target therefore keeps 10,000-war packs and uses enough parallel
 pack work to hide construction, upload, and SQL latency without allowing
 unbounded memory, R2 requests, or database transactions.
@@ -121,7 +124,36 @@ checkpoint key; set `CLAN_WARS_CHECKPOINT_KEY` to name it explicitly and set a
 different `MIGRATION_STATE_FILE` for every concurrent process so worker writes
 cannot replace one another. Relative checkpoint paths resolve from the
 repository root. A worker resumes after its last fully uploaded and committed
-pack, and already stored deterministic war UUIDs are ignored safely.
+pack, and an already committed pack can recover its assigned war IDs from SQL
+without downloading the archive object.
+
+For the full backfill, set `WAR_ARCHIVE_DEFER_PLAYER_HISTORY=true`. Each archive
+worker then appends `(player_tag, war_id)` mappings to 256 hash shards under
+`WAR_ARCHIVE_HISTORY_SHARD_DIR`. A window becomes ready after 5,000,000 wars;
+the final partial window is also made ready when its archive worker exits.
+`WAR_ARCHIVE_HISTORY_RUN_ID` must be unique for each concurrently running source
+range, while the checkpoint key is used by default. The shard and window sizes
+can be changed with `WAR_ARCHIVE_HISTORY_SHARDS` and
+`WAR_ARCHIVE_HISTORY_WINDOW_WARS`. The shard directory is required and should
+be on persistent local storage. By default an archiver pauses before starting
+another mapping window while two ready or processing windows remain queued;
+`WAR_ARCHIVE_HISTORY_MAX_READY_WINDOWS` changes that bounded backlog.
+
+Run the history consumer alongside the archive workers so temporary mappings
+stay bounded instead of accumulating until the whole migration completes:
+
+```bash
+PLAYER_WAR_HISTORY_CONTINUOUS=true go run player_war_history.go
+```
+
+The consumer claims each ready window, reads only one hash shard at a time,
+deduplicates and sorts that shard's war IDs, and upserts one array per player.
+It writes a completion marker after each committed shard, so a restart resumes
+the remaining shards. The merge itself is idempotent, covering a stop between
+the SQL commit and its marker. A completed window is deleted only after every
+shard commits successfully. `PLAYER_WAR_HISTORY_WORKERS` controls parallel
+shard loads (default: 2), and `PLAYER_WAR_HISTORY_POLL_SECONDS` controls how
+often the continuous consumer looks for newly ready windows (default: 5).
 
 For a parallel full import, run the prepare-only command once to drop the three
 `wars` secondary indexes:
@@ -141,10 +173,10 @@ whose nested BSON shape still cannot be decoded are reported and skipped, and
 their ObjectID remains eligible for checkpoint advancement so one malformed
 record cannot block the rest of a bounded worker.
 
-After each durable PUT, the importer performs one best-effort HEAD through
+After each durable PUT, the importer performs one best-effort one-byte GET through
 `WAR_ARCHIVE_ORIGIN` (default: `https://wars.clashk.ing`). On a cache miss,
-Cloudflare fetches and stores the complete object while returning only headers
-to the importer. A cache-prime failure is logged but does not invalidate an
+Cloudflare fetches and stores the complete object while returning only the
+requested byte to the importer. A cache-prime failure is logged but does not invalidate an
 otherwise successful R2 upload.
 
 Every pack stores additive statistics under `stats.byDay`. Each UTC day records
@@ -195,6 +227,37 @@ Each tool documents its required environment keys in code and fails closed when
 required values are absent. Never commit the local `.env` file or migration
 checkpoint data.
 
+Player change history is imported from `new_looper.player_history` into the
+normalized `player_change_history` hypertable. The importer is resumable: every
+committed SQL batch advances a SQL-side Mongo ObjectID checkpoint in the same
+transaction, and the temporary checkpoint row is removed after both destination
+indexes are rebuilt. It resolves compact item IDs from the ClashKing static-data
+JSON files; set `PLAYER_CHANGE_HISTORY_STATIC_DATA_DIR` when the assets repository
+is not in the usual sibling location.
+
+```bash
+cd migrations
+go run player_change_history.go
+```
+
+For a destructive validation import, `PLAYER_CHANGE_HISTORY_SAMPLE_DOCS` divides
+the requested document count across 40 evenly spaced ObjectID time windows by
+default. This still truncates only `player_change_history`, so use it only on a
+local or otherwise disposable destination:
+
+```bash
+PLAYER_CHANGE_HISTORY_SAMPLE_DOCS=1000000 go run player_change_history.go
+```
+
+The stored change type IDs are: troop level `1`, super-troop boost `2`, hero
+level `3`, spell level `4`, pet level `5`, equipment level `6`, Town Hall level
+`7`, best trophies `8`, best Builder Base trophies `9`, experience level `10`,
+war preference `11`, and player name `12`. Super boosts are normalized to
+`0 -> 1`; non-super equal values, decreases, missing previous values, broad
+equal-value snapshot clusters, and explicitly excluded legacy profile types are
+reported and skipped. The destination uses three-month hypertable chunks without
+a compression or Hypercore policy.
+
 The Goose baseline includes the consolidated canonical `servers`
 configuration schema.
 After it is applied, run the settings imports in this order:
@@ -235,9 +298,20 @@ Historical official leaderboard data has two dedicated one-shot imports:
 
 ```bash
 cd migrations
+go run player_rankings_current.go
 go run leaderboard_history.go
 go run legend_history.go
 ```
+
+`player_rankings_current.go` reads `new_looper.leaderboard_db`, resolves its
+retained country name/code through the Clash locations catalog, and writes the
+normalized Home Village and Builder Base rows. The legacy collection clears
+rank fields when a player leaves a local leaderboard but deliberately keeps the
+last known country. The importer preserves that fact as a numeric-location row
+with nullable rank and points; global rows exist only for active global ranks.
+Legacy documents do not contain trophy values, so migrated placements retain
+their rank with a null `points` value. Set `PLAYER_RANKINGS_LOCATIONS_URL` only
+when the default ClashKing proxy locations endpoint must be replaced.
 
 Historical CWL league changes have a separate one-shot staging import:
 

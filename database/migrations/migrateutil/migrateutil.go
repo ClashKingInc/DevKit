@@ -188,6 +188,19 @@ func TimescalePool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 }
 
 func timescaleURLFromEnv(env map[string]string) (string, error) {
+	if raw := strings.TrimSpace(env["TIMESCALE_URL"]); raw != "" {
+		connection, err := url.Parse(raw)
+		if err != nil {
+			return "", fmt.Errorf("parse TIMESCALE_URL: %w", err)
+		}
+		if connection.Scheme != "postgres" && connection.Scheme != "postgresql" {
+			return "", errors.New("TIMESCALE_URL must use postgres or postgresql")
+		}
+		if connection.Hostname() == "" || strings.Trim(connection.Path, "/") == "" {
+			return "", errors.New("TIMESCALE_URL must include a host and database")
+		}
+		return connection.String(), nil
+	}
 	required := []string{"TIMESCALE_HOST", "TIMESCALE_USERNAME", "TIMESCALE_PASSWORD", "TIMESCALE_DATABASE"}
 	missing := make([]string, 0)
 	for _, key := range required {

@@ -265,7 +265,7 @@ func TestArchivePackPipelineCheckpointsCompletedPacksInSourceOrder(t *testing.T)
 	firstStarted := make(chan struct{})
 	secondFinished := make(chan struct{})
 	releaseFirst := make(chan struct{})
-	processor := func(_ context.Context, wars []archiveWar, _, _ chan struct{}) error {
+	processor := func(_ context.Context, wars []archiveWar, _, _ string, _, _ chan struct{}) error {
 		switch wars[0].SourceID {
 		case firstID:
 			close(firstStarted)
@@ -297,5 +297,35 @@ func TestArchivePackPipelineCheckpointsCompletedPacksInSourceOrder(t *testing.T)
 	}
 	if got := cp.Get("ordered"); got != "second" {
 		t.Fatalf("checkpoint = %q, want second", got)
+	}
+}
+
+func TestAggregatePlayerWarHistoryGroupsPlayersAndDeduplicatesSides(t *testing.T) {
+	endTime := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	rows := aggregatePlayerWarHistory([]archiveWar{
+		{
+			ID: 42,
+			War: wararchive.War{
+				EndTime:  endTime,
+				Clan:     wararchive.Clan{Members: []wararchive.Member{{Tag: "#A"}, {Tag: "#B"}}},
+				Opponent: wararchive.Clan{Members: []wararchive.Member{{Tag: "#B"}, {Tag: "#C"}}},
+			},
+		},
+		{
+			ID: 7,
+			War: wararchive.War{
+				EndTime: endTime,
+				Clan:    wararchive.Clan{Members: []wararchive.Member{{Tag: "#A"}}},
+			},
+		},
+	})
+	if len(rows) != 3 {
+		t.Fatalf("history rows = %d, want 3: %#v", len(rows), rows)
+	}
+	wantIDs := [][]int32{{7, 42}, {42}, {42}}
+	for index, tag := range []string{"#A", "#B", "#C"} {
+		if rows[index].playerTag != tag || !reflect.DeepEqual(rows[index].warIDs, wantIDs[index]) {
+			t.Fatalf("row %d = %#v", index, rows[index])
+		}
 	}
 }

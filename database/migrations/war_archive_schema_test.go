@@ -56,6 +56,15 @@ func TestWarArchiveBaseline(t *testing.T) {
 			t.Errorf("%s does not use the shared integer war ID", table)
 		}
 	}
+	packs := strings.ToLower(baselineTableDDL(t, string(raw), "war_archive_packs"))
+	for _, required := range []string{"checkpoint_key text", "source_checkpoint text"} {
+		if !strings.Contains(packs, required) {
+			t.Errorf("war_archive_packs baseline missing %q", required)
+		}
+	}
+	if !strings.Contains(migration, "idx_war_archive_packs_migration_checkpoint") {
+		t.Error("war archive migration checkpoints are not uniquely indexed")
+	}
 	if !strings.Contains(migration, "create sequence public.war_id_seq as integer") ||
 		!strings.Contains(migration, "alter sequence public.war_id_seq owned by public.wars.war_id") {
 		t.Error("war ID sequence is missing or is not owned by wars.war_id")
@@ -63,13 +72,11 @@ func TestWarArchiveBaseline(t *testing.T) {
 	if strings.Contains(playerHistory, "updated_at") {
 		t.Error("player_war_history retains unused updated_at column")
 	}
-	for _, required := range []string{
-		"primary key (player_tag, period_start)",
-		"player_war_history_quarter_check",
-	} {
-		if !strings.Contains(migration, required) {
-			t.Errorf("war archive baseline missing %q", required)
-		}
+	if !strings.Contains(migration, "primary key (player_tag)") {
+		t.Error("player war history does not use player_tag as its sole primary key")
+	}
+	if strings.Contains(playerHistory, "period_start") {
+		t.Error("player_war_history retains period_start")
 	}
 	if strings.Contains(migration, "foreign key (archive_pack_id) references public.war_archive_packs(pack_id)") {
 		t.Error("wars archive locator retains the high-contention pack foreign key")

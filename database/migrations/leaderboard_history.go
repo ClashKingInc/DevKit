@@ -82,8 +82,16 @@ func runLeaderboardHistory(ctx context.Context, cfg migrateutil.Config) error {
 	defer pool.Close()
 
 	plan := leaderboardHistoryOneShotPlan()
-	if err := migrateutil.StartOneShot(ctx, pool, plan); err != nil {
+	dateFrom, err := leaderboardHistoryDateFrom(cfg)
+	if err != nil {
 		return err
+	}
+	if dateFrom == nil {
+		if err := migrateutil.StartOneShot(ctx, pool, plan); err != nil {
+			return err
+		}
+	} else {
+		fmt.Printf("leaderboard histories: catch-up from=%s\n", dateFrom.Format("2006-01-02"))
 	}
 
 	var scannedDocs int64
@@ -102,16 +110,22 @@ func runLeaderboardHistory(ctx context.Context, cfg migrateutil.Config) error {
 			rows = make(map[string]leaderboardHistoryRow, cfg.BatchSize)
 			return nil
 		}
-		seen, err := migrateutil.StreamAllProjected(
+		projection := bson.D{
+			{Key: "location", Value: 1},
+			{Key: "date", Value: 1},
+			{Key: "data.items", Value: 1},
+		}
+		filter := bson.D{}
+		if dateFrom != nil {
+			filter = bson.D{{Key: "date", Value: bson.D{{Key: "$gte", Value: dateFrom.Format("2006-01-02")}}}}
+		}
+		seen, err := migrateutil.StreamFilteredProjected(
 			ctx,
 			cfg,
 			source.collection,
 			mongoClient.Database("ranking_history").Collection(source.collection),
-			bson.D{
-				{Key: "location", Value: 1},
-				{Key: "date", Value: 1},
-				{Key: "data.items", Value: 1},
-			},
+			filter,
+			projection,
 			func(doc bson.M) (bool, error) {
 				for _, row := range leaderboardRowsFromDocument(source, doc) {
 					rows[leaderboardHistoryRowKey(row)] = row
@@ -127,11 +141,25 @@ func runLeaderboardHistory(ctx context.Context, cfg migrateutil.Config) error {
 		fmt.Printf("ranking_history.%s: scanned_docs=%d\n", source.collection, seen)
 	}
 
-	if err := migrateutil.FinishOneShot(ctx, pool, plan); err != nil {
-		return err
+	if dateFrom == nil {
+		if err := migrateutil.FinishOneShot(ctx, pool, plan); err != nil {
+			return err
+		}
 	}
 	fmt.Printf("leaderboard histories: scanned_docs=%d rows=%d\n", scannedDocs, writtenRows)
 	return nil
+}
+
+func leaderboardHistoryDateFrom(cfg migrateutil.Config) (*time.Time, error) {
+	raw := strings.TrimSpace(cfg.Env["LEADERBOARD_HISTORY_DATE_FROM"])
+	if raw == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse("2006-01-02", raw)
+	if err != nil {
+		return nil, fmt.Errorf("LEADERBOARD_HISTORY_DATE_FROM must be YYYY-MM-DD: %w", err)
+	}
+	return &parsed, nil
 }
 
 func leaderboardHistoryOneShotPlan() migrateutil.OneShotPlan {

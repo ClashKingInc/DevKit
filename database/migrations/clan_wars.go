@@ -19,6 +19,7 @@ import (
 
 	"github.com/ClashKingInc/DevKit/database/migrations/migrateutil"
 	"github.com/ClashKingInc/DevKit/database/wararchive"
+	"github.com/ClashKingInc/DevKit/database/warhistory"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -35,6 +36,10 @@ const (
 	defaultWarArchivePackWorkers   = 24
 	defaultWarArchiveUploadWorkers = 8
 	defaultWarArchiveSQLWorkers    = 4
+	defaultWarArchiveDecodeWorkers = 4
+	defaultWarHistoryWindowWars    = 5_000_000
+	defaultWarHistoryShards        = 256
+	defaultWarHistoryReadyWindows  = 2
 )
 
 func main() {
@@ -90,8 +95,10 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) error {
 	if err != nil {
 		return err
 	}
-	if err := cleanupBuildingMigrationPacks(ctx, pool, store); err != nil {
-		return err
+	if !envBool(cfg.Env, "WAR_ARCHIVE_SKIP_STARTUP_CLEANUP") {
+		if err := cleanupBuildingMigrationPacks(ctx, pool, store); err != nil {
+			return err
+		}
 	}
 	mongoClient, err := migrateutil.StatsClient(ctx, cfg)
 	if err != nil {
@@ -130,8 +137,15 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) error {
 	packWorkers := envInt(cfg.Env, "WAR_ARCHIVE_PACK_WORKERS", defaultWarArchivePackWorkers)
 	uploadWorkers := envInt(cfg.Env, "WAR_ARCHIVE_UPLOAD_WORKERS", minInt(defaultWarArchiveUploadWorkers, packWorkers))
 	sqlWorkers := envInt(cfg.Env, "WAR_ARCHIVE_SQL_WORKERS", minInt(defaultWarArchiveSQLWorkers, packWorkers))
-	if packWorkers <= 0 || uploadWorkers <= 0 || sqlWorkers <= 0 {
-		return errors.New("WAR_ARCHIVE_PACK_WORKERS, WAR_ARCHIVE_UPLOAD_WORKERS, and WAR_ARCHIVE_SQL_WORKERS must be positive")
+	decodeWorkers := envInt(cfg.Env, "WAR_ARCHIVE_DECODE_WORKERS", defaultWarArchiveDecodeWorkers)
+	sqlBatchWars := envInt(cfg.Env, "WAR_ARCHIVE_SQL_BATCH_WARS", 100_000)
+	sqlBatchWait := time.Duration(envInt(cfg.Env, "WAR_ARCHIVE_SQL_BATCH_MAX_WAIT_SECONDS", 30)) * time.Second
+	deferPlayerHistory := envBool(cfg.Env, "WAR_ARCHIVE_DEFER_PLAYER_HISTORY")
+	if packWorkers <= 0 || uploadWorkers <= 0 || sqlWorkers <= 0 || decodeWorkers <= 0 {
+		return errors.New("WAR_ARCHIVE_PACK_WORKERS, WAR_ARCHIVE_UPLOAD_WORKERS, WAR_ARCHIVE_SQL_WORKERS, and WAR_ARCHIVE_DECODE_WORKERS must be positive")
+	}
+	if sqlBatchWars <= 0 || sqlBatchWait <= 0 {
+		return errors.New("WAR_ARCHIVE_SQL_BATCH_WARS and WAR_ARCHIVE_SQL_BATCH_MAX_WAIT_SECONDS must be positive")
 	}
 	manageIndexes := clanTag == "" && cwlClanTag == "" && !envBool(cfg.Env, "CLAN_WARS_SKIP_INDEX_MANAGEMENT")
 	if manageIndexes {
@@ -139,12 +153,40 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) error {
 			return err
 		}
 	}
+	var historyWriter *warhistory.Writer
+	if deferPlayerHistory {
+		historyRoot := strings.TrimSpace(cfg.Env["WAR_ARCHIVE_HISTORY_SHARD_DIR"])
+		if historyRoot == "" {
+			return errors.New("WAR_ARCHIVE_HISTORY_SHARD_DIR is required when WAR_ARCHIVE_DEFER_PLAYER_HISTORY=true")
+		}
+		historyRunID := firstNonEmptyString(cfg.Env["WAR_ARCHIVE_HISTORY_RUN_ID"], checkpointKey)
+		historyWriter, err = warhistory.NewWriter(
+			historyRoot,
+			historyRunID,
+			envInt(cfg.Env, "WAR_ARCHIVE_HISTORY_SHARDS", defaultWarHistoryShards),
+			envInt(cfg.Env, "WAR_ARCHIVE_HISTORY_WINDOW_WARS", defaultWarHistoryWindowWars),
+			envInt(cfg.Env, "WAR_ARCHIVE_HISTORY_MAX_READY_WINDOWS", defaultWarHistoryReadyWindows),
+		)
+		if err != nil {
+			return fmt.Errorf("open player-history window writer: %w", err)
+		}
+		fmt.Printf("clan_wars: player_history_root=%s run_id=%s shards=%d window_wars=%d max_ready_windows=%d\n",
+			historyRoot, warhistory.SafeRunID(historyRunID),
+			envInt(cfg.Env, "WAR_ARCHIVE_HISTORY_SHARDS", defaultWarHistoryShards),
+			envInt(cfg.Env, "WAR_ARCHIVE_HISTORY_WINDOW_WARS", defaultWarHistoryWindowWars),
+			envInt(cfg.Env, "WAR_ARCHIVE_HISTORY_MAX_READY_WINDOWS", defaultWarHistoryReadyWindows))
+		defer historyWriter.Close()
+	}
 
+	finalizer := newArchiveSQLBatcher(ctx, pool, sqlWorkers, sqlBatchWars, sqlBatchWait, deferPlayerHistory)
 	pipeline := newArchivePackPipeline(ctx, packWorkers, uploadWorkers, sqlWorkers, cp, checkpointKey,
-		func(processCtx context.Context, batch []archiveWar, sqlGate, uploadGate chan struct{}) error {
-			return flushArchivePack(processCtx, pool, store, dictionary, batch, sqlGate, uploadGate)
+		func(processCtx context.Context, batch []archiveWar, batchCheckpointKey, batchCheckpoint string, sqlGate, uploadGate chan struct{}) error {
+			return flushArchivePack(processCtx, pool, store, dictionary, finalizer, historyWriter, batchCheckpointKey, batchCheckpoint, batch, sqlGate, uploadGate)
 		})
-	defer pipeline.Close()
+	defer func() {
+		pipeline.Close()
+		finalizer.Close()
+	}()
 	collection := mongoClient.Database("looper").Collection("clan_war")
 	pending := make([]archiveWar, 0, packSize)
 	flush := func(checkpoint string) error {
@@ -153,12 +195,12 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) error {
 		return pipeline.Submit(batch, checkpoint)
 	}
 
-	fmt.Printf("clan_wars: pack_size=%d pack_workers=%d upload_workers=%d sql_workers=%d chronological=%t\n", packSize, packWorkers, uploadWorkers, sqlWorkers, chronological)
+	fmt.Printf("clan_wars: pack_size=%d pack_workers=%d upload_workers=%d sql_workers=%d decode_workers=%d sql_batch_wars=%d sql_batch_wait=%s chronological=%t defer_player_history=%t\n", packSize, packWorkers, uploadWorkers, sqlWorkers, decodeWorkers, sqlBatchWars, sqlBatchWait, chronological, deferPlayerHistory)
 	var seen int64
 	var streamErr error
 	if chronological {
 		var pendingEndTime string
-		seen, streamErr = streamClanWarDocsChronological(ctx, cfg, cp, checkpointKey, collection, filter, clanWarProjection(), func(doc clanWarDoc, sourceEndTime string) error {
+		seen, streamErr = streamClanWarDocsChronological(ctx, cfg, cp, checkpointKey, collection, filter, clanWarProjection(), decodeWorkers, func(doc clanWarDoc, sourceEndTime string) error {
 			war, ok := canonicalArchiveWar(doc)
 			if !ok {
 				return nil
@@ -186,11 +228,20 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) error {
 		}, flush)
 	}
 	pipelineErr := pipeline.Close()
+	finalizerErr := finalizer.Close()
 	if streamErr != nil {
 		return streamErr
 	}
 	if pipelineErr != nil {
 		return pipelineErr
+	}
+	if finalizerErr != nil {
+		return finalizerErr
+	}
+	if historyWriter != nil {
+		if err := historyWriter.Close(); err != nil {
+			return fmt.Errorf("seal final player-history window: %w", err)
+		}
 	}
 	if manageIndexes {
 		if err := recreateClanWarSecondaryIndexes(ctx, pool); err != nil {
@@ -201,7 +252,7 @@ func runClanWars(ctx context.Context, cfg migrateutil.Config) error {
 	return nil
 }
 
-type archivePackProcessor func(context.Context, []archiveWar, chan struct{}, chan struct{}) error
+type archivePackProcessor func(context.Context, []archiveWar, string, string, chan struct{}, chan struct{}) error
 
 type archivePackFuture struct {
 	checkpoint string
@@ -258,7 +309,7 @@ func (p *archivePackPipeline) Submit(input []archiveWar, checkpoint string) erro
 			done <- nil
 			return
 		}
-		done <- p.process(p.ctx, batch, p.sqlGate, p.uploadGate)
+		done <- p.process(p.ctx, batch, p.cpKey, checkpoint, p.sqlGate, p.uploadGate)
 	}()
 	return nil
 }
@@ -371,10 +422,31 @@ func canonicalArchiveClan(clan warClanDoc) wararchive.Clan {
 	}
 }
 
-func flushArchivePack(ctx context.Context, pool *pgxpool.Pool, store *warArchiveStore, dictionary []byte, input []archiveWar, sqlGate, uploadGate chan struct{}) (returnErr error) {
+func flushArchivePack(ctx context.Context, pool *pgxpool.Pool, store *warArchiveStore, dictionary []byte, finalizer *archiveSQLBatcher, historyWriter *warhistory.Writer, checkpointKey, checkpoint string, input []archiveWar, sqlGate, uploadGate chan struct{}) (returnErr error) {
 	started := time.Now()
 	if err := acquireArchiveGate(ctx, sqlGate); err != nil {
 		return err
+	}
+	completedPackID, alreadyComplete, err := completedMigrationPack(ctx, pool, checkpointKey, checkpoint)
+	if err != nil {
+		releaseArchiveGate(sqlGate)
+		return err
+	}
+	if alreadyComplete {
+		wars := append([]archiveWar(nil), input...)
+		if historyWriter != nil {
+			if err := assignCompletedWarIDs(ctx, pool, completedPackID, wars); err != nil {
+				releaseArchiveGate(sqlGate)
+				return err
+			}
+			if err := historyWriter.Append(ctx, playerHistoryMappings(wars)); err != nil {
+				releaseArchiveGate(sqlGate)
+				return err
+			}
+		}
+		releaseArchiveGate(sqlGate)
+		fmt.Printf("clan_wars: reused completed checkpoint key=%s cursor=%s pack=%d\n", checkpointKey, checkpoint, completedPackID)
+		return nil
 	}
 	wars := append([]archiveWar(nil), input...)
 	if len(wars) == 0 {
@@ -385,7 +457,7 @@ func flushArchivePack(ctx context.Context, pool *pgxpool.Pool, store *warArchive
 		releaseArchiveGate(sqlGate)
 		return err
 	}
-	packID, err := reserveMigrationPack(ctx, pool)
+	packID, err := reserveMigrationPack(ctx, pool, checkpointKey, checkpoint)
 	releaseArchiveGate(sqlGate)
 	if err != nil {
 		return err
@@ -439,17 +511,21 @@ func flushArchivePack(ctx context.Context, pool *pgxpool.Pool, store *warArchive
 	}
 	primeDuration := time.Since(primeStarted)
 	releaseArchiveGate(uploadGate)
-	if err := acquireArchiveGate(ctx, sqlGate); err != nil {
+	finalizeStarted := time.Now()
+	prepared := preparedArchivePack{
+		packID: packID, wars: wars, locators: append([]wararchive.Locator(nil), builder.Locators()...),
+		stats: stats, firstEnd: firstEnd, lastEnd: lastEnd,
+	}
+	if err := finalizer.Submit(ctx, prepared); err != nil {
 		return err
 	}
-	finalizeStarted := time.Now()
-	if err := finalizeArchivePack(ctx, pool, packID, wars, builder.Locators(), stats, firstEnd, lastEnd); err != nil {
-		releaseArchiveGate(sqlGate)
-		return err
+	completed = true
+	if historyWriter != nil {
+		if err := historyWriter.Append(ctx, playerHistoryMappings(wars)); err != nil {
+			return fmt.Errorf("append player-history mappings for pack %d: %w", packID, err)
+		}
 	}
 	finalizeDuration := time.Since(finalizeStarted)
-	releaseArchiveGate(sqlGate)
-	completed = true
 	fmt.Printf("clan_wars: uploaded pack=%d wars=%d attacks=%d raw_bytes=%d compressed_bytes=%d build=%s upload=%s prime=%s finalize=%s total=%s\n",
 		packID, len(wars), stats.TotalAttacks(), sumRawBytes(builder.Locators()), len(object), buildDuration, uploadDuration, primeDuration, finalizeDuration, time.Since(started))
 	return nil
@@ -492,13 +568,69 @@ func assignWarIDs(ctx context.Context, pool *pgxpool.Pool, wars []archiveWar) er
 	return nil
 }
 
-func reserveMigrationPack(ctx context.Context, pool *pgxpool.Pool) (int64, error) {
+func completedMigrationPack(ctx context.Context, pool *pgxpool.Pool, checkpointKey, checkpoint string) (int64, bool, error) {
 	var packID int64
 	err := pool.QueryRow(ctx, `
-		INSERT INTO war_archive_packs (source, status)
-		VALUES ('migration', 'building')
+		SELECT pack_id
+		FROM war_archive_packs
+		WHERE source = 'migration' AND status = 'uploaded'
+		  AND checkpoint_key = $1 AND source_checkpoint = $2
+	`, checkpointKey, checkpoint).Scan(&packID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	return packID, err == nil, err
+}
+
+func assignCompletedWarIDs(ctx context.Context, pool *pgxpool.Pool, packID int64, wars []archiveWar) error {
+	rows, err := pool.Query(ctx, `
+		SELECT war_id, clan_tag, opponent_tag, prep_time
+		FROM wars
+		WHERE archive_pack_id = $1
+	`, packID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	ids := make(map[string]int32, len(wars))
+	for rows.Next() {
+		var warID int32
+		var clanTag, opponentTag string
+		var preparationTime time.Time
+		if err := rows.Scan(&warID, &clanTag, &opponentTag, &preparationTime); err != nil {
+			return err
+		}
+		ids[completedWarIdentity(clanTag, opponentTag, preparationTime)] = warID
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for index := range wars {
+		identity := completedWarIdentity(wars[index].War.Clan.Tag, wars[index].War.Opponent.Tag, wars[index].War.PreparationStartTime)
+		warID, exists := ids[identity]
+		if !exists {
+			return fmt.Errorf("completed archive pack %d has no SQL war matching %s", packID, identity)
+		}
+		wars[index].ID = warID
+		wars[index].War.ID = warID
+	}
+	return nil
+}
+
+func completedWarIdentity(clanTag, opponentTag string, preparationTime time.Time) string {
+	if clanTag > opponentTag {
+		clanTag, opponentTag = opponentTag, clanTag
+	}
+	return clanTag + "\x00" + opponentTag + "\x00" + preparationTime.UTC().Format(time.RFC3339Nano)
+}
+
+func reserveMigrationPack(ctx context.Context, pool *pgxpool.Pool, checkpointKey, checkpoint string) (int64, error) {
+	var packID int64
+	err := pool.QueryRow(ctx, `
+		INSERT INTO war_archive_packs (source, status, checkpoint_key, source_checkpoint)
+		VALUES ('migration', 'building', $1, $2)
 		RETURNING pack_id
-	`).Scan(&packID)
+	`, checkpointKey, checkpoint).Scan(&packID)
 	return packID, err
 }
 
@@ -551,21 +683,191 @@ type warStageRow struct {
 	locator wararchive.Locator
 }
 
-func finalizeArchivePack(ctx context.Context, pool *pgxpool.Pool, packID int64, wars []archiveWar, locators []wararchive.Locator, stats wararchive.PackStats, firstEnd, lastEnd time.Time) error {
-	if len(wars) != len(locators) {
-		return errors.New("archive war and locator counts differ")
+type preparedArchivePack struct {
+	packID   int64
+	wars     []archiveWar
+	locators []wararchive.Locator
+	stats    wararchive.PackStats
+	firstEnd time.Time
+	lastEnd  time.Time
+}
+
+type archiveFinalizeRequest struct {
+	pack preparedArchivePack
+	done chan error
+}
+
+type archiveSQLBatcher struct {
+	ctx                context.Context
+	pool               *pgxpool.Pool
+	workers            int
+	maxWars            int
+	maxDelay           time.Duration
+	deferPlayerHistory bool
+	input              chan archiveFinalizeRequest
+	done               chan struct{}
+	closeOnce          sync.Once
+	mu                 sync.Mutex
+	err                error
+}
+
+func newArchiveSQLBatcher(ctx context.Context, pool *pgxpool.Pool, workers, maxWars int, maxDelay time.Duration, deferPlayerHistory bool) *archiveSQLBatcher {
+	batcher := &archiveSQLBatcher{
+		ctx: ctx, pool: pool, workers: workers, maxWars: maxWars, maxDelay: maxDelay, deferPlayerHistory: deferPlayerHistory,
+		input: make(chan archiveFinalizeRequest), done: make(chan struct{}),
+	}
+	go batcher.run()
+	return batcher
+}
+
+func (b *archiveSQLBatcher) Submit(ctx context.Context, pack preparedArchivePack) error {
+	request := archiveFinalizeRequest{pack: pack, done: make(chan error, 1)}
+	select {
+	case b.input <- request:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-b.done:
+		return b.result()
+	}
+	select {
+	case err := <-request.done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (b *archiveSQLBatcher) Close() error {
+	b.closeOnce.Do(func() { close(b.input) })
+	<-b.done
+	return b.result()
+}
+
+func (b *archiveSQLBatcher) result() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.err
+}
+
+func (b *archiveSQLBatcher) setError(err error) {
+	b.mu.Lock()
+	if b.err == nil {
+		b.err = err
+	}
+	b.mu.Unlock()
+}
+
+func (b *archiveSQLBatcher) run() {
+	defer close(b.done)
+	type finalizeBatch struct {
+		requests []archiveFinalizeRequest
+		warCount int
+	}
+	jobs := make(chan finalizeBatch)
+	var workers sync.WaitGroup
+	for range b.workers {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for job := range jobs {
+				packs := make([]preparedArchivePack, len(job.requests))
+				for index := range job.requests {
+					packs[index] = job.requests[index].pack
+				}
+				started := time.Now()
+				err := b.result()
+				if err == nil {
+					err = finalizeArchivePacks(b.ctx, b.pool, packs, b.deferPlayerHistory)
+					if err != nil {
+						b.setError(err)
+					}
+				}
+				fmt.Printf("clan_wars: finalized sql_batch packs=%d wars=%d duration=%s error=%v\n", len(packs), job.warCount, time.Since(started), err)
+				for _, request := range job.requests {
+					request.done <- err
+				}
+			}
+		}()
+	}
+	timer := time.NewTimer(b.maxDelay)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	var pending []archiveFinalizeRequest
+	warCount := 0
+	flush := func() {
+		if len(pending) == 0 {
+			return
+		}
+		requests := append([]archiveFinalizeRequest(nil), pending...)
+		jobs <- finalizeBatch{requests: requests, warCount: warCount}
+		pending = pending[:0]
+		warCount = 0
+	}
+	for {
+		select {
+		case request, ok := <-b.input:
+			if !ok {
+				flush()
+				close(jobs)
+				workers.Wait()
+				return
+			}
+			if err := b.result(); err != nil {
+				request.done <- err
+				continue
+			}
+			pending = append(pending, request)
+			warCount += len(request.pack.wars)
+			if len(pending) == 1 {
+				timer.Reset(b.maxDelay)
+			}
+			if warCount >= b.maxWars {
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				flush()
+			}
+		case <-timer.C:
+			flush()
+		case <-b.ctx.Done():
+			b.setError(b.ctx.Err())
+			flush()
+			close(jobs)
+			workers.Wait()
+			return
+		}
+	}
+}
+
+func finalizeArchivePacks(ctx context.Context, pool *pgxpool.Pool, packs []preparedArchivePack, deferPlayerHistory bool) error {
+	if len(packs) == 0 {
+		return nil
 	}
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SET LOCAL work_mem = '512MB'`); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `CREATE TEMP TABLE war_archive_stage (LIKE wars INCLUDING DEFAULTS) ON COMMIT DROP`); err != nil {
 		return err
 	}
-	rows := make([]warStageRow, len(wars))
-	for index := range wars {
-		rows[index] = warStageRow{value: wars[index], locator: locators[index]}
+	var rows []warStageRow
+	var allWars []archiveWar
+	for _, pack := range packs {
+		if len(pack.wars) != len(pack.locators) {
+			return fmt.Errorf("archive pack %d war and locator counts differ", pack.packID)
+		}
+		allWars = append(allWars, pack.wars...)
+		for index := range pack.wars {
+			rows = append(rows, warStageRow{value: pack.wars[index], locator: pack.locators[index]})
+		}
 	}
 	columns := []string{
 		"war_id", "clan_tag", "opponent_tag", "prep_time", "start_time", "end_time", "size", "attacks_per_member",
@@ -582,7 +884,7 @@ func finalizeArchivePack(ctx context.Context, pool *pgxpool.Pool, packID int64, 
 			war.TeamSize, war.AttacksPerMember, row.value.WarType, war.State, war.BattleModifier, nullString(war.WarTag),
 			war.Clan.Name, war.Opponent.Name, war.Clan.BadgeToken, war.Opponent.BadgeToken, war.Clan.ClanLevel,
 			war.Opponent.ClanLevel, war.Clan.Attacks, war.Opponent.Attacks, war.Clan.Stars, war.Opponent.Stars,
-			war.Clan.DestructionPercentage, war.Opponent.DestructionPercentage, packID, row.locator.Offset,
+			war.Clan.DestructionPercentage, war.Opponent.DestructionPercentage, int64(row.locator.PackID), row.locator.Offset,
 			row.locator.CompressedBytes,
 		}, nil
 	})); err != nil {
@@ -598,86 +900,107 @@ func finalizeArchivePack(ctx context.Context, pool *pgxpool.Pool, packID int64, 
 	`); err != nil {
 		return err
 	}
-	if err := upsertPlayerWarHistory(ctx, tx, wars); err != nil {
-		return err
+	if !deferPlayerHistory {
+		if err := upsertPlayerWarHistory(ctx, tx, allWars); err != nil {
+			return err
+		}
 	}
-	statsJSON, err := json.Marshal(stats)
-	if err != nil {
-		return err
-	}
-	result, err := tx.Exec(ctx, `
-		UPDATE war_archive_packs
-		SET status = 'uploaded', war_count = $2, attack_count = $3, raw_bytes = $4,
-			compressed_bytes = $5, first_end_time = $6, last_end_time = $7,
-			stats = $8, uploaded_at = now()
-		WHERE pack_id = $1 AND source = 'migration' AND status = 'building'
-	`, packID, len(wars), stats.TotalAttacks(), sumRawBytes(locators), sumCompressedBytes(locators), firstEnd, lastEnd, statsJSON)
-	if err != nil {
-		return err
-	}
-	if result.RowsAffected() != 1 {
-		return fmt.Errorf("finalized %d migration pack rows, expected 1", result.RowsAffected())
+	for _, pack := range packs {
+		statsJSON, err := json.Marshal(pack.stats)
+		if err != nil {
+			return err
+		}
+		result, err := tx.Exec(ctx, `
+			UPDATE war_archive_packs
+			SET status = 'uploaded', war_count = $2, attack_count = $3, raw_bytes = $4,
+				compressed_bytes = $5, first_end_time = $6, last_end_time = $7,
+				stats = $8, uploaded_at = now()
+			WHERE pack_id = $1 AND source = 'migration' AND status = 'building'
+		`, pack.packID, len(pack.wars), pack.stats.TotalAttacks(), sumRawBytes(pack.locators), sumCompressedBytes(pack.locators), pack.firstEnd, pack.lastEnd, statsJSON)
+		if err != nil {
+			return err
+		}
+		if result.RowsAffected() != 1 {
+			return fmt.Errorf("finalized %d rows for migration pack %d, expected 1", result.RowsAffected(), pack.packID)
+		}
 	}
 	return tx.Commit(ctx)
 }
 
-type historyStageRow struct {
-	playerTag   string
-	periodStart time.Time
-	warID       int32
-}
-
 func upsertPlayerWarHistory(ctx context.Context, tx pgx.Tx, wars []archiveWar) error {
-	rows := make([]historyStageRow, 0, len(wars)*50)
-	seen := make(map[string]struct{}, len(wars)*50)
-	for _, value := range wars {
-		period := quarterStart(value.War.EndTime)
-		for _, clan := range []wararchive.Clan{value.War.Clan, value.War.Opponent} {
-			for _, member := range clan.Members {
-				key := member.Tag + "\x00" + strconv.FormatInt(int64(value.ID), 10)
-				if member.Tag == "" {
-					continue
-				}
-				if _, exists := seen[key]; exists {
-					continue
-				}
-				seen[key] = struct{}{}
-				rows = append(rows, historyStageRow{playerTag: member.Tag, periodStart: period, warID: value.ID})
-			}
-		}
-	}
+	rows := aggregatePlayerWarHistory(wars)
 	if len(rows) == 0 {
 		return nil
 	}
-	if _, err := tx.Exec(ctx, `CREATE TEMP TABLE player_war_history_stage (player_tag text, period_start date, war_id integer) ON COMMIT DROP`); err != nil {
+	if _, err := tx.Exec(ctx, `CREATE TEMP TABLE player_war_history_stage (player_tag text, war_ids integer[]) ON COMMIT DROP`); err != nil {
 		return err
 	}
-	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"player_war_history_stage"}, []string{"player_tag", "period_start", "war_id"}, pgx.CopyFromSlice(len(rows), func(index int) ([]any, error) {
+	_, err := tx.CopyFrom(ctx, pgx.Identifier{"player_war_history_stage"}, []string{"player_tag", "war_ids"}, pgx.CopyFromSlice(len(rows), func(index int) ([]any, error) {
 		row := rows[index]
-		return []any{row.playerTag, row.periodStart, row.warID}, nil
-	})); err != nil {
+		return []any{row.playerTag, row.warIDs}, nil
+	}))
+	if err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, `
-		INSERT INTO player_war_history (player_tag, period_start, war_ids)
-		SELECT player_tag, period_start, array_agg(DISTINCT war_id ORDER BY war_id)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO player_war_history (player_tag, war_ids)
+		SELECT player_tag, war_ids
 		FROM player_war_history_stage
-		GROUP BY player_tag, period_start
-		ORDER BY player_tag, period_start
-		ON CONFLICT (player_tag, period_start) DO UPDATE SET
-			war_ids = ARRAY(
-				SELECT DISTINCT id
-				FROM unnest(player_war_history.war_ids || EXCLUDED.war_ids) AS id
-				ORDER BY id
-			)
+		ORDER BY player_tag
+		ON CONFLICT (player_tag) DO UPDATE SET
+			war_ids = player_war_history.war_ids || EXCLUDED.war_ids
 	`)
 	return err
 }
 
-func quarterStart(value time.Time) time.Time {
-	value = value.UTC()
-	month := time.Month(((int(value.Month()) - 1) / 3 * 3) + 1)
-	return time.Date(value.Year(), month, 1, 0, 0, 0, 0, time.UTC)
+type playerWarHistoryRow struct {
+	playerTag string
+	warIDs    []int32
+}
+
+func playerHistoryMappings(wars []archiveWar) []warhistory.WarMappings {
+	mappings := make([]warhistory.WarMappings, 0, len(wars))
+	for _, war := range wars {
+		playerTags := make([]string, 0, len(war.War.Clan.Members)+len(war.War.Opponent.Members))
+		for _, members := range [][]wararchive.Member{war.War.Clan.Members, war.War.Opponent.Members} {
+			for _, member := range members {
+				if member.Tag == "" {
+					continue
+				}
+				playerTags = append(playerTags, member.Tag)
+			}
+		}
+		mappings = append(mappings, warhistory.WarMappings{WarID: war.ID, PlayerTags: playerTags})
+	}
+	return mappings
+}
+
+func aggregatePlayerWarHistory(wars []archiveWar) []playerWarHistoryRow {
+	grouped := make(map[string][]int32)
+	for _, war := range wars {
+		seen := make(map[string]struct{}, len(war.War.Clan.Members)+len(war.War.Opponent.Members))
+		for _, members := range [][]wararchive.Member{war.War.Clan.Members, war.War.Opponent.Members} {
+			for _, member := range members {
+				if member.Tag == "" {
+					continue
+				}
+				if _, exists := seen[member.Tag]; exists {
+					continue
+				}
+				seen[member.Tag] = struct{}{}
+				grouped[member.Tag] = append(grouped[member.Tag], war.ID)
+			}
+		}
+	}
+	rows := make([]playerWarHistoryRow, 0, len(grouped))
+	for playerTag, warIDs := range grouped {
+		sort.Slice(warIDs, func(i, j int) bool { return warIDs[i] < warIDs[j] })
+		rows = append(rows, playerWarHistoryRow{playerTag: playerTag, warIDs: warIDs})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].playerTag < rows[j].playerTag
+	})
+	return rows
 }
 
 func sumRawBytes(rows []wararchive.Locator) int64 {
@@ -1191,7 +1514,18 @@ func streamClanWarDocs(ctx context.Context, cfg migrateutil.Config, cp *migrateu
 	return seen, nil
 }
 
-func streamClanWarDocsChronological(ctx context.Context, cfg migrateutil.Config, cp *migrateutil.Checkpoint, cpKey string, collection *mongo.Collection, baseFilter bson.D, projection any, handle func(clanWarDoc, string) error) (int64, error) {
+type chronologicalRawWar struct {
+	raw     bson.Raw
+	endTime string
+	id      string
+}
+
+type chronologicalDecodedWar struct {
+	doc clanWarDoc
+	err error
+}
+
+func streamClanWarDocsChronological(ctx context.Context, cfg migrateutil.Config, cp *migrateutil.Checkpoint, cpKey string, collection *mongo.Collection, baseFilter bson.D, projection any, decodeWorkers int, handle func(clanWarDoc, string) error) (int64, error) {
 	filter := append(bson.D(nil), baseFilter...)
 	if checkpoint := strings.TrimSpace(cp.Get(cpKey)); checkpoint != "" {
 		filter = bson.D{{Key: "$and", Value: bson.A{
@@ -1214,6 +1548,42 @@ func streamClanWarDocsChronological(ctx context.Context, cfg migrateutil.Config,
 	defer func() { progress.Done(seen) }()
 	var malformed int64
 	var lastEndTime string
+	decodeBatchSize := max(256, decodeWorkers*256)
+	batch := make([]chronologicalRawWar, 0, decodeBatchSize)
+	processBatch := func() error {
+		decoded := make([]chronologicalDecodedWar, len(batch))
+		jobs := make(chan int)
+		var workers sync.WaitGroup
+		for range min(decodeWorkers, len(batch)) {
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				for index := range jobs {
+					decoded[index].err = bson.Unmarshal(batch[index].raw, &decoded[index].doc)
+				}
+			}()
+		}
+		for index := range batch {
+			jobs <- index
+		}
+		close(jobs)
+		workers.Wait()
+		for index, result := range decoded {
+			seen++
+			if result.err != nil {
+				malformed++
+				if malformed <= 20 || malformed%1000 == 0 {
+					fmt.Fprintf(os.Stderr, "clan_wars: skipping malformed Mongo document _id=%s error=%v\n", batch[index].id, result.err)
+				}
+			} else if err := handle(result.doc, batch[index].endTime); err != nil {
+				return err
+			}
+			progress.Tick(seen)
+		}
+		batch = batch[:0]
+		return nil
+	}
+	stoppedAtLimit := false
 	for cursor.Next(ctx) {
 		raw := cursor.Current
 		sourceEndTime, ok := raw.Lookup("data", "endTime").StringValueOK()
@@ -1228,28 +1598,29 @@ func streamClanWarDocsChronological(ctx context.Context, cfg migrateutil.Config,
 			}
 			continue
 		}
-		if cfg.LimitDocs > 0 && seen >= cfg.LimitDocs && lastEndTime != "" && sourceEndTime != lastEndTime {
+		if cfg.LimitDocs > 0 && seen+int64(len(batch)) >= cfg.LimitDocs && lastEndTime != "" && sourceEndTime != lastEndTime {
+			stoppedAtLimit = true
 			break
 		}
-		seen++
 		lastEndTime = sourceEndTime
-		doc, decodeErr := decodeClanWarDoc(raw)
-		if decodeErr != nil {
-			malformed++
-			if malformed <= 20 || malformed%1000 == 0 {
-				id := "unknown"
-				if docID, hasObjectID := raw.Lookup("_id").ObjectIDOK(); hasObjectID {
-					id = docID.Hex()
-				}
-				fmt.Fprintf(os.Stderr, "clan_wars: skipping malformed Mongo document _id=%s error=%v\n", id, decodeErr)
+		id := "unknown"
+		if docID, hasObjectID := raw.Lookup("_id").ObjectIDOK(); hasObjectID {
+			id = docID.Hex()
+		}
+		batch = append(batch, chronologicalRawWar{raw: bytes.Clone(raw), endTime: sourceEndTime, id: id})
+		if len(batch) >= decodeBatchSize {
+			if err := processBatch(); err != nil {
+				return seen, err
 			}
-		} else if err := handle(doc, sourceEndTime); err != nil {
+		}
+	}
+	if err := processBatch(); err != nil {
+		return seen, err
+	}
+	if !stoppedAtLimit {
+		if err := cursor.Err(); err != nil {
 			return seen, err
 		}
-		progress.Tick(seen)
-	}
-	if err := cursor.Err(); err != nil {
-		return seen, err
 	}
 	if malformed > 0 {
 		fmt.Fprintf(os.Stderr, "clan_wars: skipped_malformed_docs=%d\n", malformed)

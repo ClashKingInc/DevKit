@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClashKingInc/DevKit/database/migrations/migrateutil"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -53,6 +54,44 @@ func TestLeaderboardHistoryOneShotPlanUsesAllFiveTables(t *testing.T) {
 	created := strings.Join(plan.CreateIndexes, "\n")
 	if strings.Contains(created, "location_rank") || strings.Contains(created, "date DESC") {
 		t.Fatalf("leaderboard import recreates unnecessary indexes: %s", created)
+	}
+}
+
+func TestLeaderboardHistoryDateFrom(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    string
+		wantErr bool
+	}{
+		{name: "unset"},
+		{name: "valid", value: "2026-08-01", want: "2026-08-01"},
+		{name: "invalid", value: "08/01/2026", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := leaderboardHistoryDateFrom(migrateutil.Config{Env: map[string]string{
+				"LEADERBOARD_HISTORY_DATE_FROM": test.value,
+			}})
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("expected invalid date to fail")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.want == "" {
+				if got != nil {
+					t.Fatalf("date = %s, want nil", got)
+				}
+				return
+			}
+			if got == nil || got.Format("2006-01-02") != test.want {
+				t.Fatalf("date = %v, want %s", got, test.want)
+			}
+		})
 	}
 }
 

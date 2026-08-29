@@ -170,6 +170,8 @@ CREATE TABLE public.war_archive_packs (
     compressed_bytes bigint DEFAULT 0 NOT NULL,
     first_end_time timestamp with time zone,
     last_end_time timestamp with time zone,
+    checkpoint_key text,
+    source_checkpoint text,
     stats jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     uploaded_at timestamp with time zone,
@@ -183,9 +185,7 @@ CREATE TABLE public.war_archive_packs (
 
 CREATE TABLE public.player_war_history (
     player_tag text NOT NULL,
-    period_start date NOT NULL,
-    war_ids integer[] DEFAULT '{}'::integer[] NOT NULL,
-    CONSTRAINT player_war_history_quarter_check CHECK ((EXTRACT(day FROM period_start) = 1) AND (EXTRACT(month FROM period_start) = ANY (ARRAY[1, 4, 7, 10])))
+    war_ids integer[] DEFAULT '{}'::integer[] NOT NULL
 );
 
 --
@@ -575,19 +575,23 @@ CREATE TABLE public.legend_history (
 --
 
 CREATE TABLE public.player_change_history (
-    event_time timestamp with time zone DEFAULT now() CONSTRAINT player_profile_changes_event_time_not_null NOT NULL,
-    player_tag text CONSTRAINT player_profile_changes_player_tag_not_null NOT NULL,
-    clan_tag text DEFAULT ''::text CONSTRAINT player_profile_changes_clan_tag_not_null NOT NULL,
-    townhall_level integer DEFAULT 0 CONSTRAINT player_profile_changes_townhall_level_not_null NOT NULL,
-    change_type text CONSTRAINT player_profile_changes_change_type_not_null NOT NULL,
-    previous_value jsonb,
-    current_value jsonb
+    event_time timestamp with time zone NOT NULL,
+    player_tag text NOT NULL,
+    change_type smallint NOT NULL,
+    item_id smallint,
+    townhall_level smallint,
+    previous_value text NOT NULL,
+    current_value text NOT NULL,
+    CONSTRAINT player_change_history_change_type_check CHECK ((change_type >= 1) AND (change_type <= 12)),
+    CONSTRAINT player_change_history_item_id_check CHECK ((((change_type >= 1) AND (change_type <= 6) AND (item_id IS NOT NULL) AND (item_id >= 0)) OR ((change_type >= 7) AND (item_id IS NULL)))),
+    CONSTRAINT player_change_history_player_tag_check CHECK ((btrim(player_tag) <> ''::text)),
+    CONSTRAINT player_change_history_townhall_level_check CHECK (((townhall_level IS NULL) OR (townhall_level > 0)))
 );
 
 SELECT create_hypertable(
     'player_change_history',
     'event_time',
-    chunk_time_interval => INTERVAL '7 days',
+    chunk_time_interval => INTERVAL '3 months',
     create_default_indexes => FALSE,
     if_not_exists => TRUE
 );
@@ -622,7 +626,7 @@ CREATE TABLE public.player_rankings_current (
     points integer,
     CONSTRAINT player_rankings_current_global_rank_check CHECK (((location_id <> 'global'::text) OR (rank IS NOT NULL))),
     CONSTRAINT player_rankings_current_location_id_check CHECK (((location_id = 'global'::text) OR (location_id ~ '^[0-9]+$'::text))),
-    CONSTRAINT player_rankings_current_placement_check CHECK ((((rank IS NULL) AND (points IS NULL)) OR ((rank IS NOT NULL) AND (points IS NOT NULL) AND (rank > 0) AND (points >= 0)))),
+    CONSTRAINT player_rankings_current_placement_check CHECK ((((rank IS NULL) AND (points IS NULL)) OR ((rank IS NOT NULL) AND (rank > 0) AND ((points IS NULL) OR (points >= 0))))),
     CONSTRAINT player_rankings_current_ranking_type_check CHECK ((ranking_type = ANY (ARRAY['home'::text, 'builder_base'::text])))
 );
 
@@ -1005,7 +1009,7 @@ ALTER TABLE public.war_archive_pending
 --
 
 ALTER TABLE public.player_war_history
-    ADD CONSTRAINT player_war_history_pkey PRIMARY KEY (player_tag, period_start);
+    ADD CONSTRAINT player_war_history_pkey PRIMARY KEY (player_tag);
 
 --
 -- Name: war_schedule war_schedule_pkey; Type: CONSTRAINT; Schema: public; Owner: -
@@ -1297,10 +1301,10 @@ CREATE INDEX idx_legend_rankings_current_rank ON public.legend_rankings_current 
 CREATE INDEX idx_player_change_history_player_time ON public.player_change_history USING btree (player_tag, event_time DESC);
 
 --
--- Name: idx_player_change_history_type_time; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_player_change_history_player_type_time; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_player_change_history_type_time ON public.player_change_history USING btree (change_type, event_time DESC);
+CREATE INDEX idx_player_change_history_player_type_time ON public.player_change_history USING btree (player_tag, change_type, event_time DESC);
 
 --
 -- Name: idx_player_online_events_clan_time; Type: INDEX; Schema: public; Owner: -
@@ -1404,6 +1408,10 @@ CREATE INDEX idx_war_archive_pending_unclaimed ON public.war_archive_pending USI
 
 CREATE INDEX idx_war_archive_pending_pack ON public.war_archive_pending USING btree (pack_id, war_id) WHERE (pack_id IS NOT NULL);
 
+CREATE UNIQUE INDEX idx_war_archive_packs_migration_checkpoint
+    ON public.war_archive_packs USING btree (checkpoint_key, source_checkpoint)
+    WHERE ((source = 'migration'::text) AND (checkpoint_key IS NOT NULL) AND (source_checkpoint IS NOT NULL));
+
 --
 -- Name: idx_war_schedule_next_run; Type: INDEX; Schema: public; Owner: -
 --
@@ -1442,12 +1450,6 @@ CREATE INDEX idx_wars_opponent_end_time ON public.wars USING btree (opponent_tag
 --
 
 CREATE INDEX idx_wars_war_tag ON public.wars USING btree (war_tag) WHERE (war_tag IS NOT NULL);
-
---
--- Name: player_change_history_event_time_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX player_change_history_event_time_idx ON public.player_change_history USING btree (event_time DESC);
 
 --
 -- Name: townhall_counts_level_idx; Type: INDEX; Schema: public; Owner: -
