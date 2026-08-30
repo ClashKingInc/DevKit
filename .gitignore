@@ -4,3 +4,4 @@
 migration_state.json
 .t3/
 t3.json
+.cache/

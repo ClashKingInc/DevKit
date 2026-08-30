@@ -3,12 +3,11 @@
 This repo uses goose SQL migrations for TimescaleDB, which is PostgreSQL with the
 Timescale extension enabled.
 
-The baseline is intentionally limited to two files. `001_initial_stats.sql`
-owns tracking and game-stat data, including hypertables, retention/compression
-policies, and analytical views. `002_initial_settings.sql` owns application and
-server configuration, authentication, mobile, roster, billing, moderation, and
-other user-facing state. Both files create their final objects directly; there
-are no transitional upgrade migrations in the baseline.
+`001_initial_stats.sql` owns tracking and game-stat data, including hypertables,
+retention/compression policies, and analytical views. `002_initial_settings.sql`
+owns application and server configuration, authentication, mobile, roster,
+billing, moderation, and other user-facing state. Later numbered files upgrade
+existing installations without rewriting either initial migration.
 
 ## Migration Format
 
@@ -40,6 +39,20 @@ Use hypertables for large time-series/event tables:
 - append-heavy analytics history
 
 Use normal PostgreSQL tables for smaller current-state tables and compact rollups.
+
+## Tracking Observability
+
+`tracking_process_stats` and `tracking_domain_stats` are the generic tracking
+observability hypertables. `script` identifies the tracking process, while `name`
+stores a dynamic domain identifier such as `war-discovery.active`, `cwl.groups`,
+or `globalclans.priority`; neither identifier is constrained to a fixed script or
+domain list.
+
+The domain rows store request, error, latency, write, queue-depth,
+processing-duration, readiness, and latest-error observations. Process rows store
+runtime and memory observations. `target_count`, `target_cycle`, and
+`target_processed` are nullable because event-driven and scheduled domains do not
+have target progress to report.
 
 ## Battlelog Analytics
 

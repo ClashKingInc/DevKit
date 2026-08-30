@@ -7,13 +7,23 @@ import (
 	"testing"
 )
 
-func TestTimescaleKeepsTwoConsolidatedMigrations(t *testing.T) {
+func TestTimescaleMigrationsAreExplicitlyNumbered(t *testing.T) {
 	files, err := filepath.Glob("../timescale/*.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 2 || filepath.Base(files[0]) != "001_initial_stats.sql" || filepath.Base(files[1]) != "002_initial_settings.sql" {
-		t.Fatalf("Timescale migrations = %v, want only 001_initial_stats.sql and 002_initial_settings.sql", files)
+	want := []string{
+		"001_initial_stats.sql",
+		"002_initial_settings.sql",
+		"003_tracking_observability.sql",
+	}
+	if len(files) != len(want) {
+		t.Fatalf("Timescale migrations = %v, want %v", files, want)
+	}
+	for index := range want {
+		if filepath.Base(files[index]) != want[index] {
+			t.Fatalf("Timescale migrations = %v, want %v", files, want)
+		}
 	}
 }
 
