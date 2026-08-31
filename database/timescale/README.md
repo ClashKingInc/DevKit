@@ -102,6 +102,10 @@ Keep dynamic army-builder searches bounded by time, townhall, and battle type.
 the member tag set needed for membership comparison; member donation deltas are not a
 durable global structure.
 
+The cumulative Capital Gold deposited into a clan is stored in `capital_gold_total`. The
+`clan_leaderboards` materialized view ranks that value globally and within each clan location;
+the tracking leaderboard process refreshes those ranks with the other clan leaderboards.
+
 Optional Clash IDs on `basic_clan`, such as location, CWL league, and capital league, are
 nullable. Missing API values should be stored as `NULL`, not as a sentinel `0`.
 
