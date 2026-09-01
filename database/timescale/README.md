@@ -137,6 +137,18 @@ linked player tag, and occurrence key. Lifetime awards use the default
 `lifetime` occurrence, repeatable awards provide their own stable occurrence,
 and every award cascades away when its player link is removed.
 
+## Developer Link Access
+
+`developer_applications` stores one SHA-256 API token hash and safe display prefix per
+application. Revoking the application invalidates its token and grants as one unit; there is
+no separate token lifecycle or generic permission/scope table.
+
+Each current `developer_link_grants` row represents `links.read` access for one application
+and authenticated user. `selected` grants snapshot verified player tags in
+`developer_link_grant_accounts`, while `all_current_and_future` grants are evaluated dynamically
+against the user's verified `player_links`. Readers must recheck link ownership and verification
+instead of treating a grant-account row as durable authorization.
+
 ## Roster Architecture
 
 `roster_groups` organizes roster cards and is independent of the removed signup
