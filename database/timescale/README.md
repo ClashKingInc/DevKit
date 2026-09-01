@@ -141,7 +141,9 @@ and every award cascades away when its player link is removed.
 
 `developer_applications` stores one SHA-256 API token hash and safe display prefix per
 application. Revoking the application invalidates its token and grants as one unit; there is
-no separate token lifecycle or generic permission/scope table.
+no separate token lifecycle or generic permission/scope table. Migration 005 removes the
+legacy admin creator reference and retires the `admin_users` and `admin_sessions` tables.
+The cleanup is irreversible because deleted admin and session data cannot be reconstructed.
 
 Each current `developer_link_grants` row represents `links.read` access for one application
 and authenticated user. `selected` grants snapshot verified player tags in
