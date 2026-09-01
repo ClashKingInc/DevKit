@@ -80,3 +80,62 @@ func TestLegacyAdminCleanupSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestSimplifiedDeveloperApplicationSchema(t *testing.T) {
+	raw, err := os.ReadFile("../timescale/006_simplify_developer_applications.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parts := strings.SplitN(strings.ToLower(string(raw)), "-- +goose down", 2)
+	if len(parts) != 2 {
+		t.Fatal("simplified developer application migration is missing a Goose down section")
+	}
+	up := parts[0]
+	down := parts[1]
+
+	for _, required := range []string{
+		"set developer_name = application_name",
+		"where developer_name is null",
+		"alter column developer_name set not null",
+		"add column api_request_count bigint default 0 not null",
+		"add column links_lookup_count bigint default 0 not null",
+		"check (api_request_count >= 0)",
+		"check (links_lookup_count >= 0)",
+		"drop table public.developer_link_grant_accounts",
+		"drop table public.developer_link_grants",
+		"drop column application_name",
+		"drop column contact_email",
+		"drop column redirect_uri",
+	} {
+		if !strings.Contains(up, required) {
+			t.Errorf("simplified developer application migration missing %q", required)
+		}
+	}
+
+	backfillPosition := strings.Index(up, "set developer_name = application_name")
+	requirePosition := strings.Index(up, "alter column developer_name set not null")
+	dropNamePosition := strings.Index(up, "drop column application_name")
+	if backfillPosition == -1 || requirePosition == -1 || dropNamePosition == -1 ||
+		!(backfillPosition < requirePosition && requirePosition < dropNamePosition) {
+		t.Error("developer_name must be backfilled before it becomes required and application_name is dropped")
+	}
+
+	for _, preserved := range []string{
+		"application_id",
+		"token_hash",
+		"token_prefix",
+		"token_last_used_at",
+		"created_at",
+		"updated_at",
+		"revoked_at",
+	} {
+		if strings.Contains(up, "drop column "+preserved) {
+			t.Errorf("simplified developer application migration drops preserved column %q", preserved)
+		}
+	}
+
+	if !strings.Contains(down, "migration 006 is irreversible") {
+		t.Error("simplified developer application migration must reject lossy rollback")
+	}
+}

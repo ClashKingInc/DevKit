@@ -140,16 +140,15 @@ and every award cascades away when its player link is removed.
 ## Developer Link Access
 
 `developer_applications` stores one SHA-256 API token hash and safe display prefix per
-application. Revoking the application invalidates its token and grants as one unit; there is
-no separate token lifecycle or generic permission/scope table. Migration 005 removes the
-legacy admin creator reference and retires the `admin_users` and `admin_sessions` tables.
-The cleanup is irreversible because deleted admin and session data cannot be reconstructed.
+developer, along with cumulative API-request and shared-link lookup counters. Both counters
+are nonnegative `bigint` values that start at zero. Revocation remains part of the application
+row, and there is no separate token, grant, permission, or scope lifecycle.
 
-Each current `developer_link_grants` row represents `links.read` access for one application
-and authenticated user. `selected` grants snapshot verified player tags in
-`developer_link_grant_accounts`, while `all_current_and_future` grants are evaluated dynamically
-against the user's verified `player_links`. Readers must recheck link ownership and verification
-instead of treating a grant-account row as durable authorization.
+Migration 005 removes the legacy admin creator reference and retires the `admin_users` and
+`admin_sessions` tables. Migration 006 backfills missing developer names from the former
+application name, makes the developer name required, removes optional application metadata,
+and retires the developer-link grant tables. Both cleanups are irreversible because their
+deleted data cannot be reconstructed.
 
 ## Roster Architecture
 
