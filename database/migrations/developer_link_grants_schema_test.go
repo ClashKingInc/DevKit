@@ -27,8 +27,6 @@ func TestDeveloperLinkGrantSchema(t *testing.T) {
 		"token_prefix text not null",
 		"redirect_uri text",
 		"token_last_used_at timestamp with time zone",
-		"created_by_admin_id uuid not null",
-		"references public.admin_users(id) on delete restrict",
 		"create table public.developer_link_grants",
 		"application_id uuid not null",
 		"user_id text not null",
@@ -54,6 +52,31 @@ func TestDeveloperLinkGrantSchema(t *testing.T) {
 	} {
 		if strings.Contains(up, forbidden) {
 			t.Errorf("developer link grant migration unexpectedly contains %q", forbidden)
+		}
+	}
+}
+
+func TestLegacyAdminCleanupSchema(t *testing.T) {
+	raw, err := os.ReadFile("../timescale/005_remove_legacy_admin_auth.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parts := strings.SplitN(strings.ToLower(string(raw)), "-- +goose down", 2)
+	if len(parts) != 2 {
+		t.Fatal("legacy admin cleanup migration is missing a Goose down section")
+	}
+	up := parts[0]
+
+	for _, required := range []string{
+		"drop constraint if exists developer_applications_created_by_admin_id_fkey",
+		"drop index if exists public.idx_developer_applications_created_by_admin_id",
+		"drop column if exists created_by_admin_id",
+		"drop table if exists public.admin_sessions",
+		"drop table if exists public.admin_users",
+	} {
+		if !strings.Contains(up, required) {
+			t.Errorf("legacy admin cleanup migration missing %q", required)
 		}
 	}
 }
