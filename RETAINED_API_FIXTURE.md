@@ -41,9 +41,9 @@ Old disposable fixtures at any prior 007–028 version must be recreated through
 the harness. Do not rename Goose history rows or apply this consolidation over
 such a database. Any persistent installation beyond 006 needs separate review.
 
-007 includes stable ticket panel/button IDs, editable panel names and archival,
-without rewriting existing Discord custom IDs or adding deferred runtime tables.
-See `docs/worker-api-schema.md` for required consumer changes. The original 017
-proposal remains verbatim in docs/deferred as a historical reference.
+007 leaves all 006 ticket tables and data unchanged. Stable panel/button IDs,
+editable names, archival, and stricter component validation remain deferred
+until the Bot rewrite resolves legacy Discord component IDs and duplicate
+custom IDs. The proposal remains in docs/deferred as reference material.
 
 The fixture is local validation, not evidence that production has been upgraded.
