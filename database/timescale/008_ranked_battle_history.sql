@@ -184,38 +184,17 @@ SELECT add_retention_policy('battles_ranked', drop_after => INTERVAL '1 year', i
 ALTER TABLE public.ranked_league_group_members RENAME COLUMN attack_lose_count TO attack_loss_count;
 ALTER TABLE public.ranked_league_group_members RENAME COLUMN defense_lose_count TO defense_loss_count;
 ALTER TABLE public.ranked_league_group_members
-    ALTER COLUMN attack_win_count SET DEFAULT 0,
-    ALTER COLUMN attack_loss_count SET DEFAULT 0,
-    ALTER COLUMN defense_win_count SET DEFAULT 0,
-    ALTER COLUMN defense_loss_count SET DEFAULT 0,
     ADD COLUMN town_hall smallint,
     ADD COLUMN maximum_battle_count smallint NOT NULL DEFAULT 0,
     ADD COLUMN attack_star_count integer NOT NULL DEFAULT 0,
     ADD COLUMN defense_star_count integer NOT NULL DEFAULT 0,
-    ADD COLUMN registered_attack_count integer NOT NULL DEFAULT 0,
-    ADD COLUMN registered_defense_count integer NOT NULL DEFAULT 0,
-    ADD COLUMN observed_attack_count integer NOT NULL DEFAULT 0,
-    ADD COLUMN observed_defense_count integer NOT NULL DEFAULT 0,
     DROP COLUMN clan_tag,
-    DROP COLUMN clan_name;
-
--- Preserve the official totals from existing group snapshots. The migration
--- does not claim any corresponding battle observations; ingestion can replace
--- those zeroes as it reconciles the retained rows with captured battle data.
-UPDATE public.ranked_league_group_members
-SET registered_attack_count = attack_win_count + attack_loss_count,
-    registered_defense_count = defense_win_count + defense_loss_count;
-
-ALTER TABLE public.ranked_league_group_members
-    ADD COLUMN missing_real_attacks integer GENERATED ALWAYS AS (GREATEST(registered_attack_count - observed_attack_count, 0)) STORED,
-    ADD COLUMN missing_real_defenses integer GENERATED ALWAYS AS (GREATEST(registered_defense_count - observed_defense_count, 0)) STORED,
-    ADD COLUMN attacks_complete boolean GENERATED ALWAYS AS (observed_attack_count >= registered_attack_count) STORED,
-    ADD COLUMN defenses_complete boolean GENERATED ALWAYS AS (observed_defense_count >= registered_defense_count) STORED,
+    DROP COLUMN clan_name,
     ADD CONSTRAINT ranked_group_members_group_tag_check CHECK (group_tag ~ '^#[0289PYLQGRJCUV]{1,15}$' OR group_tag = '#0'),
     ADD CONSTRAINT ranked_group_members_player_tag_check CHECK (player_tag ~ '^#[0289PYLQGRJCUV]{1,15}$'),
     ADD CONSTRAINT ranked_group_members_town_hall_check CHECK (town_hall IS NULL OR town_hall BETWEEN 1 AND 20),
     ADD CONSTRAINT ranked_group_members_tier_check CHECK (league_tier_id > 0),
-    ADD CONSTRAINT ranked_group_members_counts_check CHECK (placement > 0 AND league_trophies >= 0 AND maximum_battle_count >= 0 AND attack_win_count >= 0 AND attack_loss_count >= 0 AND attack_star_count >= 0 AND defense_win_count >= 0 AND defense_loss_count >= 0 AND defense_star_count >= 0 AND registered_attack_count >= 0 AND registered_defense_count >= 0 AND observed_attack_count >= 0 AND observed_defense_count >= 0);
+    ADD CONSTRAINT ranked_group_members_counts_check CHECK (placement > 0 AND league_trophies >= 0 AND maximum_battle_count >= 0 AND attack_win_count >= 0 AND attack_loss_count >= 0 AND attack_star_count >= 0 AND defense_win_count >= 0 AND defense_loss_count >= 0 AND defense_star_count >= 0);
 
 -- The previous key allowed one player to remain under multiple corrected group
 -- tags in a season and did not record observation time. Retain the snapshot
@@ -252,22 +231,10 @@ ALTER TABLE public.ranked_league_group_members
     DROP CONSTRAINT ranked_group_members_group_tag_check,
     ADD COLUMN clan_name text,
     ADD COLUMN clan_tag text,
-    DROP COLUMN defenses_complete,
-    DROP COLUMN attacks_complete,
-    DROP COLUMN missing_real_defenses,
-    DROP COLUMN missing_real_attacks,
-    DROP COLUMN observed_defense_count,
-    DROP COLUMN observed_attack_count,
-    DROP COLUMN registered_defense_count,
-    DROP COLUMN registered_attack_count,
     DROP COLUMN defense_star_count,
     DROP COLUMN attack_star_count,
     DROP COLUMN maximum_battle_count,
-    DROP COLUMN town_hall,
-    ALTER COLUMN defense_loss_count DROP DEFAULT,
-    ALTER COLUMN defense_win_count DROP DEFAULT,
-    ALTER COLUMN attack_loss_count DROP DEFAULT,
-    ALTER COLUMN attack_win_count DROP DEFAULT;
+    DROP COLUMN town_hall;
 ALTER TABLE public.ranked_league_group_members RENAME COLUMN defense_loss_count TO defense_lose_count;
 ALTER TABLE public.ranked_league_group_members RENAME COLUMN attack_loss_count TO attack_lose_count;
 SELECT remove_retention_policy('battles_ranked', if_exists => TRUE);

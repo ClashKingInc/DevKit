@@ -96,22 +96,14 @@ This existing table remains the only Ranked group relation; there is no `ranked_
 | `placement` | `integer` | not null; positive |
 | `league_trophies` | `integer` | not null; nonnegative |
 | `maximum_battle_count` | `smallint` | not null, default 0 |
-| `attack_win_count` | `integer` | not null, default 0; source counter |
-| `attack_loss_count` | `integer` | not null, default 0; source counter |
+| `attack_win_count` | `integer` | not null; source counter |
+| `attack_loss_count` | `integer` | not null; source counter |
 | `attack_star_count` | `integer` | not null, default 0; source counter |
-| `defense_win_count` | `integer` | not null, default 0; source counter |
-| `defense_loss_count` | `integer` | not null, default 0; source counter |
+| `defense_win_count` | `integer` | not null; source counter |
+| `defense_loss_count` | `integer` | not null; source counter |
 | `defense_star_count` | `integer` | not null, default 0; source counter |
-| `registered_attack_count` | `integer` | not null, default 0; official attacks recorded by the group snapshot |
-| `registered_defense_count` | `integer` | not null, default 0; official defenses recorded by the group snapshot |
-| `observed_attack_count` | `integer` | not null, default 0; corresponding real attacks captured in battle history |
-| `observed_defense_count` | `integer` | not null, default 0; corresponding real defenses captured in battle history |
-| `missing_real_attacks` | `integer` | generated as `greatest(registered_attack_count - observed_attack_count, 0)` |
-| `missing_real_defenses` | `integer` | generated as `greatest(registered_defense_count - observed_defense_count, 0)` |
-| `attacks_complete` | `boolean` | generated; true when observed attacks cover the registered count |
-| `defenses_complete` | `boolean` | generated; true when observed defenses cover the registered count |
 
-The old clan snapshot columns are removed because the group-member response does not need a second clan identity copy. Missing counts and completeness are generated from the registered and observed totals; callers write the four source totals and cannot independently write contradictory derived values.
+The old clan snapshot columns are removed because the group-member response does not need a second clan identity copy. No lifecycle flags, inferred promotions, missing markers, or state column are stored.
 
 ### `league_hitrate_stats`
 

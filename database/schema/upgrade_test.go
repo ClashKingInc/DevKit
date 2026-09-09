@@ -110,10 +110,6 @@ func TestWorkerAPIUpgrade(t *testing.T) {
 	check(`SELECT max(version_id)=8 FROM goose_db_version WHERE is_applied`)
 	check(`SELECT player_tag='#2PP' AND player_name='Existing' AND attack_win_count=3 AND attack_loss_count=2
 	 AND defense_win_count=4 AND defense_loss_count=1 AND maximum_battle_count=0
-	 AND registered_attack_count=5 AND registered_defense_count=5
-	 AND observed_attack_count=0 AND observed_defense_count=0
-	 AND missing_real_attacks=5 AND missing_real_defenses=5
-	 AND NOT attacks_complete AND NOT defenses_complete
  FROM ranked_league_group_members WHERE season_id=1 AND group_tag='#2PP'`)
 	check(`SELECT count(*)=1 FROM ranked_league_group_members WHERE season_id=1 AND player_tag='#2PP'`)
 	for _, table := range []string{"public.battles_farming", "public.battles_ranked", "public.army_compositions"} {
