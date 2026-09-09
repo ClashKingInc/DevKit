@@ -36,6 +36,21 @@ governance recorded under `design/docs/`.
 
 ## Working locally
 
+The coordinated Effect-rewrite environment uses the versioned configuration in
+`local/local-stack.example.json` and the foreground runner:
+
+```bash
+node scripts/local-stack.mjs start
+```
+
+It adopts existing PostgreSQL, proxy, API/R2, and frontend listeners, starts
+only missing services that it owns, and stops owned children in reverse order.
+The established Expo Metro listener is port `7357`, managed through the App
+repository's `tooling/dev-app`; the runner adopts that listener and must not
+start a duplicate on `8081`. See [docs/local-development.md](docs/local-development.md)
+for required toolchains, ignored local credentials, optional frontends, and
+physical-device LAN configuration.
+
 Create a local database environment file from the non-secret template:
 
 ```bash

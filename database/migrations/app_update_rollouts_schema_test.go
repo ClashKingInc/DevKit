@@ -7,7 +7,7 @@ import (
 )
 
 func TestAppUpdateRolloutSchema(t *testing.T) {
-	raw, err := os.ReadFile("../timescale/007_app_update_rollouts.sql")
+	raw, err := os.ReadFile("../timescale/007_worker_api.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestAppUpdateRolloutSchema(t *testing.T) {
 }
 
 func TestAppUpdateRollbackSchema(t *testing.T) {
-	raw, err := os.ReadFile("../timescale/010_app_update_rollback.sql")
+	raw, err := os.ReadFile("../timescale/007_worker_api.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,15 +69,6 @@ func TestAppUpdateRollbackSchema(t *testing.T) {
 	} {
 		if !strings.Contains(up, required) {
 			t.Errorf("app update rollback migration missing %q", required)
-		}
-	}
-	for _, forbidden := range []string{
-		"app_update_installations",
-		"installation_hash",
-		"current_update_id",
-	} {
-		if strings.Contains(up, forbidden) {
-			t.Errorf("app update rollback migration unexpectedly contains %q", forbidden)
 		}
 	}
 }

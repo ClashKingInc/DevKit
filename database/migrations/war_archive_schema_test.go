@@ -19,17 +19,11 @@ func TestTimescaleMigrationsAreExplicitlyNumbered(t *testing.T) {
 		"004_developer_link_grants.sql",
 		"005_remove_legacy_admin_auth.sql",
 		"006_simplify_developer_applications.sql",
-		"007_app_update_rollouts.sql",
-		"008_discord_cache.sql",
-		"009_clan_capital_gold.sql",
-		"010_app_update_rollback.sql",
-		"012_discord_managed_resources.sql",
-		"013_subject_mutation_locks.sql",
-		"020_player_link_mutation_locks.sql",
-		"022_billing_customer_operations.sql",
-		"023_roster_ai_budget_locks.sql",
-		"027_server_link_token_policy.sql",
-		"028_discord_coordination.sql",
+		"007_worker_api.sql",
+		"008_ranked_battle_history.sql",
+		"009_league_army_analytics.sql",
+		"010_cwl_season_statistics.sql",
+		"011_active_verified_players.sql",
 	}
 	if len(files) != len(want) {
 		t.Fatalf("Timescale migrations = %v, want %v", files, want)

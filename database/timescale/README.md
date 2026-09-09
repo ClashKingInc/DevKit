@@ -54,47 +54,17 @@ runtime and memory observations. `target_count`, `target_cycle`, and
 `target_processed` are nullable because event-driven and scheduled domains do not
 have target progress to report.
 
-## Battlelog Analytics
+## Battle and league analytics
 
-`battlelogs` is the raw source of truth. It stores the display data plus army search data:
+Migration 008 adds one-year farming history, two-perspective Ranked/Legend history, and immutable exact army compositions. Raw Ranked/Legend rows are compressed after 30 days; aggregate queries count only `direction = 'attack'` so the defense perspective does not double results. Migration 008 also reshapes the existing `ranked_league_group_members` table to match the source counters directly.
 
-```sql
-army_items text[] NOT NULL
-army_counts jsonb NOT NULL
-```
+Migration 009 adds permanent normal-PostgreSQL rollups for league hit rates, Ranked tier populations, Legend daily item usage, and immutable army-family assignments. It does not add a Ranked group parent table, item presence registry, prefix tables, or compression policies for rollups. See [the complete storage contract](../../docs/ranked-battle-history.md).
 
-Use `army_items` for fast contains searches:
-
-```sql
-army_items @> ARRAY['h_1', 'e_10', 'u_5']
-```
-
-Use `army_counts` only when quantity matters:
-
-```sql
-COALESCE((army_counts->>'u_5')::int, 0) >= 5
-```
-
-Army and townhall stats are Timescale continuous aggregates. Item usage and item hitrate
-are app-written rollups to avoid inserting one raw item row per battle item.
+`cwl_season_statistics` remains a separate normal PostgreSQL summary refreshed from the existing CWL group, clan, and member tables. See [the reconciliation contract](../../docs/cwl-season-statistics.md). The legacy `battlelogs`, its continuous aggregate, and `legend_history` remain during the consumer cutover.
 
 ## Index Notes
 
-Hypertable unique indexes must include the time column. For `battlelogs`, the primary key is:
-
-```sql
-PRIMARY KEY (battle_id, timestamp)
-```
-
-Use GIN indexes for array/jsonb search:
-
-```sql
-CREATE INDEX idx_battlelogs_army_items
-    ON battlelogs
-    USING gin (army_items);
-```
-
-Keep dynamic army-builder searches bounded by time, townhall, and battle type.
+Farming uniqueness is `(player_tag,battle_time)`. Ranked perspective uniqueness is `(player_tag,battle_time,battle_mode,direction,opponent_tag)`. Explicit `battle_mode` distinguishes overlapping Ranked and Legend windows. Player/time and player/mode/time indexes serve history, while a partial mode/time index containing only `direction = 'attack'` serves aggregate scans.
 
 ## Global Clan Changes
 
@@ -207,3 +177,13 @@ status and the relevant category enabled on that device.
 `admin_posts.presentation_type` distinguishes block-based articles from hosted interactive
 stories. `show_on_home` controls carousel inclusion, while `pinned_on_home` keeps a post
 ahead of newer home posts without hiding those newer posts.
+
+## Worker/API upgrade and production operation
+
+`007_worker_api.sql` consolidates the Worker/API upgrade,
+`008_ranked_battle_history.sql` adds raw battle and exact-army storage,
+`009_league_army_analytics.sql` adds league, Legend, and army-family rollups, and
+`010_cwl_season_statistics.sql` adds rerunnable CWL population summaries.
+Do not use the former 007–028 fixture numbering. See
+[the schema decisions](../../docs/worker-api-schema.md),
+[the disposable upgrade test](../../RETAINED_API_FIXTURE.md).

@@ -7,7 +7,7 @@ import (
 )
 
 func TestClanCapitalGoldMigrationStoresAndRanksTotal(t *testing.T) {
-	raw, err := os.ReadFile("../timescale/009_clan_capital_gold.sql")
+	raw, err := os.ReadFile("../timescale/007_worker_api.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func TestClanCapitalGoldMigrationStoresAndRanksTotal(t *testing.T) {
 		}
 	}
 
-	if got := strings.Count(migration, "refresh materialized view public.clan_leaderboards"); got != 2 {
-		t.Errorf("clan capital gold migration refresh count = %d, want 2", got)
+	if got := strings.Count(migration, "refresh materialized view public.clan_leaderboards"); got != 1 {
+		t.Errorf("clan capital gold migration refresh count = %d, want 1", got)
 	}
 }

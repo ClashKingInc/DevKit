@@ -23,6 +23,12 @@ fs.appendFileSync(process.env.FIXTURE_LOG, JSON.stringify({tool, args, migration
 if (tool === 'docker') {
   if (args[0] === 'context') console.log(process.env.FIXTURE_ENDPOINT || 'unix:///tmp/test-docker.sock');
   if (args[0] === 'run') console.log('${container}');
+  if (args[0] === 'inspect') {
+    const calls = fs.readFileSync(process.env.FIXTURE_LOG, 'utf8').trim().split('\\n').map(JSON.parse);
+    const run = calls.find(call => call.tool === 'docker' && call.args[0] === 'run');
+    const label = run?.args.find(value => value.startsWith('io.clashking.fixture.run='));
+    console.log(process.env.FIXTURE_INSPECT_RUN_ID || label?.split('=')[1] || '');
+  }
   if (args[0] === 'port') console.log(process.env.FIXTURE_PORT || '127.0.0.1:54329');
 } else if (tool === 'goose' && args.includes('up')) {
   process.exit(Number(process.env.FIXTURE_MIGRATION_EXIT || 0));
@@ -44,11 +50,17 @@ if (tool === 'docker') {
 }
 
 test('uses only retained authoritative migrations and its own disposable container', () => {
-  const result = runFixture({}, 'test "$CLASHKING_DISPOSABLE_TIMESCALE" = 1 && test "$TEST_ADMIN_EMAIL" = owner@example.test && test "$TEST_DATABASE_URL" = "$TEST_TIMESCALE_DSN" && test -z "${ADMIN_OWNER_BOOTSTRAP_B64:-}"');
+  const result = runFixture({}, 'test "$CLASHKING_DISPOSABLE_TIMESCALE" = 1 && test "$CLASHKING_TIMESCALE_PROFILE" = retained-api && test "$TEST_ADMIN_EMAIL" = owner@example.test && test "$TEST_DATABASE_URL" = "$TEST_TIMESCALE_DSN" && test -z "${ADMIN_OWNER_BOOTSTRAP_B64:-}"');
   assert.equal(result.status, 0, result.stderr);
   const run = result.calls.find(call => call.tool === 'docker' && call.args[0] === 'run');
   assert.ok(run.args.includes('127.0.0.1::5432'));
   assert.ok(run.args.includes('type=tmpfs,destination=/var/lib/postgresql'));
+  const labels = run.args.filter((value, index) => run.args[index - 1] === '--label');
+  const fixtureLabel = labels.find(value => value.startsWith('io.clashking.fixture=timescale-'));
+  const runLabel = labels.find(value => value.startsWith('io.clashking.fixture.run='));
+  assert.ok(fixtureLabel);
+  assert.equal(fixtureLabel.slice('io.clashking.fixture=timescale-'.length), runLabel.slice('io.clashking.fixture.run='.length));
+  assert.ok(labels.includes('io.clashking.fixture.owner=with-test-timescale'));
   const ready = result.calls.find(call => call.tool === 'docker' && call.args[0] === 'exec');
   assert.deepEqual(ready.args.slice(2, 5), ['pg_isready', '-h', '127.0.0.1']);
   const migrations = result.calls.filter(call => call.tool === 'goose');
@@ -60,10 +72,9 @@ test('uses only retained authoritative migrations and its own disposable contain
     assert.deepEqual(call.migrations, [
       '001_initial_stats.sql', '002_initial_settings.sql', '003_tracking_observability.sql',
       '004_developer_link_grants.sql', '005_remove_legacy_admin_auth.sql', '006_simplify_developer_applications.sql',
-      '007_app_update_rollouts.sql', '008_discord_cache.sql', '009_clan_capital_gold.sql', '010_app_update_rollback.sql',
-      '012_discord_managed_resources.sql', '013_subject_mutation_locks.sql', '020_player_link_mutation_locks.sql',
-      '022_billing_customer_operations.sql', '023_roster_ai_budget_locks.sql', '027_server_link_token_policy.sql',
-      '028_discord_coordination.sql',
+      '007_worker_api.sql', '008_ranked_battle_history.sql',
+      '009_league_army_analytics.sql', '010_cwl_season_statistics.sql',
+      '011_active_verified_players.sql',
     ]);
   }
   assert.equal(migrations[1].args.at(-1), 'up');
@@ -75,6 +86,35 @@ test('preserves a failing child exit code and still cleans up', () => {
   const result = runFixture({}, 'exit 42');
   assert.equal(result.status, 42);
   assert.equal(result.calls.at(-1).args[0], 'rm');
+});
+
+test('refuses cleanup when the exact container no longer has this run label', () => {
+  const result = runFixture({ FIXTURE_INSPECT_RUN_ID: 'another-run' });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /cleanup refused/);
+  assert.ok(!result.calls.some(call => call.tool === 'docker' && call.args[0] === 'rm'));
+});
+
+test('supports an opt-in disk-backed PostgreSQL data directory for large fixtures', () => {
+  const result = runFixture({ CLASHKING_FIXTURE_TIMESCALE_STORAGE: 'disk' });
+  assert.equal(result.status, 0, result.stderr);
+  const run = result.calls.find(call => call.tool === 'docker' && call.args[0] === 'run');
+  const mount = run.args[run.args.indexOf('--mount') + 1];
+  assert.match(mount, /^type=bind,source=.*\/clashking-timescale-data\.[^,]+,destination=\/var\/lib\/postgresql$/);
+  assert.ok(!run.args.some(value => value.includes('type=tmpfs')));
+});
+
+test('rejects conflicting or unknown fixture storage settings before touching Docker', () => {
+  const conflicting = runFixture({
+    CLASHKING_FIXTURE_TIMESCALE_STORAGE: 'disk',
+    CLASHKING_FIXTURE_TIMESCALE_TMPFS_SIZE: '1024',
+  });
+  assert.equal(conflicting.status, 2);
+  assert.deepEqual(conflicting.calls, []);
+
+  const unknown = runFixture({ CLASHKING_FIXTURE_TIMESCALE_STORAGE: 'remote' });
+  assert.equal(unknown.status, 2);
+  assert.deepEqual(unknown.calls, []);
 });
 
 test('cleans up on SIGTERM and preserves the signal exit status', () => {

@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "mode": "local",
+  "toolchains": {
+    "node": "26",
+    "npm": "12",
+    "go": "1.26.4"
+  },
+  "repositories": {
+    "devkit": "/Users/matthewanderson/.codex/worktrees/1cec/clashking_schemas",
+    "api": "/Users/matthewanderson/.codex/worktrees/0ecd/clashking_api",
+    "tracking": "/Users/matthewanderson/.codex/worktrees/15c8/clashking_tracking",
+    "dashboard": "/Users/matthewanderson/.codex/worktrees/da28/ClashKingDashboard",
+    "admin": "/Users/matthewanderson/.codex/worktrees/d0a1/ClashKingAdminPanel",
+    "app": "/Users/matthewanderson/.codex/worktrees/33f9/ClashKingApp"
+  },
+  "secretsEnv": "/Users/matthewanderson/.codex/worktrees/1cec/clashking_schemas/local/.env",
+  "archiveImportRoot": "/Users/matthewanderson/Documents/Codex/2026-09-03/http-effectnative-dev-can-this-be/implementation/clashking_api/.local/imported-archives/packs",
+  "apiProviders": {
+    "clashProxy": "remote-vpc"
+  },
+  "services": {
+    "postgres": {
+      "host": "127.0.0.1",
+      "port": 54329,
+      "database": "clashking_dev"
+    },
+    "valkey": {
+      "host": "127.0.0.1",
+      "port": 6379
+    },
+    "r2": {
+      "endpoint": "http://127.0.0.1:9000",
+      "bucket": "clashking-wars"
+    },
+    "proxy": {
+      "origin": "http://127.0.0.1:8011"
+    },
+    "api": {
+      "origin": "http://127.0.0.1:8787"
+    },
+    "tracking": {
+      "origin": "http://127.0.0.1:8091"
+    },
+    "dashboard": {
+      "origin": "http://127.0.0.1:3002"
+    },
+    "admin": {
+      "origin": "http://127.0.0.1:3000"
+    },
+    "expo": {
+      "origin": "http://127.0.0.1:7357"
+    }
+  }
+}

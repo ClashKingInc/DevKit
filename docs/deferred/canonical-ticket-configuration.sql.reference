@@ -1,0 +1,254 @@
+-- +goose Up
+-- ticket_panels is the sole live configuration model. The normalized tables
+-- remain as inert import evidence; this migration never reconstructs live JSON
+-- from their incomplete copies.
+LOCK TABLE public.ticket_panels, public.ticket_panel, public.ticket_panel_buttons, public.tickets IN ACCESS EXCLUSIVE MODE;
+
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM public.ticket_panels p
+        JOIN public.ticket_panel legacy USING (server_id, name)
+        GROUP BY p.server_id, p.name
+        HAVING count(*) > 1
+    ) THEN
+        RAISE EXCEPTION 'ticket panel identity is ambiguous: multiple normalized panels match one live JSON panel';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM public.ticket_panels
+        WHERE jsonb_typeof(components) <> 'array' OR jsonb_typeof(data) <> 'object'
+    ) THEN
+        RAISE EXCEPTION 'ticket panel JSON configuration has an invalid top-level shape';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM public.ticket_panels p
+        CROSS JOIN LATERAL jsonb_array_elements(p.components) component
+        WHERE jsonb_typeof(component) <> 'object'
+           OR jsonb_typeof(component->'custom_id') <> 'string'
+           OR component->>'custom_id' = ''
+           OR (component ? 'id' AND (
+                jsonb_typeof(component->'id') <> 'string'
+                OR component->>'id' !~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+           ))
+    ) THEN
+        RAISE EXCEPTION 'ticket panel component is missing a valid custom_id or contains an invalid UUID id';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM public.ticket_panels p
+        CROSS JOIN LATERAL jsonb_array_elements(p.components) component
+        GROUP BY p.server_id, p.name, component->>'custom_id'
+        HAVING count(*) > 1
+    ) THEN
+        RAISE EXCEPTION 'ticket panel contains duplicate component custom_id values';
+    END IF;
+END
+$$;
+-- +goose StatementEnd
+
+ALTER TABLE public.ticket_panels
+    ADD COLUMN id uuid,
+    ADD COLUMN archived_at timestamptz;
+
+UPDATE public.ticket_panels live
+SET id = COALESCE((
+    SELECT legacy.id
+    FROM public.ticket_panel legacy
+    WHERE legacy.server_id = live.server_id AND legacy.name = live.name
+), uuidv7());
+
+ALTER TABLE public.ticket_panels ALTER COLUMN id SET NOT NULL;
+ALTER TABLE public.ticket_panels ALTER COLUMN id SET DEFAULT uuidv7();
+ALTER TABLE public.ticket_panels DROP CONSTRAINT ticket_panels_pkey;
+ALTER TABLE public.ticket_panels ADD CONSTRAINT ticket_panels_pkey PRIMARY KEY (id);
+ALTER TABLE public.ticket_panels ADD CONSTRAINT ticket_panels_id_server_id_key UNIQUE (id, server_id);
+CREATE UNIQUE INDEX ticket_panels_active_server_name_key ON public.ticket_panels (server_id, name)
+    WHERE archived_at IS NULL;
+CREATE INDEX idx_ticket_panels_server_archive_name ON public.ticket_panels (server_id, archived_at, name);
+
+-- Preserve every normalized identity that may be referenced by ticket history,
+-- but never promote its partial configuration copy to a live panel.
+INSERT INTO public.ticket_panels (id, server_id, name, components, data, created_at, updated_at, archived_at)
+SELECT legacy.id, legacy.server_id, legacy.name, '[]'::jsonb, '{}'::jsonb,
+       legacy.created_at, legacy.created_at, now()
+FROM public.ticket_panel legacy
+WHERE NOT EXISTS (SELECT 1 FROM public.ticket_panels canonical WHERE canonical.id = legacy.id);
+
+-- Freeze one UUID per JSON component. Reuse the imported button UUID only when
+-- the panel and custom_id identify exactly that legacy row.
+CREATE TEMP TABLE ticket_component_identity (
+    panel_id uuid NOT NULL,
+    ordinal bigint NOT NULL,
+    legacy_custom_id text NOT NULL,
+    custom_id text NOT NULL,
+    button_id uuid NOT NULL,
+    PRIMARY KEY (panel_id, ordinal),
+    UNIQUE (panel_id, custom_id),
+    UNIQUE (button_id)
+) ON COMMIT DROP;
+
+WITH identity_candidates AS (
+    SELECT panel.id AS panel_id, component.ordinality, component.value->>'custom_id' AS legacy_custom_id,
+           COALESCE(legacy.id,
+               CASE WHEN component.value ? 'id' THEN (component.value->>'id')::uuid END,
+               uuidv7()) AS button_id
+    FROM public.ticket_panels panel
+    CROSS JOIN LATERAL jsonb_array_elements(panel.components) WITH ORDINALITY component(value, ordinality)
+    LEFT JOIN public.ticket_panel_buttons legacy
+      ON legacy.panel_id = panel.id AND legacy.custom_id = component.value->>'custom_id'
+    WHERE panel.archived_at IS NULL
+)
+INSERT INTO ticket_component_identity (panel_id, ordinal, legacy_custom_id, custom_id, button_id)
+SELECT panel_id, ordinality, legacy_custom_id,
+       'ck:ticket:open:' || panel_id::text || ':' || button_id::text,
+       button_id
+FROM identity_candidates;
+
+-- +goose StatementBegin
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM public.ticket_panels panel
+        JOIN ticket_component_identity identity ON identity.panel_id = panel.id
+        JOIN LATERAL jsonb_array_elements(panel.components) WITH ORDINALITY component(value, ordinality)
+          ON component.ordinality = identity.ordinal
+        JOIN public.ticket_panel_buttons legacy
+          ON legacy.panel_id = panel.id AND legacy.custom_id = identity.legacy_custom_id
+        WHERE component.value ? 'id' AND (component.value->>'id')::uuid <> legacy.id
+    ) THEN
+        RAISE EXCEPTION 'ticket button identity is ambiguous: JSON and normalized UUIDs disagree';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM public.ticket_panels panel
+        JOIN ticket_component_identity identity ON identity.panel_id = panel.id
+        WHERE panel.data ? (identity.custom_id || '_settings')
+          AND identity.custom_id || '_settings' <> identity.legacy_custom_id || '_settings'
+    ) THEN
+        RAISE EXCEPTION 'ticket button settings target key already exists';
+    END IF;
+END
+$$;
+-- +goose StatementEnd
+
+WITH rewritten AS (
+    SELECT panel.id AS panel_id,
+           jsonb_agg(jsonb_set(jsonb_set(component.value, '{id}', to_jsonb(identity.button_id::text), true),
+                              '{custom_id}', to_jsonb(identity.custom_id), true)
+                     ORDER BY component.ordinality) AS components,
+           array_agg(identity.legacy_custom_id || '_settings') AS old_settings_keys,
+           COALESCE(jsonb_object_agg(identity.custom_id || '_settings',
+                                    panel.data->(identity.legacy_custom_id || '_settings'))
+                    FILTER (WHERE panel.data ? (identity.legacy_custom_id || '_settings')), '{}'::jsonb) AS moved_settings
+    FROM public.ticket_panels panel
+    JOIN ticket_component_identity identity ON identity.panel_id = panel.id
+    JOIN LATERAL jsonb_array_elements(panel.components) WITH ORDINALITY component(value, ordinality)
+      ON component.ordinality = identity.ordinal
+    GROUP BY panel.id
+)
+UPDATE public.ticket_panels panel
+SET components = rewritten.components,
+    data = (panel.data - rewritten.old_settings_keys) || rewritten.moved_settings
+FROM rewritten
+WHERE panel.id = rewritten.panel_id;
+
+-- +goose StatementBegin
+CREATE FUNCTION public.ticket_panel_configuration_valid(panel_id uuid, panel_components jsonb, panel_data jsonb)
+RETURNS boolean LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
+DECLARE
+    component jsonb;
+    component_id text;
+    custom_id text;
+    ids text[] := '{}';
+    custom_ids text[] := '{}';
+BEGIN
+    IF jsonb_typeof(panel_components) <> 'array' OR jsonb_typeof(panel_data) <> 'object' THEN
+        RETURN false;
+    END IF;
+    FOR component IN SELECT value FROM jsonb_array_elements(panel_components) LOOP
+        IF jsonb_typeof(component) <> 'object'
+           OR jsonb_typeof(component->'id') <> 'string'
+           OR jsonb_typeof(component->'custom_id') <> 'string' THEN
+            RETURN false;
+        END IF;
+        component_id := component->>'id';
+        custom_id := component->>'custom_id';
+        IF custom_id = ''
+           OR component_id !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+           OR custom_id <> 'ck:ticket:open:' || panel_id::text || ':' || component_id
+           OR component_id = ANY(ids) OR custom_id = ANY(custom_ids) THEN
+            RETURN false;
+        END IF;
+        ids := array_append(ids, component_id);
+        custom_ids := array_append(custom_ids, custom_id);
+    END LOOP;
+    RETURN true;
+END
+$$;
+-- +goose StatementEnd
+
+ALTER TABLE public.ticket_panels ADD CONSTRAINT ticket_panels_configuration_check
+    CHECK (public.ticket_panel_configuration_valid(id, components, data));
+
+-- +goose StatementBegin
+CREATE FUNCTION public.guard_canonical_ticket_panel() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'ticket panel identities are archived, not deleted' USING ERRCODE = '23514';
+    END IF;
+    IF ROW(NEW.id, NEW.server_id, NEW.name, NEW.created_at)
+       IS DISTINCT FROM ROW(OLD.id, OLD.server_id, OLD.name, OLD.created_at) THEN
+        RAISE EXCEPTION 'ticket panel identity is immutable' USING ERRCODE = '23514';
+    END IF;
+    IF OLD.archived_at IS NOT NULL THEN
+        RAISE EXCEPTION 'archived ticket panel configuration is immutable' USING ERRCODE = '23514';
+    END IF;
+    IF NEW.archived_at IS NOT NULL
+       AND ROW(NEW.components, NEW.data) IS DISTINCT FROM ROW(OLD.components, OLD.data) THEN
+        RAISE EXCEPTION 'ticket panel archival cannot rewrite configuration' USING ERRCODE = '23514';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements(OLD.components) old_component
+        JOIN jsonb_array_elements(NEW.components) new_component
+          ON old_component->>'custom_id' = new_component->>'custom_id'
+        WHERE old_component->>'id' IS DISTINCT FROM new_component->>'id'
+    ) OR EXISTS (
+        SELECT 1
+        FROM jsonb_array_elements(OLD.components) old_component
+        JOIN jsonb_array_elements(NEW.components) new_component
+          ON old_component->>'id' = new_component->>'id'
+        WHERE old_component->>'custom_id' IS DISTINCT FROM new_component->>'custom_id'
+    ) THEN
+        RAISE EXCEPTION 'ticket button identity is immutable' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END
+$$;
+-- +goose StatementEnd
+CREATE TRIGGER guard_canonical_ticket_panel
+    BEFORE UPDATE OR DELETE ON public.ticket_panels
+    FOR EACH ROW EXECUTE FUNCTION public.guard_canonical_ticket_panel();
+
+ALTER TABLE public.tickets DROP CONSTRAINT tickets_panel_id_fkey;
+ALTER TABLE public.tickets ADD CONSTRAINT tickets_panel_id_fkey
+    FOREIGN KEY (panel_id, server_id) REFERENCES public.ticket_panels(id, server_id) ON DELETE RESTRICT;
+ALTER TABLE public.ticket_runtime_operations ADD CONSTRAINT ticket_runtime_operations_panel_id_fkey
+    FOREIGN KEY (panel_id, server_id) REFERENCES public.ticket_panels(id, server_id) ON DELETE RESTRICT;
+
+COMMENT ON TABLE public.ticket_panels IS 'Canonical ticket panel configuration; archived rows retain stable history identities.';
+COMMENT ON TABLE public.ticket_panel IS 'Deprecated imported ticket panel copy; not a live configuration source after migration 017.';
+COMMENT ON TABLE public.ticket_panel_buttons IS 'Deprecated imported ticket button copy; not a live configuration source after migration 017.';
+
+-- +goose Down
+-- +goose StatementBegin
+DO $$
+BEGIN
+    RAISE EXCEPTION 'migration 017 is irreversible because ticket history now references canonical archived identities';
+END
+$$;
+-- +goose StatementEnd
