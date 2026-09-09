@@ -24,6 +24,7 @@ func TestTimescaleMigrationsAreExplicitlyNumbered(t *testing.T) {
 		"009_league_army_analytics.sql",
 		"010_cwl_season_statistics.sql",
 		"011_active_verified_players.sql",
+		"012_legend_only_army_compositions.sql",
 	}
 	if len(files) != len(want) {
 		t.Fatalf("Timescale migrations = %v, want %v", files, want)
