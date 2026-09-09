@@ -186,5 +186,4 @@ ahead of newer home posts without hiding those newer posts.
 `010_cwl_season_statistics.sql` adds rerunnable CWL population summaries.
 Do not use the former 007–028 fixture numbering. See
 [the schema decisions](../../docs/worker-api-schema.md),
-[the disposable upgrade test](../../RETAINED_API_FIXTURE.md), and
-[the guarded production workflow](../../docs/production-migrations.md).
+[the disposable upgrade test](../../RETAINED_API_FIXTURE.md).

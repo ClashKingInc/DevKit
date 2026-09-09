@@ -27,8 +27,7 @@ containers use tmpfs storage and are removed after the child exits. The wrapper
 never reads or reuses retained Valkey coordinates.
 
 ```sh
-node --test scripts/with-test-timescale.test.mjs scripts/with-test-integration.test.mjs scripts/production-migrations.test.mjs
-python3 scripts/test-production-environment.py
+node --test scripts/with-test-timescale.test.mjs scripts/with-test-integration.test.mjs
 cd database
 bash ../scripts/with-test-timescale.sh --profile baseline-006 -- go test ./schema -run TestWorkerAPIUpgrade -count=1 -v
 ```
@@ -47,5 +46,4 @@ without rewriting existing Discord custom IDs or adding deferred runtime tables.
 See `docs/worker-api-schema.md` for required consumer changes. The original 017
 proposal remains verbatim in docs/deferred as a historical reference.
 
-Production migration operation is documented in `docs/production-migrations.md`.
 The fixture is local validation, not evidence that production has been upgraded.
