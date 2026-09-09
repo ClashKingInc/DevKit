@@ -100,6 +100,7 @@ type Locator struct {
 // already-averaged values.
 type PackStats struct {
 	ByDay map[string]DayStats `json:"byDay"`
+	CWL   *CWLStats           `json:"cwl,omitempty"`
 }
 
 type DayStats struct {

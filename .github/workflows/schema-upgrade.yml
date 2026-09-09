@@ -1,0 +1,27 @@
+name: Verify schema upgrade
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: database/go.mod
+          cache-dependency-path: database/go.sum
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck= .github/workflows/migrate-production.yml .github/workflows/schema-upgrade.yml
+      - run: go install github.com/pressly/goose/v3/cmd/goose@v3.26.0
+      - run: node --test scripts/with-test-timescale.test.mjs scripts/production-migrations.test.mjs
+      - run: python3 scripts/test-production-environment.py
+      - name: Apply 006 then upgrade seeded data to 007
+        working-directory: database
+        run: bash ../scripts/with-test-timescale.sh --profile baseline-006 -- go test ./schema -count=1 -v

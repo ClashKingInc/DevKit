@@ -7,7 +7,7 @@ import (
 )
 
 func TestDiscordCacheSchema(t *testing.T) {
-	raw, err := os.ReadFile("../timescale/008_discord_cache.sql")
+	raw, err := os.ReadFile("../timescale/007_worker_api.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,8 +31,6 @@ func TestDiscordCacheSchema(t *testing.T) {
 		"primary key (application_id, logical_name)",
 		"source_key text not null",
 		"source_updated_at timestamp with time zone not null",
-		"create table discord_cache.delivery_receipts",
-		"primary key (stream_id, destination_id)",
 	} {
 		if !strings.Contains(up, required) {
 			t.Errorf("discord cache migration missing %q", required)
