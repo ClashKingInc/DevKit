@@ -57,8 +57,9 @@ func TestFinalBattleLeagueSchema(t *testing.T) {
 		`SELECT count(*)=0 FROM timescaledb_information.jobs WHERE hypertable_name IN ('league_hitrate_stats','ranked_league_tier_stats','legend_daily_stats','army_family_daily_stats')`,
 		`SELECT to_regclass('public.ranked_league_groups') IS NULL AND to_regclass('public.ranked_item_presence_slots') IS NULL AND to_regclass('public.ranked_army_stats_prefix') IS NULL`,
 		`SELECT count(*)=9 FROM information_schema.columns WHERE table_schema='public' AND table_name='ranked_league_group_members' AND column_name IN ('season_id','group_tag','league_tier_id','player_tag','player_name','town_hall','placement','league_trophies','maximum_battle_count')`,
-		`SELECT count(*)=6 FROM information_schema.columns WHERE table_schema='public' AND table_name='ranked_league_group_members' AND column_name IN ('attack_win_count','attack_loss_count','attack_star_count','defense_win_count','defense_loss_count','defense_star_count')`,
-		`SELECT count(*)=0 FROM information_schema.columns WHERE table_schema='public' AND table_name='ranked_league_group_members' AND column_name IN ('clan_tag','clan_name','observed_at','missing_at','promoted','demoted','state')`,
+		`SELECT count(*)=14 FROM information_schema.columns WHERE table_schema='public' AND table_name='ranked_league_group_members' AND column_name IN ('attack_win_count','attack_loss_count','attack_star_count','defense_win_count','defense_loss_count','defense_star_count','registered_attack_count','registered_defense_count','observed_attack_count','observed_defense_count','missing_real_attacks','missing_real_defenses','attacks_complete','defenses_complete')`,
+		`SELECT count(*)=4 FROM information_schema.columns WHERE table_schema='public' AND table_name='ranked_league_group_members' AND column_name IN ('missing_real_attacks','missing_real_defenses','attacks_complete','defenses_complete') AND is_generated='ALWAYS'`,
+		`SELECT count(*)=0 FROM information_schema.columns WHERE table_schema='public' AND table_name='ranked_league_group_members' AND column_name IN ('clan_tag','clan_name','observed_at','missing_at','state')`,
 		`SELECT to_regclass('public.legend_history') IS NOT NULL`,
 	}
 	for _, q := range checks {
@@ -66,6 +67,32 @@ func TestFinalBattleLeagueSchema(t *testing.T) {
 		if err := conn.QueryRow(ctx, q).Scan(&ok); err != nil || !ok {
 			t.Fatalf("schema check failed: %s err=%v", q, err)
 		}
+	}
+}
+
+func TestRankedGroupMemberDerivesCaptureCompleteness(t *testing.T) {
+	conn := disposableConn(t)
+	ctx := context.Background()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	_, err = tx.Exec(ctx, `INSERT INTO ranked_league_group_members(
+		season_id,group_tag,league_tier_id,player_tag,player_name,placement,league_trophies,
+		town_hall,maximum_battle_count,registered_attack_count,registered_defense_count,
+		observed_attack_count,observed_defense_count
+	) VALUES(1,'#2PP',1,'#9G2YV','Player',1,1000,18,12,10,8,9,8)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var missingAttacks, missingDefenses int
+	var attacksComplete, defensesComplete bool
+	if err = tx.QueryRow(ctx, `SELECT missing_real_attacks,missing_real_defenses,attacks_complete,defenses_complete FROM ranked_league_group_members WHERE season_id=1 AND player_tag='#9G2YV'`).Scan(&missingAttacks, &missingDefenses, &attacksComplete, &defensesComplete); err != nil {
+		t.Fatal(err)
+	}
+	if missingAttacks != 1 || missingDefenses != 0 || attacksComplete || !defensesComplete {
+		t.Fatalf("missing attacks=%d defenses=%d complete attacks=%t defenses=%t", missingAttacks, missingDefenses, attacksComplete, defensesComplete)
 	}
 }
 

@@ -56,7 +56,7 @@ have target progress to report.
 
 ## Battle and league analytics
 
-Migration 008 adds one-year farming history, two-perspective Ranked/Legend history, and immutable exact army compositions. Raw Ranked/Legend rows are compressed after 30 days; aggregate queries count only `direction = 'attack'` so the defense perspective does not double results. Migration 008 also reshapes the existing `ranked_league_group_members` table to match the source counters directly.
+Migration 008 adds one-year farming history, two-perspective Ranked/Legend history, and immutable exact army compositions. Raw Ranked/Legend rows are compressed after 30 days; aggregate queries count only `direction = 'attack'` so the defense perspective does not double results. Migration 008 also reshapes the existing `ranked_league_group_members` table with source result counters plus registered-versus-observed capture completeness.
 
 Migration 009 adds permanent normal-PostgreSQL rollups for league hit rates, Ranked tier populations, Legend daily item usage, and immutable army-family assignments. It does not add a Ranked group parent table, item presence registry, prefix tables, or compression policies for rollups. See [the complete storage contract](../../docs/ranked-battle-history.md).
 
