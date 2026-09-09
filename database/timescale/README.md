@@ -64,7 +64,7 @@ Migration 009 adds permanent normal-PostgreSQL rollups for league hit rates, Ran
 
 ## Index Notes
 
-Farming uniqueness is `(player_tag,battle_time)`. Ranked perspective uniqueness is `(player_tag,battle_time,battle_mode,direction,opponent_tag)`. Explicit `battle_mode` distinguishes overlapping Ranked and Legend windows. Player/time and player/mode/time indexes serve history, while a partial mode/time index containing only `direction = 'attack'` serves aggregate scans.
+Farming and Ranked/Legend uniqueness is `(player_tag,battle_time)` after migration 013. Tracking stores only the requested player's perspective; `battle_mode` remains available for filtering. Player/time and player/mode/time indexes serve history, while a partial mode/time index containing only `direction = 'attack'` serves aggregate scans.
 
 ## Global Clan Changes
 
@@ -187,3 +187,5 @@ ahead of newer home posts without hiding those newer posts.
 Do not use the former 007–028 fixture numbering. See
 [the schema decisions](../../docs/worker-api-schema.md),
 [the disposable upgrade test](../../RETAINED_API_FIXTURE.md).
+
+Migration 013 replaces the Ranked/Legend primary key without deleting data. Existing collisions cause a transactional failure. For an explicitly authorized rebuild with the battle-log writer stopped, `scripts/reset-battle-history.sql` clears battles and compositions only when dependent families and battle aggregates are empty; it never cascades. Reset only the `bl:#*` Valkey checkpoints before restarting the corrected writer.
