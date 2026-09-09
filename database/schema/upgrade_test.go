@@ -41,7 +41,12 @@ func TestWorkerAPIUpgrade(t *testing.T) {
  INSERT INTO billing_customers(user_id,stripe_customer_id) VALUES ('old','cus_old'),('new','cus_new');
  INSERT INTO billing_subscriptions(user_id,provider_subscription_id,status) VALUES ('old','sub_old','active');
  INSERT INTO servers(id,name) VALUES ('123','existing');
- INSERT INTO ticket_panels(server_id,name,components,data) VALUES ('123','existing','[{"custom_id":"old_button","label":"Apply"}]','{"old_button_settings":{"questions":["Why?"]}}');
+ INSERT INTO ticket_panels(server_id,name,components,data) VALUES (
+   '123',
+   'existing',
+   '[{"id":0,"type":2,"custom_id":"old_button","label":"Apply"},{"id":0,"type":2,"custom_id":"duplicate","label":"First"},{"type":2,"custom_id":"duplicate","label":"Second"}]',
+   '{"old_button_settings":{"questions":["Why?"]},"duplicate_settings":{"questions":["Which one?"]}}'
+ );
  INSERT INTO ticket_panel(id,server_id,name,description) VALUES ('00000000-0000-4000-8000-000000000001','123','existing','imported');
  INSERT INTO ticket_panel_buttons(id,panel_id,server_id,custom_id) VALUES ('00000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000001','123','old_button');
  INSERT INTO tickets(server_id,channel_id,panel_id) VALUES ('123','456','00000000-0000-4000-8000-000000000001');
@@ -76,18 +81,17 @@ func TestWorkerAPIUpgrade(t *testing.T) {
 	check(`SELECT capital_gold_rank=1 AND location_capital_gold_rank=1 FROM clan_leaderboards WHERE tag='#A'`)
 	check(`SELECT to_regclass('public.roster_ai_budget_locks') IS NULL AND to_regclass('public.player_link_mutation_locks') IS NULL AND to_regclass('discord_cache.delivery_receipts') IS NULL AND to_regclass('public.subject_mutation_locks') IS NULL AND to_regclass('public.discord_managed_resources') IS NULL`)
 	check(`SELECT to_regclass('discord_cache.dashboard_access') IS NULL AND to_regclass('discord_cache.request_limits') IS NULL`)
-	// UUID identity preserves history while active names can change or be reused.
-	check(`SELECT id='00000000-0000-4000-8000-000000000001'::uuid AND components->0->>'id'='00000000-0000-4000-8000-000000000002' AND components->0->>'custom_id'='old_button' AND data->'old_button_settings'->'questions'='["Why?"]'::jsonb FROM ticket_panels WHERE server_id='123' AND name='existing'`)
-	run(`UPDATE ticket_panels SET name='Renamed' WHERE server_id='123' AND name='existing'`)
-	check(`SELECT p.name='Renamed' FROM tickets t JOIN ticket_panels p ON p.id=t.panel_id WHERE t.channel_id='456'`)
-	run(`UPDATE ticket_panels SET archived_at=now() WHERE server_id='123' AND name='Renamed'; INSERT INTO ticket_panels(server_id,name) VALUES ('123','Renamed') ON CONFLICT(server_id,name) WHERE archived_at IS NULL DO NOTHING`)
-	check(`SELECT count(*)=2 FROM ticket_panels WHERE server_id='123' AND name='Renamed'`)
-	if _, err := conn.Exec(ctx, `DELETE FROM ticket_panels WHERE id='00000000-0000-4000-8000-000000000001'`); err == nil {
-		t.Fatal("panel identity deletion allowed")
-	}
-	if _, err := conn.Exec(ctx, `UPDATE ticket_panels SET components='[{"custom_id":"missing-id"}]' WHERE archived_at IS NULL`); err == nil {
-		t.Fatal("missing button UUID accepted")
-	}
+	// Ticket configuration is deliberately untouched until the Bot rewrite can
+	// resolve legacy Discord IDs and duplicate custom IDs without changing behavior.
+	check(`SELECT components='[{"id":0,"type":2,"custom_id":"old_button","label":"Apply"},{"id":0,"type":2,"custom_id":"duplicate","label":"First"},{"type":2,"custom_id":"duplicate","label":"Second"}]'::jsonb
+	 AND data='{"old_button_settings":{"questions":["Why?"]},"duplicate_settings":{"questions":["Which one?"]}}'::jsonb
+	 FROM ticket_panels WHERE server_id='123' AND name='existing'`)
+	check(`SELECT NOT EXISTS (
+	 SELECT 1 FROM information_schema.columns
+	 WHERE table_schema='public' AND table_name='ticket_panels' AND column_name IN ('id','archived_at')
+	)`)
+	check(`SELECT confrelid='public.ticket_panel'::regclass AND confdeltype='c'
+	 FROM pg_constraint WHERE conrelid='public.tickets'::regclass AND conname='tickets_panel_id_fkey'`)
 	check(`SELECT to_regclass('public.ticket_runtime_operations') IS NULL`)
 
 	run(`INSERT INTO app_update_channels(channel,platform,runtime_version,active_version,rollback_target_version) VALUES ('production','ios','1','v2','v1')`)

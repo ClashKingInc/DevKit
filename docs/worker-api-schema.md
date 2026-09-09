@@ -21,27 +21,17 @@ require_api_token_when_linking (false for existing and new servers).
 
 ## Ticket configuration decision
 
-007 now includes the approved stable-identity portion of the earlier proposal.
-Panels gain id UUID (primary key) and archived_at. Active names remain unique
-within a server through a partial unique index; names are editable. Existing
-normalized panel/button UUIDs are reused when unambiguous, and legacy-only
-panels are preserved as archived history. tickets.panel_id references canonical
-ticket_panels with server scope. Panel deletion is rejected; archive instead.
+007 leaves `ticket_panels`, `ticket_panel`, `ticket_panel_buttons`, and `tickets`
+on their 006 definitions and does not rewrite any ticket data. Production JSON
+contains optional numeric Discord component IDs and some live panels contain
+duplicate `custom_id` values with different payloads. Their runtime meaning must
+be resolved with the Bot rewrite before stable UUIDs, archival, or stricter
+configuration constraints can be introduced without changing behavior.
 
-Buttons receive internal UUIDs in components JSON. Existing Discord custom_id
-values and corresponding data settings keys are preserved, avoiding an automatic
-rewrite of posted controls. Configuration checks require UUIDs and unique
-component/custom IDs; existing identity pairs cannot be reassigned in an update.
-Archived configuration is not frozen by an additional trigger. There is no
-runtime-table prerequisite. No new button-history table is introduced.
-
-Consumer cutover is required: use panel IDs for mutations, filter active panels
-with archived_at IS NULL, archive rather than delete, preserve button IDs on
-edits, and use ON CONFLICT(server_id,name) WHERE archived_at IS NULL if retaining
-name-based creation. The original broader 017 remains a verbatim reference in
-docs/deferred; it is not separately applied. Reopening old controls after panel
-renames still needs the Bot's routing contract to use stable identity; SQL alone
-cannot change an existing name-based custom_id parser.
+The canonical ticket configuration proposal remains in
+`docs/deferred/canonical-ticket-configuration.sql.reference`. It is reference
+material only and must not be applied until the Bot and Dashboard callers have
+an agreed identity and lifecycle contract.
 
 ## Approved coordination simplification
 
