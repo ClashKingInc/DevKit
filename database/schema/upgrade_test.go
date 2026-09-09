@@ -100,13 +100,18 @@ func TestWorkerAPIUpgrade(t *testing.T) {
  season_id,group_tag,league_tier_id,player_tag,player_name,placement,league_trophies,
  attack_win_count,attack_lose_count,defense_win_count,defense_lose_count
 ) VALUES (1,'#2PP',1,'#2PP','Existing',1,1000,3,2,4,1)`)
+	run(`INSERT INTO ranked_league_group_members(
+ season_id,group_tag,league_tier_id,player_tag,player_name,placement,league_trophies,
+ attack_win_count,attack_lose_count,defense_win_count,defense_lose_count
+) VALUES (1,'#P0Y',1,'#2PP','Stale duplicate',2,900,1,0,0,0)`)
 	if err := migrate("up-to", "8"); err != nil {
 		t.Fatal("repeat up", err)
 	}
 	check(`SELECT max(version_id)=8 FROM goose_db_version WHERE is_applied`)
-	check(`SELECT player_tag='#2PP' AND attack_win_count=3 AND attack_loss_count=2
+	check(`SELECT player_tag='#2PP' AND player_name='Existing' AND attack_win_count=3 AND attack_loss_count=2
 	 AND defense_win_count=4 AND defense_loss_count=1 AND maximum_battle_count=0
  FROM ranked_league_group_members WHERE season_id=1 AND group_tag='#2PP'`)
+	check(`SELECT count(*)=1 FROM ranked_league_group_members WHERE season_id=1 AND player_tag='#2PP'`)
 	for _, table := range []string{"public.battles_farming", "public.battles_ranked", "public.army_compositions"} {
 		var present bool
 		if err := conn.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&present); err != nil || !present {

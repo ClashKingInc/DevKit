@@ -83,7 +83,7 @@ One immutable exact army definition. `army_hash` is SHA-256 of the normalized sh
 
 ### `ranked_league_group_members`
 
-This existing table remains the only Ranked group relation; there is no `ranked_league_groups` table. Its primary key remains `(season_id,group_tag,player_tag)`, and `UNIQUE (season_id,player_tag)` lets ingestion replace a stale group tag rather than creating a second membership for the same season.
+This existing table remains the only Ranked group relation; there is no `ranked_league_groups` table. Its primary key remains `(season_id,group_tag,player_tag)`, and `UNIQUE (season_id,player_tag)` lets ingestion replace a stale group tag rather than creating a second membership for the same season. During upgrade, existing duplicates are reduced deterministically because the old schema has no observation timestamp: the row with the greatest combined attack/defense result count wins, followed by trophies, tier, placement, and group tag as stable tie-breakers. Counters from different group snapshots are not combined.
 
 | Column | Type | Null/default and rule |
 |---|---|---|

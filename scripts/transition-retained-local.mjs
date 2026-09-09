@@ -14,13 +14,18 @@ export function validateTransitionArguments(args) {
 }
 
 export async function switchDatabaseNames(admin) {
-  await admin.query('BEGIN');
+  await admin.query(`ALTER DATABASE ${original} RENAME TO ${retired}`);
   try {
-    await admin.query(`ALTER DATABASE ${original} RENAME TO ${retired}`);
     await admin.query(`ALTER DATABASE ${candidate} RENAME TO ${original}`);
-    await admin.query('COMMIT');
   } catch(error) {
-    await admin.query('ROLLBACK');
+    try {
+      await admin.query(`ALTER DATABASE ${retired} RENAME TO ${original}`);
+    } catch(recoveryError) {
+      throw new AggregateError(
+        [error,recoveryError],
+        `Candidate rename failed and compensating recovery could not restore ${original}; source data remains in ${retired}`,
+      );
+    }
     throw error;
   }
 }

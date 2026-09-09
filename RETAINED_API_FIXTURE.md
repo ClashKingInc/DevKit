@@ -7,7 +7,7 @@ migrations formerly numbered 007, 008, 009, 010, 012, 013, 020, 022, 023, 027 an
 028 into one transaction, excluding the user-rejected player-link mutex, global
 AI-budget mutex, subject mutex, resource ownership ledger and Discord delivery receipt tables. Its Down operation is intentionally irreversible.
 
-`008_ranked_battle_history.sql` adds the one-year farming and two-perspective Ranked/Legend histories, immutable normalized army compositions, and the final `ranked_league_group_members` source-counter shape. `009_league_army_analytics.sql` adds permanent league/Legend rollups and immutable army-family assignments. Both are reversible because these migrations are still unreleased. `010_cwl_season_statistics.sql` remains the independent, reversible CWL population summary, and 011 adds active verified-player state. See `docs/ranked-battle-history.md` for every column and lifecycle.
+`008_ranked_battle_history.sql` adds the one-year farming and two-perspective Ranked/Legend histories, immutable normalized army compositions, and the final `ranked_league_group_members` source-counter shape. `009_league_army_analytics.sql` adds permanent league/Legend rollups and immutable army-family assignments. Both have structural Down paths, but 008 cannot recreate stale duplicate season memberships removed before it enforces one group per player and season. `010_cwl_season_statistics.sql` remains the independent, reversible CWL population summary, and 011 adds active verified-player state. See `docs/ranked-battle-history.md` for every column and lifecycle.
 
 `bash scripts/with-test-timescale.sh --profile retained-api -- COMMAND [ARG ...]`
 applies the complete canonical sequence to a fresh local tmpfs Timescale

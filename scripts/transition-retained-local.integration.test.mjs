@@ -4,7 +4,7 @@ import {resolve} from 'node:path';
 import {test} from 'node:test';
 import {switchDatabaseNames} from './transition-retained-local.mjs';
 
-test('real PostgreSQL switch preserves both databases and connection policy', {skip:process.env.CLASHKING_DISPOSABLE_TIMESCALE!=='1'}, async()=>{
+test('real PostgreSQL switch preserves both databases and compensates a failed second rename', {skip:process.env.CLASHKING_DISPOSABLE_TIMESCALE!=='1'}, async()=>{
   const uri=new URL(process.env.TEST_DATABASE_URL);
   assert.equal(uri.hostname,'127.0.0.1');
   assert.notEqual(uri.port,'54329');
@@ -24,6 +24,13 @@ test('real PostgreSQL switch preserves both databases and connection policy', {s
     assert.equal(after.rows.find(row=>row.datname==='clashking_dev_retired_028').oid,before.rows.find(row=>row.datname==='clashking_dev').oid);
     assert.equal(after.rows.find(row=>row.datname==='clashking_dev_retired_028').datallowconn,false);
     assert.equal(after.rows.find(row=>row.datname==='clashking_dev').datallowconn,true);
+
+    await admin.query('DROP DATABASE clashking_dev');
+    await admin.query('DROP DATABASE clashking_dev_retired_028');
+    await admin.query('CREATE DATABASE clashking_dev');
+    await assert.rejects(switchDatabaseNames(admin),/does not exist/);
+    const recovered=await admin.query("SELECT datname FROM pg_database WHERE datname IN ('clashking_dev','clashking_dev_retired_028') ORDER BY datname");
+    assert.deepEqual(recovered.rows,[{datname:'clashking_dev'}]);
   } finally {
     // This test can run only in the schema-owned isolated container. Never force
     // termination; the outer fixture also removes its own temporary container.

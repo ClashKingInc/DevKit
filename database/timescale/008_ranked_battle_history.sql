@@ -195,6 +195,29 @@ ALTER TABLE public.ranked_league_group_members
     ADD CONSTRAINT ranked_group_members_town_hall_check CHECK (town_hall IS NULL OR town_hall BETWEEN 1 AND 20),
     ADD CONSTRAINT ranked_group_members_tier_check CHECK (league_tier_id > 0),
     ADD CONSTRAINT ranked_group_members_counts_check CHECK (placement > 0 AND league_trophies >= 0 AND maximum_battle_count >= 0 AND attack_win_count >= 0 AND attack_loss_count >= 0 AND attack_star_count >= 0 AND defense_win_count >= 0 AND defense_loss_count >= 0 AND defense_star_count >= 0);
+
+-- The previous key allowed one player to remain under multiple corrected group
+-- tags in a season and did not record observation time. Retain the snapshot
+-- with the most reported battles; stable tie-breakers make every upgrade choose
+-- the same row without inventing or combining counters from different groups.
+WITH ranked_memberships AS (
+    SELECT ctid,
+        row_number() OVER (
+            PARTITION BY season_id, player_tag
+            ORDER BY
+                attack_win_count::bigint + attack_loss_count::bigint
+                    + defense_win_count::bigint + defense_loss_count::bigint DESC,
+                league_trophies DESC,
+                league_tier_id DESC,
+                placement ASC,
+                group_tag ASC
+        ) AS preference
+    FROM public.ranked_league_group_members
+)
+DELETE FROM public.ranked_league_group_members AS membership
+USING ranked_memberships AS ranked
+WHERE membership.ctid = ranked.ctid AND ranked.preference > 1;
+
 ALTER TABLE public.ranked_league_group_members
     ADD CONSTRAINT ranked_group_members_season_player_key UNIQUE (season_id, player_tag);
 
