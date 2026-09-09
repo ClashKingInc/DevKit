@@ -76,6 +76,7 @@ test('uses only retained authoritative migrations and its own disposable contain
       '009_league_army_analytics.sql', '010_cwl_season_statistics.sql',
       '011_active_verified_players.sql',
       '012_legend_only_army_compositions.sql',
+      '013_battle_player_time_identity.sql',
     ]);
   }
   assert.equal(migrations[1].args.at(-1), 'up');

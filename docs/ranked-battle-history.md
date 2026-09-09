@@ -60,7 +60,7 @@ Two player-perspective rows per physical Ranked or Legend attack. It is a Timesc
 | `share_code` | `text` | nullable; normalized code used by the attack |
 | `army_hash` | `bytea` | not null; 32-byte FK to `army_compositions` |
 
-The primary key is `(player_tag,battle_time,battle_mode,direction,opponent_tag)`. The mode is explicit because Ranked-season and Legend-day windows can overlap; time cannot identify the source losslessly. `idx_battles_ranked_player_time` serves all of a player's attacks and defenses, `idx_battles_ranked_player_mode_time` serves exact mode history, `idx_battles_ranked_player_direction_time` serves direction-filtered history, and the partial `idx_battles_ranked_attacks_time` serves mode-specific aggregate scans while physically excluding defense rows.
+After migration 013, the primary key is `(player_tag,battle_time)`. Each response contributes only the requested player's attack or defense; polling the opponent never synthesizes a second row for that player. Mode, direction, and opponent describe the observation rather than changing its identity. `idx_battles_ranked_player_time` serves all of a player's attacks and defenses, `idx_battles_ranked_player_mode_time` serves exact mode history, `idx_battles_ranked_player_direction_time` serves direction-filtered history, and the partial `idx_battles_ranked_attacks_time` serves mode-specific aggregate scans while physically excluding defense rows.
 
 ### `army_compositions`
 

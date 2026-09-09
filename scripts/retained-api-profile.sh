@@ -1,5 +1,5 @@
 # Canonical migration inventory for retained API tests and local development.
-# This is the same contiguous 001-012 sequence used for production upgrades.
+# This is the same contiguous 001-013 sequence used for production upgrades.
 fixture_image='timescale/timescaledb:2.29.2-pg18@sha256:9508616d5b941ed931198504c5db3fb47e8f53f790732ea1e889591f1062057c'
 fixture_sources=(
   001_initial_stats.sql
@@ -14,4 +14,5 @@ fixture_sources=(
   010_cwl_season_statistics.sql
   011_active_verified_players.sql
   012_legend_only_army_compositions.sql
+  013_battle_player_time_identity.sql
 )
