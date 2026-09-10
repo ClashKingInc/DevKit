@@ -60,7 +60,7 @@ Migration 008 adds one-year farming history, two-perspective Ranked/Legend histo
 
 Migration 009 adds permanent normal-PostgreSQL rollups for league hit rates, Ranked tier populations, Legend daily item usage, and immutable army-family assignments. It does not add a Ranked group parent table, item presence registry, prefix tables, or compression policies for rollups. See [the complete storage contract](../../docs/ranked-battle-history.md).
 
-`cwl_season_statistics` remains a separate normal PostgreSQL summary refreshed from the existing CWL group, clan, and member tables. See [the reconciliation contract](../../docs/cwl-season-statistics.md). The legacy `battlelogs`, its continuous aggregate, and `legend_history` remain during the consumer cutover.
+Migration 016 removes the rejected CWL season-statistics table, reconciliation procedure, and JSON validator while leaving the canonical CWL group, clan, and member tables unchanged. Migration 009's public war and league rollups are unrelated and remain available. See [the cross-repository removal contract](../../docs/cwl-season-statistics-removal.md).
 
 ## Index Notes
 
@@ -186,8 +186,10 @@ ahead of newer home posts without hiding those newer posts.
 `010_cwl_season_statistics.sql` adds rerunnable CWL population summaries,
 `013_battle_player_time_identity.sql` fixes raw identity at player/time,
 `014_ranked_defense_loot_nullable.sql` opens the bounded defense-loot cleanup,
-and `015_army_code_family_compatibility.sql` adds code/family-ID identity plus
+`015_army_code_family_compatibility.sql` adds code/family-ID identity plus
 parallel shifted-day aggregates without deleting the old history.
+`016_remove_cwl_season_statistics.sql` then removes the rejected CWL-only
+aggregate without changing the retained war and league analytics.
 Do not use the former 007–028 fixture numbering. See
 [the schema decisions](../../docs/worker-api-schema.md),
 [the disposable upgrade test](../../RETAINED_API_FIXTURE.md).

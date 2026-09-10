@@ -79,6 +79,7 @@ test('uses only retained authoritative migrations and its own disposable contain
       '013_battle_player_time_identity.sql',
       '014_ranked_defense_loot_nullable.sql',
       '015_army_code_family_compatibility.sql',
+      '016_remove_cwl_season_statistics.sql',
     ]);
   }
   assert.equal(migrations[1].args.at(-1), 'up');
