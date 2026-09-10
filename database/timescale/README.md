@@ -181,11 +181,15 @@ ahead of newer home posts without hiding those newer posts.
 ## Worker/API upgrade and production operation
 
 `007_worker_api.sql` consolidates the Worker/API upgrade,
-`008_ranked_battle_history.sql` adds raw battle and exact-army storage,
-`009_league_army_analytics.sql` adds league, Legend, and army-family rollups, and
-`010_cwl_season_statistics.sql` adds rerunnable CWL population summaries.
+`008_ranked_battle_history.sql` adds retained raw battles,
+`009_league_army_analytics.sql` adds the original league/army rollups,
+`010_cwl_season_statistics.sql` adds rerunnable CWL population summaries,
+`013_battle_player_time_identity.sql` fixes raw identity at player/time,
+`014_ranked_defense_loot_nullable.sql` opens the bounded defense-loot cleanup,
+and `015_army_code_family_compatibility.sql` adds code/family-ID identity plus
+parallel shifted-day aggregates without deleting the old history.
 Do not use the former 007–028 fixture numbering. See
 [the schema decisions](../../docs/worker-api-schema.md),
 [the disposable upgrade test](../../RETAINED_API_FIXTURE.md).
 
-Migration 013 replaces the Ranked/Legend primary key without deleting data. Existing collisions cause a transactional failure. For an explicitly authorized rebuild with the battle-log writer stopped, `scripts/reset-battle-history.sql` clears battles and compositions only when dependent families and battle aggregates are empty; it never cascades. Reset only the `bl:#*` Valkey checkpoints before restarting the corrected writer.
+Migration 013 replaces the Ranked/Legend primary key without deleting data. Existing collisions cause a transactional failure. Migration 014 changes no rows; with the old writer paused, run the bounded defense-only cleanup companion before migration 015. Keep the writer paused until a binary that stores defense loot as SQL NULL is deployed. Migration 015 refuses incomplete cleanup, retains the player/time primary key, makes legacy hashes nullable, and introduces `army_family_daily_stats_v2` and `legend_daily_stats_v2` for the 05:10 UTC shifted-day meaning. See `docs/ranked-battle-history.md` for the complete schemas and rollback limits.

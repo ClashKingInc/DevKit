@@ -22,7 +22,7 @@ func TestBattlePlayerTimeIdentity(t *testing.T) {
 	if definition != "PRIMARY KEY (player_tag, battle_time)" {
 		t.Fatal(definition)
 	}
-	insert := `INSERT INTO battles_ranked(player_tag,opponent_tag,battle_time,direction,battle_mode,player_town_hall,opponent_town_hall,stars,destruction_percentage,army_hash) VALUES($1,$2,'2026-09-09T00:00:00Z',$3,'legend',18,17,3,100,decode(repeat('ab',32),'hex')) ON CONFLICT(player_tag,battle_time) DO NOTHING`
+	insert := `INSERT INTO battles_ranked(player_tag,opponent_tag,battle_time,direction,battle_mode,player_town_hall,opponent_town_hall,stars,destruction_percentage,looted_resources,army_hash) VALUES($1,$2,'2026-09-09T00:00:00Z',$3,'legend',18,17,3,100,CASE WHEN $3='defense' THEN NULL ELSE '{}'::jsonb END,decode(repeat('ab',32),'hex')) ON CONFLICT(player_tag,battle_time) DO NOTHING`
 	for _, v := range [][3]string{{"#P0", "#Y2", "attack"}, {"#Y2", "#P0", "defense"}} {
 		tag, err := tx.Exec(ctx, insert, v[0], v[1], v[2])
 		if err != nil || tag.RowsAffected() != 1 {
@@ -51,7 +51,7 @@ func TestBattleIdentityMigrationRejectsCollisionsWithoutDataLoss(t *testing.T) {
 	if _, err = tx.Exec(ctx, parts[1]); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO battles_ranked(player_tag,opponent_tag,battle_time,direction,battle_mode,player_town_hall,opponent_town_hall,stars,destruction_percentage,army_hash) VALUES('#P0','#Y2','2026-09-09T00:00:00Z','attack','legend',18,17,3,100,decode(repeat('ab',32),'hex')),('#P0','#G9','2026-09-09T00:00:00Z','defense','legend',18,17,3,100,decode(repeat('ab',32),'hex'))`); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO battles_ranked(player_tag,opponent_tag,battle_time,direction,battle_mode,player_town_hall,opponent_town_hall,stars,destruction_percentage,looted_resources,army_hash) VALUES('#P0','#Y2','2026-09-09T00:00:00Z','attack','legend',18,17,3,100,'{}',decode(repeat('ab',32),'hex')),('#P0','#G9','2026-09-09T00:00:00Z','defense','legend',18,17,3,100,NULL,decode(repeat('ab',32),'hex'))`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(ctx, "SAVEPOINT upgrade"); err != nil {

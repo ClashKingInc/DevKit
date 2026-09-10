@@ -77,11 +77,21 @@ test('uses only retained authoritative migrations and its own disposable contain
       '011_active_verified_players.sql',
       '012_legend_only_army_compositions.sql',
       '013_battle_player_time_identity.sql',
+      '014_ranked_defense_loot_nullable.sql',
+      '015_army_code_family_compatibility.sql',
     ]);
   }
   assert.equal(migrations[1].args.at(-1), 'up');
   assert.ok(migrations[1].args.includes('postgres://clashking_test:clashking_test@127.0.0.1:54329/clashking_test?sslmode=disable'));
   assert.deepEqual(result.calls.at(-1).args, ['rm', '--force', '--volumes', container]);
+});
+
+test('supports a migration-013 compatibility baseline', () => {
+  const result = runFixture({}, 'test "\$CLASHKING_TIMESCALE_PROFILE" = baseline-013', ['--profile', 'baseline-013']);
+  assert.equal(result.status, 0, result.stderr);
+  const migration = result.calls.find(call => call.tool === 'goose' && call.args.includes('up'));
+  assert.equal(migration.migrations.at(-1), '013_battle_player_time_identity.sql');
+  assert.equal(migration.migrations.length, 13);
 });
 
 test('preserves a failing child exit code and still cleans up', () => {

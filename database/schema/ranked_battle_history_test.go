@@ -82,7 +82,7 @@ func TestRankedPerspectivesCountOnePhysicalAttackOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO battles_ranked(player_tag,opponent_tag,battle_time,direction,battle_mode,player_town_hall,opponent_town_hall,stars,destruction_percentage,duration_seconds,looted_resources,share_code,army_hash) VALUES ('#2PP','#9G2YV','2026-09-08T12:00:00Z','attack','ranked',17,17,3,100,120,'{"gold":1}','u1x1',$1),('#9G2YV','#2PP','2026-09-08T12:00:00Z','defense','ranked',17,17,3,100,120,'{"gold":1}','u1x1',$1)`, hash)
+	_, err = tx.Exec(ctx, `INSERT INTO battles_ranked(player_tag,opponent_tag,battle_time,direction,battle_mode,player_town_hall,opponent_town_hall,stars,destruction_percentage,duration_seconds,looted_resources,share_code,army_hash) VALUES ('#2PP','#9G2YV','2026-09-08T12:00:00Z','attack','ranked',17,17,3,100,120,'{"gold":1}','u1x1',$1),('#9G2YV','#2PP','2026-09-08T12:00:00Z','defense','ranked',17,17,3,100,120,NULL,'u1x1',$1)`, hash)
 	if err != nil {
 		t.Fatal(err)
 	}
