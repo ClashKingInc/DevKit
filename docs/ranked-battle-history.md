@@ -1,155 +1,165 @@
-# Battle, league, and army-family storage
+# Battle history and share-code army families
 
-Migrations `008_ranked_battle_history.sql` and `009_league_army_analytics.sql` add the final battle pipeline. The legacy `battlelogs`, `townhall_stats_daily`, and `legend_history` relations remain during cutover. Migration 010 remains the independent CWL statistics migration.
+Migrations 008–013 establish retained raw battle history and the requested-player identity `(player_tag,battle_time)`. Migration 014 opens the nullable defense-loot transition. After the bounded cleanup, migration 015 adds share-code family identity and parallel daily tables for the new Legend-day meaning. Applied migrations 008, 009, 012, and 013 are never rewritten.
 
-## Write flow
+## Rollout order
+
+1. Apply Goose through 014 only. This changes no rows.
+2. Pause the old battlelog writer and keep it paused through the schema/binary cutover.
+3. Run `go run ./migrations/clear_ranked_defense_loot.go` from `database/` first as a dry run, then with `RANKED_DEFENSE_LOOT_CLEANUP_APPLY=true`, `RANKED_BATTLELOG_WRITERS_PAUSED=true`, and `RANKED_DEFENSE_LOOT_CLEANUP_DATABASE=<exact database name>`. The companion requires Goose version 14, refuses compressed chunks, and commits bounded `(player_tag,battle_time)` batches.
+4. Apply Goose through 015. It refuses to apply if any defense still has non-null loot.
+5. Deploy compatible code-only battle ingestion and the new family closeout before resuming the writer. The old closeout must remain paused because its hash tables and old day semantics are no longer authoritative.
+6. Populate and compare the `*_v2` aggregates from retained raw data before switching readers.
+
+Migration 015 can roll back only while no new code-only rows, cleared defense rows, name edits, or v2 aggregates would be lost. Migration 014 cannot roll back while any ranked row contains null loot. Production execution and consumer deployment remain separate approvals.
+
+## Data flow
 
 ```mermaid
 flowchart LR
-  A[Tracking fetches a battle log] --> B{battle kind}
-  B -->|farming| C[battles_farming: one attack row]
-  B -->|Ranked or Legend| D[normalize exact share code]
-  D --> E[army_compositions: immutable exact hash]
-  E --> F[battles_ranked: attacker perspective]
-  E --> G[battles_ranked: defender perspective]
-  F --> H[aggregate transaction]
-  H --> I[league_hitrate_stats]
-  H --> J[legend_daily_stats]
-  H --> K[army_family_daily_stats]
-  G -. never counted by aggregate SQL .-> H
-  E --> L[family matcher]
-  L --> M[army_family_members]
-  M --> K
+  C[Clash battlelog response] --> W[Tracking normalizes the share code]
+  W -->|farming attack| F[battles_farming]
+  W -->|requested Ranked or Legend perspective| R[battles_ranked]
+  R -->|Legend attack rows in 05:10 window| D[Daily closeout]
+  M[army_family_members: code to family] --> D
+  A[army_families: fixed representative] --> D
+  D --> N[New permanent assignments]
+  D --> FS[army_family_daily_stats_v2]
+  D --> LS[legend_daily_stats_v2]
 ```
 
-The two Ranked rows make player history a direct `player_tag + battle_time` lookup. The attacker row is `#2PP -> #9G2YV, direction=attack`; the defender row is `#9G2YV -> #2PP, direction=defense`. Both describe one physical attack, so every aggregate insert or reconciliation query must include `WHERE direction = 'attack'`.
+Tracking stores only the requested player's perspective. It does not create the opposite side. All family and Legend statistics select `battle_mode='legend' AND direction='attack'`; a stored defense never contributes.
 
-## Raw and identity tables
+## Raw history
 
 ### `battles_farming`
 
-One home-village attack per player and timestamp. It is a Timescale hypertable with 30-day chunks, compression after 30 days segmented by player and ordered by time, and one-year retention.
-
 | Column | Type | Null/default and rule |
 |---|---|---|
-| `player_tag` | `text` | not null; canonical tag; PK |
-| `battle_time` | `timestamptz` | not null; PK |
-| `stars` | `smallint` | not null; 0–3 |
-| `destruction_percentage` | `smallint` | not null; 0–100 |
+| `player_tag` | `text` | required; primary key with `battle_time` |
+| `battle_time` | `timestamptz` | required |
+| `stars` | `smallint` | required; 0–3 |
+| `destruction_percentage` | `smallint` | required; 0–100 |
 | `duration_seconds` | `integer` | nullable; nonnegative |
-| `looted_resources` | `jsonb` | not null, default `{}`; optional nonnegative `gold`, `elixir`, `darkElixir` integer keys only |
+| `looted_resources` | `jsonb` | required; default `{}`; nonnegative `gold`, `elixir`, and `darkElixir` only |
 | `share_code` | `text` | nullable; nonblank when present |
 
-### `battles_ranked`
+New attack writes combine base and extra Gold, Elixir, and Dark Elixir into the same loot object. Sour Elixir is ignored. Existing attacks are not backfilled. The hypertable uses 30-day chunks, compression after 30 days, and one-year retention.
 
-Two player-perspective rows per physical Ranked or Legend attack. It is a Timescale hypertable with seven-day chunks, compression after 30 days segmented by `(player_tag,direction)` and ordered by time, and one-year retention.
+### `battles_ranked` after migration 015
 
 | Column | Type | Null/default and rule |
 |---|---|---|
-| `player_tag` | `text` | not null; canonical perspective owner; PK |
-| `opponent_tag` | `text` | not null; canonical opponent; PK |
-| `battle_time` | `timestamptz` | not null; PK |
-| `direction` | `text` | not null; `attack` or `defense`; PK |
-| `battle_mode` | `text` | not null; `ranked` or `legend`; PK |
-| `player_town_hall` | `smallint` | not null; 1–20 |
-| `opponent_town_hall` | `smallint` | not null; 1–20 |
-| `stars` | `smallint` | not null; 0–3 |
-| `destruction_percentage` | `smallint` | not null; 0–100 |
+| `player_tag` | `text` | required; primary key with `battle_time` |
+| `battle_time` | `timestamptz` | required |
+| `opponent_tag` | `text` | required; different from player |
+| `direction` | `text` | required; `attack` or `defense` |
+| `battle_mode` | `text` | required; `ranked` or `legend` |
+| `player_town_hall` | `smallint` | required; 1–20 |
+| `opponent_town_hall` | `smallint` | required; 1–20 |
+| `stars` | `smallint` | required; 0–3 |
+| `destruction_percentage` | `smallint` | required; 0–100 |
 | `duration_seconds` | `integer` | nullable; nonnegative |
-| `looted_resources` | `jsonb` | not null, default `{}`; same shape as farming |
-| `share_code` | `text` | nullable; normalized code used by the attack |
-| `army_hash` | `bytea` | not null; 32-byte FK to `army_compositions` |
+| `looted_resources` | `jsonb` | required object for attacks; SQL NULL for defenses |
+| `share_code` | `text` | nullable canonical code; nonblank when present |
+| `army_hash` | `bytea` | nullable legacy compatibility column; omitted by the new writer |
 
-After migration 013, the primary key is `(player_tag,battle_time)`. Each response contributes only the requested player's attack or defense; polling the opponent never synthesizes a second row for that player. Mode, direction, and opponent describe the observation rather than changing its identity. `idx_battles_ranked_player_time` serves all of a player's attacks and defenses, `idx_battles_ranked_player_mode_time` serves exact mode history, `idx_battles_ranked_player_direction_time` serves direction-filtered history, and the partial `idx_battles_ranked_attacks_time` serves mode-specific aggregate scans while physically excluding defense rows.
+The primary key remains exactly `(player_tag,battle_time)`. No migration cleans the known minute-apart source duplicates because requested-player provenance cannot be reconstructed from SQL. Tracking reconciles those against live Clash battle logs.
 
-### `army_compositions`
+The seven-day hypertable retains one year and compresses after 30 days. Existing player/time, player/mode/time, and player/direction/time indexes remain. The bounded attack aggregate index becomes `(battle_mode,battle_time DESC) WHERE direction='attack'`; full share codes are not indexed on every battle.
 
-One immutable exact army definition. `army_hash` is SHA-256 of the normalized share code according to `contracts/army-hash-v2.json`; it is separate from family similarity.
+Detailed Ranked and Legend endpoints omit loot. The general player battle-history endpoint combines farming and ranked-table attacks, including Legend attacks, and may return the stored attack loot.
 
-| Column | Type | Null/default and rule |
-|---|---|---|
-| `army_hash` | `bytea` | not null; 32-byte PK |
-| `normalized_share_code` | `text` | not null; unique and nonblank |
-| `main_troops` | `jsonb` | not null, default `[]`; sorted unique `{id,quantity}` rows |
-| `clan_castle_troops` | `jsonb` | not null, default `[]`; sorted unique `{id,quantity}` rows |
-| `spells` | `jsonb` | not null, default `[]`; sorted unique `{id,quantity,clanCastle}` rows |
-| `heroes` | `integer[]` | not null, default `{}`; sorted unique hero IDs |
-| `equipment` | `jsonb` | not null, default `[]`; sorted unique `{equipmentId,heroId}` rows |
-| `pet_assignments` | `jsonb` | not null, default `[]`; sorted unique `{petId,heroId}` rows |
-| `siege_machine_id` | `integer` | nullable; nonnegative |
-| `created_at` | `timestamptz` | not null, default `now()` |
+## Permanent family identity
 
-## League snapshots and aggregate tables
-
-### `ranked_league_group_members`
-
-This existing table remains the only Ranked group relation; there is no `ranked_league_groups` table. Its primary key remains `(season_id,group_tag,player_tag)`, and `UNIQUE (season_id,player_tag)` lets ingestion replace a stale group tag rather than creating a second membership for the same season. During upgrade, existing duplicates are reduced deterministically because the old schema has no observation timestamp: the row with the greatest combined attack/defense result count wins, followed by trophies, tier, placement, and group tag as stable tie-breakers. Counters from different group snapshots are not combined.
+### `army_families` after migration 015
 
 | Column | Type | Null/default and rule |
 |---|---|---|
-| `season_id` | `bigint` | not null; PK |
-| `group_tag` | `text` | not null; PK |
-| `league_tier_id` | `integer` | not null; positive |
-| `player_tag` | `text` | not null; PK |
-| `player_name` | `text` | not null |
-| `town_hall` | `smallint` | nullable; 1–20 |
-| `placement` | `integer` | not null; positive |
-| `league_trophies` | `integer` | not null; nonnegative |
-| `maximum_battle_count` | `smallint` | not null, default 0 |
-| `attack_win_count` | `integer` | not null; source counter |
-| `attack_loss_count` | `integer` | not null; source counter |
-| `attack_star_count` | `integer` | not null, default 0; source counter |
-| `defense_win_count` | `integer` | not null; source counter |
-| `defense_loss_count` | `integer` | not null; source counter |
-| `defense_star_count` | `integer` | not null, default 0; source counter |
+| `family_id` | `bigint identity` | generated primary key; serialize as a decimal string in JSON |
+| `representative_share_code` | `text` | required; unique; immutable |
+| `name` | `text` | nullable manual name; normalized whitespace; maximum 120; unique case-insensitively |
+| `hero_ids` | `integer[]` | required; default `{}`; sorted and duplicate-free; immutable |
+| `equipment_ids` | `integer[]` | required; default `{}`; sorted and duplicate-free; immutable |
+| `anchor_army_hash` | `bytea` | nullable legacy compatibility key; unique while retained |
+| `family_name` | `text` | nullable legacy name |
+| `source` | `text` | nullable legacy naming source |
+| `named_by_subject` | `text` | nullable legacy provenance |
+| `naming_model` | `text` | nullable legacy provenance |
+| `naming_prompt_version` | `text` | nullable legacy provenance |
+| `created_at` | `timestamptz` | required; default `now()` |
+| `updated_at` | `timestamptz` | required; default `now()` |
 
-The old clan snapshot columns are removed because the group-member response does not need a second clan identity copy. No lifecycle flags, inferred promotions, missing markers, or state column are stored.
+Existing families keep their representative, assignment anchor, and normalized existing name. Hero/equipment filters are derived once from the retained representative composition. New families write only the code, optional name, and representative ID arrays; they do not calculate a hash or create an `army_compositions` row.
 
-### `league_hitrate_stats`
+The insert compatibility trigger translates only old rows forward: when an old writer supplies `anchor_army_hash`, it copies the old name and derives representative ID arrays from the existing composition. It never synthesizes a hash. Updating `name` to NULL stays NULL because the trigger runs only on insert.
 
-Permanent hit-rate totals. Primary key: `(period_kind,period_start,league_tier_id,town_hall)`.
+### `army_family_members` after migration 015
+
+| Column | Type | Null/default and rule |
+|---|---|---|
+| `share_code` | `text` | primary key; canonical exact-army identity |
+| `family_id` | `bigint` | required FK to `army_families` |
+| `troop_similarity` | `numeric(5,4)` | required; 0.8600–1 inclusive |
+| `spell_similarity` | `numeric(5,4)` | required; 0.8000–1 inclusive |
+| `equipment_similarity` | `numeric(5,4)` | required; 0.7500–1 inclusive |
+| `army_hash` | `bytea` | nullable legacy identity; unique while retained |
+| `anchor_army_hash` | `bytea` | nullable legacy family link |
+| `troop_housing_similarity` | `numeric(5,4)` | nullable legacy score |
+| `spell_capacity_similarity` | `numeric(5,4)` | nullable legacy score |
+| `heroes_exact` | `boolean` | nullable legacy field |
+| `equipment_difference_count` | `smallint` | nullable legacy field |
+| `matching_version` | `text` | nullable legacy field |
+| `assigned_at` | `timestamptz` | retained legacy timestamp; default `now()` |
+
+Assignments and representatives cannot be updated or deleted. New code-only inserts have no hash, matching-version, assignment-version, or equipment-difference requirement. An old hash-based insert is translated forward by looking up its existing composition code and family ID; the trigger never mirrors a new code row back into hash storage.
+
+The application matcher requires exact hero IDs, housing-weighted main troops at least 0.86, capacity-weighted main plus clan-castle spells at least 0.80, and equipment overlap at least 0.75. Siege machines, clan-castle troops, and pets do not affect matching.
+
+## Replacement daily tables
+
+Old `army_family_daily_stats` and `legend_daily_stats` remain unchanged during compatibility because their prior day/tier/Town Hall meaning cannot be relabeled truthfully.
+
+### `army_family_daily_stats_v2`
 
 | Column | Type | Rule |
 |---|---|---|
-| `period_kind` | `text` | `ranked_season` or `legend_day` |
-| `period_start` | `timestamptz` | exact period boundary |
-| `league_tier_id` | `integer` | positive |
-| `town_hall` | `smallint` | 1–20 |
-| `attack_count` | `bigint` | equals the four star buckets |
-| `zero_star_count`…`three_star_count` | `bigint` | nonnegative |
-| `refreshed_at` | `timestamptz` | default `now()` |
+| `family_id` | `bigint` | FK; primary key with day |
+| `day` | `date` | shifted day; primary key with family |
+| `attack_count` | `bigint` | nonnegative |
+| `distinct_player_count` | `bigint` | nonnegative |
+| `zero_star_count` … `three_star_count` | `bigint` | nonnegative; sum to attacks |
+| `destruction_percentage_sum` | `bigint` | 0 through 100 × attacks |
+| `duration_seconds_sum` | `bigint` | nonnegative |
+| `duration_count` | `bigint` | 0 through attack count |
 
-### `ranked_league_tier_stats`
+Primary key: `(family_id,day)`. Index: `(day,family_id)`. Tracking stores every observed family, including families outside a daily top list. The table is permanent PostgreSQL storage without compression.
 
-Permanent per-season/tier population and trophy distribution. Primary key: `(season_id,league_tier_id)`.
+### `legend_daily_stats_v2`
 
-| Columns | Types and rules |
-|---|---|
-| `season_id`, `league_tier_id` | `bigint`, `integer`; positive |
-| `group_count`, `distinct_player_count`, `participating_player_count` | `bigint`; nonnegative; participating cannot exceed distinct |
-| `trophy_p10`, `trophy_p25`, `trophy_p50`, `trophy_p75`, `trophy_p90` | nullable `integer`; ordered when present |
-| `town_halls` | `jsonb`; descending `[{"level":17,"count":123}]` |
-| `average_group_first_last_trophy_range`, `average_first_second_trophy_gap` | nullable nonnegative `numeric` |
-| `refreshed_at` | `timestamptz`, default `now()` |
+| Column | Type | Rule |
+|---|---|---|
+| `day` | `date` | primary key |
+| `attack_count` | `bigint` | nonnegative |
+| `distinct_player_count` | `bigint` | nonnegative |
+| `perfect_320_player_count` | `bigint` | 0 through player count |
+| `zero_star_count` … `three_star_count` | `bigint` | nonnegative; sum to attacks |
+| `destruction_percentage_sum` | `bigint` | 0 through 100 × attacks |
+| `duration_seconds_sum` | `bigint` | nonnegative |
+| `duration_count` | `bigint` | 0 through attack count |
+| `hero_stats` | `jsonb` | required; default `[]`; sorted `{id,uses,triples}` |
+| `pet_stats` | `jsonb` | same item shape |
+| `equipment_stats` | `jsonb` | same item shape |
+| `pet_hero_assignments` | `jsonb` | sorted `{petId,heroId,uses,triples}` |
 
-### `legend_daily_stats`
+Each item satisfies `0 <= triples <= uses <= attack_count`. Missing codes remain in global attack, star, destruction, duration, and player totals but cannot contribute decoded item or family data.
 
-Permanent per-day/tier/TH totals. Primary key: `(day,league_tier_id,town_hall)`. It stores attack/player/perfect-320 counts, four star buckets, destruction and duration sums, plus `hero_stats`, `pet_stats`, and `equipment_stats` arrays of `{id,uses,triples}`. `pet_hero_assignments` is sorted `{petId,heroId,uses,triples}` data using numeric IDs.
+## Time and coverage contract
 
-These four aggregate relations are normal PostgreSQL tables. They have no Timescale compression or retention policy.
+Day D owns the half-open window `[D 05:10:00 UTC, D+1 05:10:00 UTC)`. The proposed job starts at 05:12 UTC. Adjacent days neither overlap nor leave a gap.
 
-## Army families
+Only stored Legend attack rows enter both v2 tables. Defenses, lower Ranked tiers, and synthetic opposite perspectives are excluded. Exact multi-day unique-player counts are supported only when the requested range is fully inside retained raw coverage and every completed day has a matching v2 global total, including explicit zero days. Otherwise the API reports player counts as unavailable and rejects a player-minimum filter.
 
-Exact hashes remain immutable. The matcher assigns an exact hash to a family only when main troops are at least 86% similar by housing space, all spells including clan-castle spells are at least 80% similar by spell capacity, hero IDs match exactly, and equipment is at least 75% similar with at most two differences. Clan-castle troops, pets, and siege machines do not affect family matching; pet usage remains available in `legend_daily_stats`.
+## Deferred destructive cleanup
 
-### `army_families`
-
-The primary key is the exact `anchor_army_hash`, and `(anchor_army_hash,representative_share_code)` must resolve to one `army_compositions` row. `family_name` is case-insensitively unique. `source` is `ai` with model/prompt provenance, `admin` with the naming subject, or `fallback` with null naming provenance when inference fails or collides. The anchor and representative code cannot change; metadata can be renamed and `updated_at` is touched by the schema.
-
-### `army_family_members`
-
-One immutable assignment per exact `army_hash`. It stores `anchor_army_hash`, troop/spell/equipment similarity values, `heroes_exact`, `equipment_difference_count`, `matching_version`, and `assigned_at`. Constraints enforce the approved 86%/80%/exact/75%/two-difference minimums.
-
-### `army_family_daily_stats`
-
-Permanent daily family totals keyed by `(anchor_army_hash,day)`: attack and distinct-player counts, four star buckets, destruction sum, duration sum, and `refreshed_at`. It is a normal PostgreSQL table with no compression policy.
+A separate migration may remove `army_compositions`, hashes, legacy family/member columns, old naming provenance, and old daily tables only after every reader and writer uses the code/family-ID contract and retained history has been rebuilt and compared. It must also swap the `*_v2` names to their final unsuffixed names. Older aggregates without sufficient raw history require an explicit preservation decision; migration 015 does not delete or relabel them.

@@ -24,3 +24,6 @@ jobs:
       - name: Apply 006 then verify the seeded-data upgrade
         working-directory: database
         run: bash ../scripts/with-test-timescale.sh --profile baseline-006 -- go test ./schema -run '^TestWorkerAPIUpgrade$' -count=1 -v
+      - name: Apply 013 then verify the army-family compatibility upgrade
+        working-directory: database
+        run: bash ../scripts/with-test-timescale.sh --profile baseline-013 -- go test ./schema -run '^TestArmyCodeFamilyCompatibilityMigration$' -count=1 -v

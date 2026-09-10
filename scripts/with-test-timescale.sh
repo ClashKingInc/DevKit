@@ -2,8 +2,8 @@
 # Run one integration suite against an isolated, Goose-migrated Timescale database.
 set -euo pipefail
 
-if [[ ${1:-} != --profile || ( ${2:-} != retained-api && ${2:-} != baseline-006 ) ]]; then
-  echo 'An explicit --profile retained-api or baseline-006 is required.' >&2
+if [[ ${1:-} != --profile || ( ${2:-} != retained-api && ${2:-} != baseline-006 && ${2:-} != baseline-013 ) ]]; then
+  echo 'An explicit --profile retained-api, baseline-006, or baseline-013 is required.' >&2
   exit 2
 fi
 fixture_profile="$2"
@@ -18,6 +18,8 @@ fixture_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$fixture_root/scripts/retained-api-profile.sh"
 if [[ $fixture_profile == baseline-006 ]]; then
   fixture_sources=("${fixture_sources[@]:0:6}")
+elif [[ $fixture_profile == baseline-013 ]]; then
+  fixture_sources=("${fixture_sources[@]:0:13}")
 fi
 fixture_container=''
 fixture_child=''
