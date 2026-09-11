@@ -133,3 +133,124 @@ func TestBasesUseBigintRelationsAndPrivateVotes(t *testing.T) {
 		}
 	}
 }
+
+func TestPersonalBaseLibraryAndSlotsFollowVerifiedOwnership(t *testing.T) {
+	conn := disposableConn(t)
+	ctx := context.Background()
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	var baseID int64
+	_, err = tx.Exec(ctx, `
+		INSERT INTO auth_users(user_id,provider) VALUES('owner','discord'),('next-owner','discord');
+		INSERT INTO player_links(tag,is_verified,source,user_id)
+		VALUES('#P0Y',true,'api_token','owner'),('#2PP',false,'api_token','owner')`)
+	if err == nil {
+		err = tx.QueryRow(ctx, `INSERT INTO bases(message_id,base_link)
+			VALUES('987654321012345678','https://link.clashofclans.com/en?action=OpenLayout&id=TH17%3AWB%3AAAAA') RETURNING id`).Scan(&baseID)
+	}
+	if err == nil {
+		_, err = tx.Exec(ctx, `INSERT INTO user_saved_bases(user_id,base_id) VALUES('owner',$1)`, baseID)
+	}
+	if err == nil {
+		_, err = tx.Exec(ctx, `INSERT INTO user_base_slots(user_id,player_tag,slot_kind,slot_number,base_id)
+			VALUES('owner','#P0Y','war',1,$1),('owner','#P0Y','legend',1,$1)`, baseID)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reject := func(query string, args ...any) {
+		t.Helper()
+		if _, err = tx.Exec(ctx, `SAVEPOINT invalid_personal_base`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(ctx, query, args...); err == nil {
+			t.Fatalf("invalid personal-base write accepted: %s", query)
+		}
+		if _, err = tx.Exec(ctx, `ROLLBACK TO SAVEPOINT invalid_personal_base`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reject(`INSERT INTO user_base_slots(user_id,player_tag,slot_kind,slot_number,base_id)
+		VALUES('owner','#P0Y','war',2,$1)`, baseID)
+	reject(`INSERT INTO user_base_slots(user_id,player_tag,slot_kind,slot_number,base_id)
+		VALUES('owner','#P0Y','war',4,$1)`, baseID)
+	reject(`INSERT INTO user_base_slots(user_id,player_tag,slot_kind,slot_number,base_id)
+		VALUES('owner','#2PP','war',1,$1)`, baseID)
+	reject(`INSERT INTO user_base_slots(user_id,player_tag,slot_kind,slot_number,base_id)
+		VALUES('next-owner','#P0Y','war',1,$1)`, baseID)
+
+	if _, err = tx.Exec(ctx, `UPDATE player_links SET is_verified=false WHERE tag='#P0Y'`); err != nil {
+		t.Fatal(err)
+	}
+	var slotCount, savedCount int
+	if err = tx.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM user_base_slots WHERE player_tag='#P0Y'),
+		(SELECT count(*) FROM user_saved_bases WHERE user_id='owner' AND base_id=$1)`, baseID).Scan(&slotCount, &savedCount); err != nil {
+		t.Fatal(err)
+	}
+	if slotCount != 0 || savedCount != 1 {
+		t.Fatalf("unverification left slots or removed personal library: slots=%d saved=%d", slotCount, savedCount)
+	}
+	if _, err = tx.Exec(ctx, `UPDATE player_links SET is_verified=true WHERE tag='#P0Y'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO user_base_slots(user_id,player_tag,slot_kind,slot_number,base_id)
+		VALUES('owner','#P0Y','war',1,$1),('owner','#P0Y','legend',1,$1)`, baseID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `UPDATE player_links SET user_id='next-owner' WHERE tag='#P0Y'`); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM user_base_slots WHERE player_tag='#P0Y'),
+		(SELECT count(*) FROM user_saved_bases WHERE user_id='owner' AND base_id=$1)`, baseID).Scan(&slotCount, &savedCount); err != nil {
+		t.Fatal(err)
+	}
+	if slotCount != 0 || savedCount != 1 {
+		t.Fatalf("transfer left slots or removed personal library: slots=%d saved=%d", slotCount, savedCount)
+	}
+
+	if _, err = tx.Exec(ctx, `UPDATE player_links SET user_id='owner',is_verified=true WHERE tag='#P0Y'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO user_base_slots(user_id,player_tag,slot_kind,slot_number,base_id)
+		VALUES('owner','#P0Y','war',1,$1)`, baseID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM user_saved_bases WHERE user_id='owner' AND base_id=$1`, baseID); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.QueryRow(ctx, `SELECT count(*) FROM user_base_slots WHERE player_tag='#P0Y'`).Scan(&slotCount); err != nil || slotCount != 0 {
+		t.Fatalf("unsave did not clear slots: slots=%d err=%v", slotCount, err)
+	}
+
+	if _, err = tx.Exec(ctx, `INSERT INTO user_saved_bases(user_id,base_id) VALUES('owner',$1)`, baseID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO user_base_slots(user_id,player_tag,slot_kind,slot_number,base_id)
+		VALUES('owner','#P0Y','legend',1,$1)`, baseID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM player_links WHERE tag='#P0Y'`); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM user_base_slots WHERE player_tag='#P0Y'),
+		(SELECT count(*) FROM user_saved_bases WHERE user_id='owner' AND base_id=$1)`, baseID).Scan(&slotCount, &savedCount); err != nil {
+		t.Fatal(err)
+	}
+	if slotCount != 0 || savedCount != 1 {
+		t.Fatalf("unlink left slots or removed personal library: slots=%d saved=%d", slotCount, savedCount)
+	}
+
+	if _, err = tx.Exec(ctx, `DELETE FROM bases WHERE id=$1`, baseID); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.QueryRow(ctx, `SELECT count(*) FROM user_saved_bases WHERE base_id=$1`, baseID).Scan(&savedCount); err != nil || savedCount != 0 {
+		t.Fatalf("base delete retained personal reference: saved=%d err=%v", savedCount, err)
+	}
+}

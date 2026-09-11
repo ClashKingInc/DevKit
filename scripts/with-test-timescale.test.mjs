@@ -81,6 +81,7 @@ test('uses only retained authoritative migrations and its own disposable contain
       '015_army_code_family_compatibility.sql',
       '016_remove_cwl_season_statistics.sql',
       '017_final_operational_contract.sql',
+      '018_personal_base_library.sql',
     ]);
   }
   assert.equal(migrations[1].args.at(-1), 'up');

@@ -1,6 +1,6 @@
-# Migration 017 consumer contract
+# Final operational consumer contract
 
-Migration 017 finalizes the shared schemas consumed by Tracking, API, Bot, Dashboard, and App. Applied migrations 001–016 stay immutable; the finalization is forward-only and production execution remains a separate approval.
+Migration 017 finalizes the shared schemas consumed by Tracking, API, Bot, Dashboard, and App. Migration 018 adds authenticated personal references and account-scoped base slots. Applied migrations 001–017 stay immutable; production execution remains a separate approval.
 
 ## Legend leaderboards
 
@@ -46,6 +46,21 @@ First-click conversion is a two-phase state machine without a legacy status colu
   "baseLink":"https://link.clashofclans.com/en?action=OpenLayout&id=TH17%3AHV%3AAAAA",
   "images":["https://api.clashk.ing/v2/media/base.png"],"description":"Anti-three-star layout",
   "downloadCount":10,"upvotes":8,"downvotes":1
+}
+```
+
+### Personal library and account slots
+
+`user_saved_bases` is the authenticated user's durable library. Its identity is `(user_id,base_id)`, where `user_id` references `auth_users` and `base_id` references the existing shared `bases` row. Both a download-and-retain action and an explicit save upsert this same row, so no base link, image, Discord location, vote, or count is duplicated. Unsave deletes the row and cascades any of that user's assignments for the base.
+
+`user_base_slots` assigns a saved base to slots `1..3` in either the `war` or `legend` kind for one currently verified linked account. Its slot identity is `(user_id,player_tag,slot_kind,slot_number)`. A uniqueness constraint prevents the same base from occupying two slots of the same kind for the same account, while permitting the same saved base in one War and one Legend slot. Assignment is an upsert on slot identity; clearing is a delete.
+
+The slot's `(player_tag,user_id)` must match a currently verified `player_links` row. Unlink, unverification, or ownership transfer removes that account's slot assignments before the link changes, so a new owner cannot inherit them. Deleting the shared base or authenticated user removes saved references and slots. The personal library itself survives a player unlink because it belongs to the authenticated user rather than one Clash account.
+
+```json
+{
+  "savedBase": {"baseId":"42","savedAt":"2026-09-11T06:00:00Z"},
+  "slot": {"playerTag":"#P0Y","kind":"legend","number":1,"baseId":"42","assignedAt":"2026-09-11T06:01:00Z"}
 }
 ```
 
