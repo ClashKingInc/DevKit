@@ -56,15 +56,17 @@ have target progress to report.
 
 ## Battle and league analytics
 
-Migration 008 adds one-year farming history, two-perspective Ranked/Legend history, and immutable exact army compositions. Raw Ranked/Legend rows are compressed after 30 days; aggregate queries count only `direction = 'attack'` so the defense perspective does not double results. Migration 008 also reshapes the existing `ranked_league_group_members` table to match the source counters directly.
+Migration 008 adds one-year farming history, two-perspective Ranked/Legend history, and exact army compositions. Raw Ranked/Legend rows are compressed after 30 days. Migration 008 also reshapes the existing `ranked_league_group_members` table to match the source counters directly.
 
 Migration 009 adds permanent normal-PostgreSQL rollups for league hit rates, Ranked tier populations, Legend daily item usage, and immutable army-family assignments. It does not add a Ranked group parent table, item presence registry, prefix tables, or compression policies for rollups. See [the complete storage contract](../../docs/ranked-battle-history.md).
 
-`cwl_season_statistics` remains a separate normal PostgreSQL summary refreshed from the existing CWL group, clan, and member tables. See [the reconciliation contract](../../docs/cwl-season-statistics.md). The legacy `battlelogs`, its continuous aggregate, and `legend_history` remain during the consumer cutover.
+Migration 016 removes the rejected CWL season-statistics table, reconciliation procedure, and JSON validator while leaving the canonical CWL group, clan, and member tables unchanged. Migration 009's public war and league rollups are unrelated and remain available. See [the cross-repository removal contract](../../docs/cwl-season-statistics-removal.md).
+
+Migration 017 is the irreversible final contract: numeric battle codes, non-null smallint durations, share-code composition/family identity, cohort-keyed unsuffixed aggregates, compact current/daily leaderboard storage, user-level notification preferences, and relational bigint bases. See [the consumer contract](../../docs/final-operational-contract.md) and [the battle contract](../../docs/ranked-battle-history.md).
 
 ## Index Notes
 
-Farming and Ranked/Legend uniqueness is `(player_tag,battle_time)` after migration 013. Tracking stores only the requested player's perspective; `battle_mode` remains available for filtering. Player/time and player/mode/time indexes serve history, while a partial mode/time index containing only `direction = 'attack'` serves aggregate scans.
+Farming and Ranked/Legend uniqueness is `(player_tag,battle_time)` after migration 013. Tracking stores only the requested player's perspective; migration 017 uses `battle_mode` 1/2 and `direction` 1/2. Player/time and player/mode/time indexes serve history, while a partial mode/time index containing only `direction = 1` serves aggregate scans.
 
 ## Global Clan Changes
 
@@ -186,10 +188,14 @@ ahead of newer home posts without hiding those newer posts.
 `010_cwl_season_statistics.sql` adds rerunnable CWL population summaries,
 `013_battle_player_time_identity.sql` fixes raw identity at player/time,
 `014_ranked_defense_loot_nullable.sql` opens the bounded defense-loot cleanup,
-and `015_army_code_family_compatibility.sql` adds code/family-ID identity plus
+`015_army_code_family_compatibility.sql` adds code/family-ID identity plus
 parallel shifted-day aggregates without deleting the old history.
+`016_remove_cwl_season_statistics.sql` then removes the rejected CWL-only
+aggregate without changing the retained war and league analytics.
+`017_final_operational_contract.sql` removes compatibility storage and establishes
+the final cross-repository contracts.
 Do not use the former 007–028 fixture numbering. See
 [the schema decisions](../../docs/worker-api-schema.md),
 [the disposable upgrade test](../../RETAINED_API_FIXTURE.md).
 
-Migration 013 replaces the Ranked/Legend primary key without deleting data. Existing collisions cause a transactional failure. Migration 014 changes no rows; with the old writer paused, run the bounded defense-only cleanup companion before migration 015. Keep the writer paused until a binary that stores defense loot as SQL NULL is deployed. Migration 015 refuses incomplete cleanup, retains the player/time primary key, makes legacy hashes nullable, and introduces `army_family_daily_stats_v2` and `legend_daily_stats_v2` for the 05:10 UTC shifted-day meaning. See `docs/ranked-battle-history.md` for the complete schemas and rollback limits.
+Migration 013 replaces the Ranked/Legend primary key without deleting data. Migration 014 and the bounded cleanup prepare nullable defense loot; migration 015 is the temporary compatibility bridge. Migration 017 removes that bridge, maps legacy NULL duration to zero, and requires coordinated final writers before ingestion resumes.
