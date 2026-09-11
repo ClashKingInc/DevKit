@@ -266,4 +266,53 @@ func TestArmyCodeFamilyCompatibilityMigration(t *testing.T) {
 		t.Fatal("rollback discarded v2-only data")
 	}
 	check(`SELECT max(version_id)=15 FROM goose_db_version WHERE is_applied`)
+
+	// Complete the code-only representative so the final FK can preserve it,
+	// then prove a data-bearing 015 -> 017 conversion across every contract.
+	run(`INSERT INTO army_compositions(army_hash,normalized_share_code)
+		VALUES(decode(repeat('dd',32),'hex'),'u3x0');
+	INSERT INTO auth_users(user_id,provider) VALUES('100','discord');
+	INSERT INTO player_links(tag,is_verified,source,user_id) VALUES('#P0Y',true,'api_token','100');
+	INSERT INTO mobile_push_devices(
+		user_id,device_id,platform,provider,environment,token_ciphertext,token_hash,
+		war_attacks_enabled,war_state_enabled,war_reminders_enabled,raid_reminders_enabled,
+		events_enabled,announcements_enabled,monthly_support_enabled,reminder_timings,raid_reminder_timings
+	) VALUES('100','iphone','ios','fcm','production','cipher','hash',true,false,true,true,true,false,true,'{60}','{120}');
+	INSERT INTO mobile_notification_accounts(user_id,player_tag) VALUES('100','#P0Y');
+	INSERT INTO mobile_notification_deliveries(user_id,notification_key) VALUES('100','old-delivery');
+	INSERT INTO bases(id,message_id,base_link,downloaders,images,description,upvoter_ids,downvoter_ids)
+	VALUES('00000000-0000-4000-8000-000000000001','123456789012345678',
+		'https://link.clashofclans.com/en?action=OpenLayout&id=TH17%3AHV%3AAAAA',
+		'{100}','{https://api.clashk.ing/v2/media/base.png}','Legacy','{100}','{}');
+	INSERT INTO basic_clan(tag,name,public_war_log,war_wins,member_count,badge_token,troops_donated,troops_received)
+	VALUES('#2PP','Clan',true,1,1,'badge',0,0);
+	INSERT INTO basic_player(tag,name,league_id,clan_tag,townhall_level,trophies)
+	VALUES('#P0Y','Player',105000036,'#2PP',18,6500);
+	INSERT INTO leaderboard_history_player_home(location_id,date,player_tag,player_name,exp_level,trophies,attack_wins,defense_wins,rank)
+	VALUES('global','2026-09-10','#P0Y','Player',250,6400,1,1,12);`)
+
+	if err := migrate("up-to", "17"); err != nil {
+		t.Fatal("final contract upgrade:", err)
+	}
+	check(`SELECT max(version_id)=17 FROM goose_db_version WHERE is_applied`)
+	check(`SELECT duration_seconds=0 AND direction=1 AND battle_mode=2
+		FROM battles_ranked WHERE share_code='u3x0'`)
+	check(`SELECT EXISTS(SELECT 1 FROM army_compositions WHERE share_code='u3x0')
+		AND NOT EXISTS(SELECT 1 FROM information_schema.columns
+			WHERE table_schema='public' AND column_name IN ('army_hash','anchor_army_hash'))`)
+	check(`SELECT war_attacks_enabled AND NOT war_state_enabled AND war_reminders_enabled
+		AND raid_reminders_enabled AND events_enabled AND NOT announcements_enabled
+		AND monthly_support_enabled AND NOT legend_defenses_enabled
+		AND reminder_timings='{60}'::integer[] AND raid_reminder_timings='{120}'::integer[]
+		FROM mobile_notification_preferences WHERE user_id='100'`)
+	check(`SELECT to_regclass('public.mobile_notification_deliveries') IS NULL`)
+	check(`SELECT base.id=1 AND image.image_url='https://api.clashk.ing/v2/media/base.png'
+		AND counts.download_count=1 AND counts.upvote_count=1 AND counts.downvote_count=0
+		FROM bases base JOIN base_images image ON image.base_id=base.id
+		JOIN base_public_counts counts ON counts.base_id=base.id
+		WHERE base.message_id='123456789012345678'`)
+	check(`SELECT name='Player' AND trophies=6500 AND global_rank=1
+		AND clan_tag='#2PP' AND clan_name='Clan' FROM legend_rankings_current WHERE tag='#P0Y'`)
+	check(`SELECT global_rank=12 AND trophies=6400
+		FROM leaderboard_history_player_home WHERE day='2026-09-10' AND tag='#P0Y'`)
 }
