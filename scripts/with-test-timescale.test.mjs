@@ -82,6 +82,7 @@ test('uses only retained authoritative migrations and its own disposable contain
       '016_remove_cwl_season_statistics.sql',
       '017_final_operational_contract.sql',
       '018_personal_base_library.sql',
+      '019_unlimited_personal_bases.sql',
     ]);
   }
   assert.equal(migrations[1].args.at(-1), 'up');
@@ -95,6 +96,14 @@ test('supports a migration-013 compatibility baseline', () => {
   const migration = result.calls.find(call => call.tool === 'goose' && call.args.includes('up'));
   assert.equal(migration.migrations.at(-1), '013_battle_player_time_identity.sql');
   assert.equal(migration.migrations.length, 13);
+});
+
+test('supports a migration-018 compatibility baseline', () => {
+  const result = runFixture({}, 'test "\$CLASHKING_TIMESCALE_PROFILE" = baseline-018', ['--profile', 'baseline-018']);
+  assert.equal(result.status, 0, result.stderr);
+  const migration = result.calls.find(call => call.tool === 'goose' && call.args.includes('up'));
+  assert.equal(migration.migrations.at(-1), '018_personal_base_library.sql');
+  assert.equal(migration.migrations.length, 18);
 });
 
 test('preserves a failing child exit code and still cleans up', () => {

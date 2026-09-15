@@ -1,6 +1,6 @@
 # Final operational consumer contract
 
-Migration 017 finalizes the shared schemas consumed by Tracking, API, Bot, Dashboard, and App. Migration 018 adds authenticated personal references and account-scoped base slots. Applied migrations 001–017 stay immutable; production execution remains a separate approval.
+Migration 017 finalizes the shared schemas consumed by Tracking, API, Bot, Dashboard, and App. Migration 018 introduced authenticated personal references and account-scoped slots; migration 019 supersedes the slot model with unlimited labeled saved bases and base-owned download history. Applied migrations 001–018 stay immutable; production execution remains a separate approval.
 
 ## Legend leaderboards
 
@@ -29,9 +29,9 @@ Valkey Streams provide runtime delivery and deduplication. Migration 017 drops `
 
 ## Base layouts
 
-`bases.id` is generated bigint identity. A valid row has an official HTTPS `OpenLayout` link, Discord `message_id`, optional paired `server_id/channel_id`, description up to 1,000 characters, and creation time. `base_images` owns up to four ordered `https://api.clashk.ing/v2/media/...` URLs. `base_downloaders` stores unique `(base_id,user_id)` identities. `base_votes` privately stores one `-1` or `1` vote per `(base_id,user_id)`; public readers use `base_public_counts`.
+`bases.id` is generated bigint identity. A valid row has an official HTTPS `OpenLayout` link, Discord `message_id`, optional paired `server_id/channel_id`, description up to 1,000 characters, creation time, and a `downloads` JSON object. `base_images` owns up to four ordered `https://api.clashk.ing/v2/media/...` URLs. `base_votes` privately stores one `-1` or `1` vote per `(base_id,user_id)`; public readers use `base_public_counts`.
 
-Migration 017 imports only valid legacy layout links, assigns bigint IDs in deterministic `(created_at,uuid)` order, filters image URLs to the ClashKing media namespace, and normalizes valid Discord user IDs into downloader/vote rows. It retains no UUID, Mongo ID, or legacy audit field.
+Migration 017 imports only valid legacy layout links, assigns bigint IDs in deterministic `(created_at,uuid)` order, filters image URLs to the ClashKing media namespace, and normalizes valid Discord user IDs into downloader/vote rows. Migration 019 moves each downloader's original timestamp onto `bases.downloads` and drops `base_downloaders`. It retains no UUID, Mongo ID, or legacy audit field.
 
 First-click conversion is a two-phase state machine without a legacy status column:
 
@@ -49,18 +49,18 @@ First-click conversion is a two-phase state machine without a legacy status colu
 }
 ```
 
-### Personal library and account slots
+### Unlimited personal library
 
-`user_saved_bases` is the authenticated user's durable library. Its identity is `(user_id,base_id)`, where `user_id` references `auth_users` and `base_id` references the existing shared `bases` row. Both a download-and-retain action and an explicit save upsert this same row, so no base link, image, Discord location, vote, or count is duplicated. Unsave deletes the row and cascades any of that user's assignments for the base.
+`user_saved_bases` is the authenticated user's unlimited durable library. Its identity is `(user_id,base_id)`, where `user_id` references `auth_users` and `base_id` references the existing shared `bases` row. Nullable text `kind` is exactly `war`, `legend`, or NULL when the user has not labeled it. No base link, image, Discord location, vote, or count is duplicated.
 
-`user_base_slots` assigns a saved base to slots `1..3` in either the `war` or `legend` kind for one currently verified linked account. Its slot identity is `(user_id,player_tag,slot_kind,slot_number)`. A uniqueness constraint prevents the same base from occupying two slots of the same kind for the same account, while permitting the same saved base in one War and one Legend slot. Assignment is an upsert on slot identity; clearing is a delete.
+`bases.downloads` is a JSON object keyed by Discord user ID, with the immutable first-download ISO timestamp as its value. Migration 019 validates the object shape and timestamp values, and rejects removal or replacement of an existing key. A repeated posted-button click leaves the first timestamp unchanged while the personal save upsert can restore a deleted `user_saved_bases` row.
 
-The slot's `(player_tag,user_id)` must match a currently verified `player_links` row. Unlink, unverification, or ownership transfer removes that account's slot assignments before the link changes, so a new owner cannot inherit them. Deleting the shared base or authenticated user removes saved references and slots. The personal library itself survives a player unlink because it belongs to the authenticated user rather than one Clash account.
+Unsave and the 90-day personal-library cleanup delete only `user_saved_bases`; lifetime download identity remains on `bases`. Deleting the authenticated user clears that user's saved references, while deleting the shared base clears its saved references and votes through existing foreign keys. Migration 019 removes `user_base_slots` and its verification/link-change triggers and functions entirely.
 
 ```json
 {
-  "savedBase": {"baseId":"42","savedAt":"2026-09-11T06:00:00Z"},
-  "slot": {"playerTag":"#P0Y","kind":"legend","number":1,"baseId":"42","assignedAt":"2026-09-11T06:01:00Z"}
+  "savedBase": {"baseId":"42","kind":"legend","savedAt":"2026-09-11T06:00:00Z"},
+  "downloads": {"123456789012345678":"2026-09-10T18:05:04.123Z"}
 }
 ```
 
