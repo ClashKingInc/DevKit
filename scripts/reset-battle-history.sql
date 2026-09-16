@@ -1,5 +1,5 @@
 -- Explicit operator-only reset. Stop battle-log ingestion before running this.
--- No CASCADE and no trigger disabling: retained families prevent this reset.
+-- No CASCADE: retained families prevent deleting referenced compositions.
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';

@@ -52,6 +52,21 @@ database retention.
 surface. New app archive content uses `admin_posts`; the legacy announcement
 API keeps its own table until its callers are migrated.
 
+### CWL season statistics removal
+
+Migration `016_remove_cwl_season_statistics.sql` removes only
+`cwl_season_statistics`, `reconcile_cwl_season_statistics(text[])`, and
+`cwl_town_halls_valid(jsonb)`. The current Tracking checkout has no caller, but
+the deployed Tracking revision must still be checked for a scheduled or manual
+procedure invocation before migration 016 is applied. The current API checkout
+has no query against the removed table; it must add migration 016 to the expected
+local schema inventory in `scripts/local-api-database.mjs`.
+
+The API's `/v2/stats/cwl` performance route does not use this table and remains
+supported. Migration 009's public war hit-rate, Ranked population, Legend usage,
+and army family aggregates also remain supported and must not be removed as part
+of this cutover.
+
 ## Validation checklist
 
 - [ ] Authoritative schema or service updated

@@ -9,5 +9,5 @@ ORDER BY battle_time DESC;
 
 EXPLAIN (ANALYZE, COSTS OFF, BUFFERS)
 SELECT count(*) FROM public.battles_ranked
-WHERE direction = 'attack' AND battle_time >= now() - interval '30 days';
+WHERE direction = 1 AND battle_time >= now() - interval '30 days';
 RESET enable_seqscan;
