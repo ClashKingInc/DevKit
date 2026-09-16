@@ -85,7 +85,7 @@ rollback sections.
 The Go programs in `migrations/` backfill data from legacy stores. Run them from
 this directory or from `migrations/`; both locations resolve this directory as
 the database root. Only `clan_wars.go` is checkpointed and resumable. Every
-other importer is a one-shot rebuild: it clears its owned destination data,
+other importer except `bases.go` is a one-shot rebuild: it clears its owned destination data,
 drops its secondary indexes before streaming, and recreates those indexes only
 after the full import succeeds. Primary keys, unique constraints, and foreign
 keys remain in place when the importer needs them for identity or integrity.
@@ -94,6 +94,49 @@ keys remain in place when the importer needs them for identity or integrity.
 cd migrations
 go run clan_wars.go
 ```
+
+### Legacy Discord bases
+
+`bases.go` reads `STATIC_MONGODB` → `usafam.bases` directly, using the repository-root
+`.env` and shared migration configuration. It requires Timescale migration 019.
+Unlike rebuild importers, it never clears SQL tables or modifies Mongo: it merges
+by Discord message ID so existing base IDs, images, votes, saved rows, conversion
+metadata, and first-download timestamps survive reruns. A different layout for an
+existing message aborts the current batch; earlier committed batches remain safe
+to rerun. `MIGRATION_BATCH_SIZE` is capped at 1,000 rows per transaction, and
+`MIGRATION_LIMIT_DOCS` can bound a trial scan.
+
+From `database/migrations`, preview first (dry run is the default):
+
+```bash
+BASES_DRY_RUN=true BASES_MESSAGE_ID=1396633326726549545 go run bases.go
+BASES_DRY_RUN=true go run bases.go
+```
+
+After reviewing the preview and confirming the `.env` Timescale destination, apply:
+
+```bash
+BASES_DRY_RUN=false go run bases.go
+```
+
+The importer accepts BSON integer or string `message_id`, the legacy `link` field
+(or `base_link`), and `<@id>`, `<@!id>`, or `<@id> [username]` downloader strings.
+It deduplicates users and reports invalid rows/mentions. It ignores the legacy
+aggregate download counter because it counted repeat clicks. When `created_at`
+is absent, the Discord message snowflake supplies creation time; that time is
+also the approximation for historical downloads, whose exact times were never
+stored. Valid locale-specific layout links normalize to `/en`.
+
+New SQL rows stay unbound with no images or description until a successful first
+click copies the Discord images and edits the message. No Discord, media-store,
+or personal-library write is performed by this importer. A later link click owns
+the personal save. A dry run reads Mongo only and does not connect to Timescale.
+
+```bash
+go test bases.go bases_test.go
+```
+
+### War archives
 
 The war importer writes immutable 10,000-war Zstd packs to R2, stores only the
 searchable war metadata and byte-range locator in Timescale, and builds

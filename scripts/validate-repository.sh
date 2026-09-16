@@ -9,6 +9,7 @@ echo "Validating Go migration tools..."
 (
   cd database
   go test ./...
+  go test migrations/bases.go migrations/bases_test.go
 )
 
 echo "Validating Goose SQL migrations..."
