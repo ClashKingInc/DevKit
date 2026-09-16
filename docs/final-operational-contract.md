@@ -6,7 +6,9 @@ Migration 017 finalizes the shared schemas consumed by Tracking, API, Bot, Dashb
 
 Tracking atomically replaces `legend_rankings_current` only after its complete refresh loop. Its final columns are `tag`, `name`, `trophies`, `global_rank`, nullable `clan_tag`, and nullable `clan_name`; `tag` is the primary key and `global_rank` is unique. Tracking selects current Legend I players with `basic_player.league_id=105000036`, orders by trophies descending then tag, and joins `basic_clan` for clan identity. If that join does not resolve, both clan fields are NULL.
 
-`leaderboard_history_player_home` is the compact daily all-ranked history with `(day,tag)` primary key and `global_rank,trophies`. Migration 017 retains prior `location_id='global'` rows and removes location, player, league, and clan snapshots.
+`leaderboard_history_player_home` remains the official detailed home-village leaderboard history. Migration 017 does not alter its `(location_id,date,player_tag)` identity or its player name, experience, trophy, win, rank, previous-rank, clan, and league snapshots.
+
+`legend_rankings_history` is the separate compact custom daily Legend snapshot with `(day,tag)` primary key, unique `(day,global_rank)`, and `global_rank,trophies`. Tracking populates it from the completed `legend_rankings_current` refresh; official leaderboard history is never used as a lossy source for this custom table.
 
 ```json
 {

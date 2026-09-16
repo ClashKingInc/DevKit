@@ -288,8 +288,14 @@ func TestArmyCodeFamilyCompatibilityMigration(t *testing.T) {
 	VALUES('#2PP','Clan',true,1,1,'badge',0,0);
 	INSERT INTO basic_player(tag,name,league_id,clan_tag,townhall_level,trophies)
 	VALUES('#P0Y','Player',105000036,'#2PP',18,6500);
-	INSERT INTO leaderboard_history_player_home(location_id,date,player_tag,player_name,exp_level,trophies,attack_wins,defense_wins,rank)
-	VALUES('global','2026-09-10','#P0Y','Player',250,6400,1,1,12);`)
+	INSERT INTO leaderboard_history_player_home(
+		location_id,date,player_tag,player_name,exp_level,trophies,attack_wins,defense_wins,
+		rank,previous_rank,clan_tag,clan_name,clan_badge_token,league_id
+	) VALUES
+		('global','2026-09-10','#P0Y','Historical Player',250,6400,21,7,12,15,
+		 '#2PP','Historical Clan','historical-badge',29000022),
+		('32000006','2026-09-10','#P0L','Local Player',175,5900,11,9,3,4,
+		 NULL,NULL,NULL,29000021);`)
 
 	if err := migrate("up-to", "19"); err != nil {
 		t.Fatal("final contract upgrade:", err)
@@ -317,6 +323,19 @@ func TestArmyCodeFamilyCompatibilityMigration(t *testing.T) {
 		AND (SELECT downloads ? '100' FROM bases WHERE message_id='123456789012345678')`)
 	check(`SELECT name='Player' AND trophies=6500 AND global_rank=1
 		AND clan_tag='#2PP' AND clan_name='Clan' FROM legend_rankings_current WHERE tag='#P0Y'`)
-	check(`SELECT global_rank=12 AND trophies=6400
-		FROM leaderboard_history_player_home WHERE day='2026-09-10' AND tag='#P0Y'`)
+	check(`SELECT count(*)=2 FROM leaderboard_history_player_home WHERE date='2026-09-10'`)
+	check(`SELECT player_name='Historical Player' AND exp_level=250 AND trophies=6400
+		AND attack_wins=21 AND defense_wins=7 AND rank=12 AND previous_rank=15
+		AND clan_tag='#2PP' AND clan_name='Historical Clan'
+		AND clan_badge_token='historical-badge' AND league_id=29000022
+		FROM leaderboard_history_player_home
+		WHERE location_id='global' AND date='2026-09-10' AND player_tag='#P0Y'`)
+	check(`SELECT player_name='Local Player' AND rank=3 AND clan_tag IS NULL
+		FROM leaderboard_history_player_home
+		WHERE location_id='32000006' AND date='2026-09-10' AND player_tag='#P0L'`)
+	run(`INSERT INTO legend_rankings_history(day,tag,global_rank,trophies)
+		VALUES('2026-09-10','#P0Y',1,6500)`)
+	check(`SELECT global_rank=1 AND trophies=6500
+		FROM legend_rankings_history WHERE day='2026-09-10' AND tag='#P0Y'`)
+	check(`SELECT count(*)=2 FROM leaderboard_history_player_home WHERE date='2026-09-10'`)
 }

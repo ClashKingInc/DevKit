@@ -162,19 +162,23 @@ league ID; the API deletes the row after it fills that clan's missing
 ## Mobile Push State
 
 Mobile push state is current-state SQL data, not a hypertable. `mobile_push_devices`
-stores one FCM token and its notification preferences per
-`(user_id, device_id, provider, environment)`, with a unique token hash for idempotent
-registration. Store the encrypted token in `token_ciphertext`, use `token_hash` only for
-lookup/dedupe, and use `enabled` as the sole device-wide master notification switch. The
-same row stores the category booleans and up to three reminder timings expressed as integer
-minutes from 1 through 2,820.
+stores one FCM token per `(user_id, device_id, provider, environment)`, with a unique token
+hash for idempotent registration. Store the encrypted token in `token_ciphertext`, use
+`token_hash` only for lookup/dedupe, and use `enabled` as the sole device-wide master
+notification switch. Device rows do not store notification categories or reminder timings.
+
+`mobile_notification_preferences` stores category booleans and reminder timings once per
+user. Every enabled device for that user shares those preferences. War timings allow up to
+three integer-minute values from 1 through 2,820; raid timings allow up to three values from
+1 through 4,320.
 
 `mobile_notification_accounts` stores the user-wide enabled verified player accounts; each
 row is authoritatively sourced from a verified player link. Player bookmarks do not create
 notification accounts. Clan notifications derive from verified players' current clans rather
 than a separate clan toggle.
-Delivery requires an enabled device with an authorized or provisional OS authorization
-status and the relevant category enabled on that device.
+Delivery requires an enabled device and the relevant category enabled in that user's
+preferences. Runtime delivery and deduplication use Valkey Streams; there is no SQL
+notification-delivery or outbox table.
 
 `admin_posts.presentation_type` distinguishes block-based articles from hosted interactive
 stories. `show_on_home` controls carousel inclusion, while `pinned_on_home` keeps a post
@@ -193,7 +197,9 @@ parallel shifted-day aggregates without deleting the old history.
 `016_remove_cwl_season_statistics.sql` then removes the rejected CWL-only
 aggregate without changing the retained war and league analytics.
 `017_final_operational_contract.sql` removes compatibility storage and establishes
-the final cross-repository contracts.
+the final cross-repository contracts. `018_personal_base_library.sql` introduces
+authenticated saved-base references, and `019_unlimited_personal_bases.sql` supersedes
+its slot model with an unlimited nullable-kind library and base-owned download history.
 Do not use the former 007–028 fixture numbering. See
 [the schema decisions](../../docs/worker-api-schema.md),
 [the disposable upgrade test](../../RETAINED_API_FIXTURE.md).

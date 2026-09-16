@@ -280,26 +280,21 @@ FROM public.basic_player player
 LEFT JOIN public.basic_clan clan ON clan.tag=player.clan_tag
 WHERE player.league_id=105000036;
 
-CREATE TEMP TABLE migration_017_player_history ON COMMIT DROP AS
-SELECT date AS day,player_tag AS tag,rank AS global_rank,trophies
-FROM public.leaderboard_history_player_home
-WHERE location_id='global';
-DROP TABLE public.leaderboard_history_player_home;
-CREATE TABLE public.leaderboard_history_player_home (
+-- Official leaderboard history keeps its complete location/player/clan/league
+-- snapshots. Custom daily Legend ranks have a separate compact lifecycle.
+CREATE TABLE public.legend_rankings_history (
     day date NOT NULL,
     tag text NOT NULL,
     global_rank integer NOT NULL,
     trophies integer NOT NULL,
     PRIMARY KEY (day, tag),
     UNIQUE (day, global_rank),
-    CONSTRAINT leaderboard_history_player_home_tag_check CHECK (tag ~ '^#[0289PYLQGRJCUV]{1,15}$'),
-    CONSTRAINT leaderboard_history_player_home_rank_check CHECK (global_rank > 0),
-    CONSTRAINT leaderboard_history_player_home_trophies_check CHECK (trophies >= 0)
+    CONSTRAINT legend_rankings_history_tag_check CHECK (tag ~ '^#[0289PYLQGRJCUV]{1,15}$'),
+    CONSTRAINT legend_rankings_history_rank_check CHECK (global_rank > 0),
+    CONSTRAINT legend_rankings_history_trophies_check CHECK (trophies >= 0)
 );
-CREATE INDEX idx_leaderboard_history_player_home_player
-    ON public.leaderboard_history_player_home (tag,day DESC);
-INSERT INTO public.leaderboard_history_player_home
-SELECT * FROM migration_017_player_history;
+CREATE INDEX idx_legend_rankings_history_player
+    ON public.legend_rankings_history (tag,day DESC);
 
 -- Notification account selection is valid only while the same user owns a
 -- currently verified link. Ownership changes delete the selection first.

@@ -37,7 +37,7 @@ func TestLegendLeaderboardUsesLivePlayerAndClanIdentity(t *testing.T) {
 	if err = tx.QueryRow(ctx, `SELECT clan_name FROM legend_rankings_current WHERE tag='#P0L'`).Scan(&clanName); err != nil || clanName != nil {
 		t.Fatalf("absent clan was snapshotted: %v %v", clanName, err)
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO leaderboard_history_player_home(day,tag,global_rank,trophies) VALUES('2026-09-10','#P0Y',1,6000)`)
+	_, err = tx.Exec(ctx, `INSERT INTO legend_rankings_history(day,tag,global_rank,trophies) VALUES('2026-09-10','#P0Y',1,6000)`)
 	if err != nil {
 		t.Fatal(err)
 	}

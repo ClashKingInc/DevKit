@@ -32,7 +32,9 @@ func TestFinalBattleLeagueSchema(t *testing.T) {
 		`SELECT count(*)=0 FROM information_schema.columns WHERE table_schema='public' AND column_name IN ('army_hash','anchor_army_hash','parser_version')`,
 		`SELECT data_type='smallint' AND is_nullable='NO' FROM information_schema.columns WHERE table_schema='public' AND table_name='battles_ranked' AND column_name='duration_seconds'`,
 		`SELECT data_type='smallint' FROM information_schema.columns WHERE table_schema='public' AND table_name='battles_ranked' AND column_name='battle_mode'`,
-		`SELECT to_regclass('public.legend_rankings_current') IS NOT NULL AND to_regclass('public.leaderboard_history_player_home') IS NOT NULL`,
+		`SELECT to_regclass('public.legend_rankings_current') IS NOT NULL
+			AND to_regclass('public.legend_rankings_history') IS NOT NULL
+			AND to_regclass('public.leaderboard_history_player_home') IS NOT NULL`,
 	}
 	for _, q := range checks {
 		var ok bool
