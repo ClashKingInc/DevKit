@@ -14,8 +14,6 @@ services:
       - max_replication_slots=5
       - -c
       - max_wal_senders=5
-      - -c
-      - max_slot_wal_keep_size=20GB
     environment:
       POSTGRES_DB: ${TIMESCALE_DATABASE}
       POSTGRES_USER: ${TIMESCALE_USERNAME}
