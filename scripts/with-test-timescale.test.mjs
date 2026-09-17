@@ -83,6 +83,8 @@ test('uses only retained authoritative migrations and its own disposable contain
       '017_final_operational_contract.sql',
       '018_personal_base_library.sql',
       '019_unlimited_personal_bases.sql',
+      '020_player_leaderboard_snapshots.sql',
+      '021_inline_base_images_votes.sql',
     ]);
   }
   assert.equal(migrations[1].args.at(-1), 'up');

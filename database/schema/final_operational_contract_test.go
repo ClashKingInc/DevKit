@@ -97,12 +97,12 @@ func TestBasesUseBigintRelationsAndPrivateVotes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO base_images(base_id,position,image_url) VALUES($1,1,'https://api.clashk.ing/v2/media/base.png')`, baseID)
+	_, err = tx.Exec(ctx, `UPDATE bases SET images=ARRAY['https://api.clashk.ing/v2/media/base.png'] WHERE id=$1`, baseID)
 	if err == nil {
 		_, err = tx.Exec(ctx, `UPDATE bases SET downloads=jsonb_build_object('100','2026-09-15T12:00:00Z') WHERE id=$1`, baseID)
 	}
 	if err == nil {
-		_, err = tx.Exec(ctx, `INSERT INTO base_votes(base_id,user_id,vote) VALUES($1,'100',1)`, baseID)
+		_, err = tx.Exec(ctx, `UPDATE bases SET votes=jsonb_build_object('100',jsonb_build_object('vote',1,'updatedAt',now())) WHERE id=$1`, baseID)
 	}
 	if err == nil {
 		_, err = tx.Exec(ctx, `UPDATE bases SET server_id='200',channel_id='300' WHERE id=$1`, baseID)
@@ -119,8 +119,8 @@ func TestBasesUseBigintRelationsAndPrivateVotes(t *testing.T) {
 	}
 	for _, q := range []string{
 		`INSERT INTO bases(message_id,base_link) VALUES('124','https://evil.example/?action=OpenLayout&id=TH17')`,
-		`INSERT INTO base_images(base_id,position,image_url) VALUES(1,1,'https://example.com/base.png')`,
-		`INSERT INTO base_votes(base_id,user_id,vote) VALUES(1,'101',0)`,
+		`INSERT INTO bases(message_id,base_link,images) VALUES('125','https://link.clashofclans.com/en?action=OpenLayout&id=TH17',ARRAY['https://example.com/base.png'])`,
+		`INSERT INTO bases(message_id,base_link,votes) VALUES('126','https://link.clashofclans.com/en?action=OpenLayout&id=TH17','{"101":{"vote":0,"updatedAt":"2026-09-17T00:00:00Z"}}')`,
 	} {
 		if _, err = tx.Exec(ctx, `SAVEPOINT invalid`); err != nil {
 			t.Fatal(err)

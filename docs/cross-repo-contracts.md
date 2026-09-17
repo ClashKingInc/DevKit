@@ -77,3 +77,6 @@ of this cutover.
 - [ ] Obsolete compatibility removed when requested
 - [ ] Stale-contract search returns only intentional history
 - [ ] Targeted tests and `git diff --check` pass
+# Hero mode in army share codes
+
+Canonical hero sections may contain `m<number>` immediately after the hero ID, for example `h2m1p16e5_41`. Tracking and API normalization preserve the mode in the stored/query share code. Mode does not become a separate composition column and is ignored for family matching. Different exact codes can therefore map to the same family.

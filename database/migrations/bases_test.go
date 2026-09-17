@@ -105,7 +105,7 @@ func TestBaseImportPostgres(t *testing.T) {
 	if _, err := tx.Exec(ctx, `UPDATE bases SET server_id='1',channel_id='2',description='converted' WHERE id=$1`, id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO base_votes(base_id,user_id,vote) VALUES($1,'123',1)`, id); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE bases SET votes=jsonb_build_object('123',jsonb_build_object('vote',1,'updatedAt',now())) WHERE id=$1`, id); err != nil {
 		t.Fatal(err)
 	}
 	row.Downloads["123"] = "2026-09-16T00:00:00Z"
@@ -116,7 +116,7 @@ func TestBaseImportPostgres(t *testing.T) {
 	var preserved bool
 	if err := tx.QueryRow(ctx, `SELECT id=$2 AND downloads->>'123'=$3 AND (SELECT count(*) FROM jsonb_object_keys(downloads))=3
 		AND server_id='1' AND channel_id='2' AND description='converted'
-		AND EXISTS(SELECT 1 FROM base_votes WHERE base_id=$2 AND vote=1)
+		AND votes->'123'->>'vote'='1'
 		FROM bases WHERE message_id=$1`, row.MessageID, id, original).Scan(&preserved); err != nil {
 		t.Fatal(err)
 	}
