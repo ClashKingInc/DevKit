@@ -120,4 +120,19 @@ func TestPersonalBaseStorageMigration(t *testing.T) {
 	check(`SELECT download_count=3 AND downloads ? '111111111111111111'
 		FROM bases JOIN base_public_counts counts ON counts.base_id=bases.id
 		WHERE message_id='700000000000000001'`)
+
+	run(`INSERT INTO base_images(base_id,position,image_url)
+ SELECT id,3,'https://api.clashk.ing/v2/media/third.png' FROM bases WHERE message_id='700000000000000001';
+ UPDATE base_votes SET updated_at='2026-09-01T02:03:04Z'`)
+	migrate("up-to", "21")
+	check(`SELECT to_regclass('public.base_images') IS NULL AND to_regclass('public.base_votes') IS NULL`)
+	check(`SELECT images=ARRAY[NULL,NULL,'https://api.clashk.ing/v2/media/third.png']::text[]
+ AND votes->'111111111111111111'->>'vote'='1'
+ AND votes->'222222222222222222'->>'vote'='-1'
+ AND (votes->'111111111111111111'->>'updatedAt')::timestamptz='2026-09-01T02:03:04Z'::timestamptz
+ AND download_count=3 AND upvote_count=1 AND downvote_count=1
+ FROM bases JOIN base_public_counts counts ON counts.base_id=bases.id WHERE message_id='700000000000000001'`)
+	check(`SELECT images='{}'::text[] AND votes='{}'::jsonb FROM bases WHERE message_id='700000000000000002'`)
+	reject(`UPDATE bases SET votes='{"bad":{"vote":1,"updatedAt":"2026-09-01T00:00:00Z"}}'`)
+	reject(`UPDATE bases SET images=ARRAY['https://api.clashk.ing/v2/media/a.png','https://api.clashk.ing/v2/media/a.png']`)
 }
