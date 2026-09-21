@@ -1,0 +1,9 @@
+{
+  "name": "@clashking/dev",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "clashking": "bin/clashking.mjs" },
+  "engines": { "node": ">=24" },
+  "scripts": { "test": "node --test test/*.test.mjs" }
+}

@@ -4,6 +4,10 @@ ClashKing DevKit is the shared home for ClashKing's database schema,
 infrastructure configuration, and design system. It keeps the pieces used by
 multiple ClashKing projects together so they don't drift between repositories.
 
+For the local `clashking` CLI, shared workspace/env file, and encrypted contributor
+datasets, see [Contributor setup](CONTRIBUTING.md). Install it locally
+with `npm install --global ./cli`; nothing is published to npm.
+
 Application code and product-specific UI still live in their own repositories,
 and secrets stay in the deployment environment.
 
