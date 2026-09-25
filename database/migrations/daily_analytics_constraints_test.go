@@ -30,6 +30,10 @@ func TestDailyAnalyticsUsageConstraints(t *testing.T) {
 		{"duplicate siege ID", "army_setup_siege_usage_within_attack_count", `[{"id":1,"attacks":2},{"id":1,"attacks":1}]`, false},
 		{"unordered siege IDs", "army_setup_siege_usage_within_attack_count", `[{"id":2,"attacks":1},{"id":1,"attacks":1}]`, false},
 		{"overcounted siege usage", "army_setup_siege_usage_within_attack_count", `[{"id":1,"attacks":3},{"id":2,"attacks":3}]`, false},
+		{"valid Legend siege usage", "legend_siege_usage_within_attack_count", `[{"id":1,"uses":2,"triples":1},{"id":2,"uses":3,"triples":0}]`, true},
+		{"overcounted Legend siege usage", "legend_siege_usage_within_attack_count", `[{"id":1,"uses":3,"triples":0},{"id":2,"uses":3,"triples":0}]`, false},
+		{"valid equipment pairs for multiple heroes", "equipment_pair_usage_triples_within_attack_count", `[{"heroId":1,"equipmentIds":[1,2],"uses":3,"triples":0},{"heroId":1,"equipmentIds":[1,3],"uses":2,"triples":0},{"heroId":2,"equipmentIds":[1,2],"uses":5,"triples":0}]`, true},
+		{"overcounted equipment pairs for one hero", "equipment_pair_usage_triples_within_attack_count", `[{"heroId":1,"equipmentIds":[1,2],"uses":3,"triples":0},{"heroId":1,"equipmentIds":[1,3],"uses":3,"triples":0}]`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var got bool
