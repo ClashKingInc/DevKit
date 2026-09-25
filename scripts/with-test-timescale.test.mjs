@@ -105,6 +105,7 @@ test('uses only retained authoritative migrations and its own disposable contain
       '039_legend_daily_exclusive_usage.sql',
       '040_legend_exclusive_triple_totals.sql',
       '041_legend_item_triples_saved_army_index.sql',
+      '042_cwl_participation_townhall_validation.sql',
     ]);
   }
   assert.equal(migrations[1].args.at(-1), 'up');
