@@ -30,3 +30,9 @@ jobs:
       - name: Apply 018 then verify the populated personal-base upgrade
         working-directory: database
         run: bash ../scripts/with-test-timescale.sh --profile baseline-018 -- go test ./schema -run '^TestPersonalBaseStorageMigration$' -count=1 -v
+      - name: Apply 021 then verify the populated personal-army upgrade
+        working-directory: database
+        run: bash ../scripts/with-test-timescale.sh --profile baseline-021 -- go test ./schema -run '^TestPersonalArmyStorageMigration$' -count=1 -v
+      - name: Verify daily analytics constraints on the complete retained schema
+        working-directory: database
+        run: bash ../scripts/with-test-timescale.sh --profile retained-api -- go test ./migrations -run '^TestDailyAnalyticsUsageConstraints$' -count=1 -v

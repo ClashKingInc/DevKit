@@ -103,6 +103,7 @@ test('uses only retained authoritative migrations and its own disposable contain
       '037_roster_publication_requests.sql',
       '038_daily_analytics_count_constraints.sql',
       '039_legend_daily_exclusive_usage.sql',
+      '040_legend_exclusive_triple_totals.sql',
     ]);
   }
   assert.equal(migrations[1].args.at(-1), 'up');

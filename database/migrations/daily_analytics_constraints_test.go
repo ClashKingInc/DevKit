@@ -46,4 +46,25 @@ func TestDailyAnalyticsUsageConstraints(t *testing.T) {
 			}
 		})
 	}
+	for _, tc := range []struct {
+		name, value string
+		perHero     bool
+		want        bool
+	}{
+		{"pet combos bounded by three stars", `[{"petIds":[1],"uses":1,"triples":1},{"petIds":[2],"uses":1,"triples":1}]`, false, true},
+		{"pet combos exceed three stars", `[{"petIds":[1],"uses":3,"triples":3}]`, false, false},
+		{"siege uses exceed three stars", `[{"id":1,"uses":1,"triples":1},{"id":2,"uses":1,"triples":2}]`, false, false},
+		{"equipment pairs bounded per hero", `[{"heroId":1,"equipmentIds":[1,2],"uses":2,"triples":2},{"heroId":2,"equipmentIds":[1,2],"uses":2,"triples":2}]`, true, true},
+		{"equipment pairs exceed three stars for hero", `[{"heroId":1,"equipmentIds":[1,2],"uses":2,"triples":2},{"heroId":1,"equipmentIds":[1,3],"uses":1,"triples":1}]`, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got bool
+			if err := conn.QueryRow(t.Context(), "SELECT public.legend_exclusive_triples_within_star_count($1::jsonb, 2::bigint, $2::boolean)", tc.value, tc.perHero).Scan(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("validator returned %v, want %v", got, tc.want)
+			}
+		})
+	}
 }
