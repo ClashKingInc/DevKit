@@ -100,6 +100,8 @@ test('uses only retained authoritative migrations and its own disposable contain
       '034_daily_army_setups.sql',
       '035_remove_army_analysis_timestamp.sql',
       '036_army_setup_siege_usage.sql',
+      '037_roster_publication_requests.sql',
+      '038_daily_analytics_count_constraints.sql',
     ]);
   }
   assert.equal(migrations[1].args.at(-1), 'up');
