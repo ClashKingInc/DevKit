@@ -35,4 +35,4 @@ jobs:
         run: bash ../scripts/with-test-timescale.sh --profile baseline-021 -- go test ./schema -run '^TestPersonalArmyStorageMigration$' -count=1 -v
       - name: Verify daily analytics constraints on the complete retained schema
         working-directory: database
-        run: bash ../scripts/with-test-timescale.sh --profile retained-api -- go test ./migrations -run '^(TestDailyAnalyticsUsageConstraints|TestCWLParticipationTownHalls)$' -count=1 -v
+        run: bash ../scripts/with-test-timescale.sh --profile retained-api -- go test ./migrations -run '^(TestDailyAnalyticsUsageConstraints|TestCWLParticipationTownHalls|TestCWLParticipationHitRates)$' -count=1 -v
