@@ -67,4 +67,21 @@ func TestDailyAnalyticsUsageConstraints(t *testing.T) {
 			}
 		})
 	}
+	for _, tc := range []struct {
+		name, value string
+		want        bool
+	}{
+		{"valid item triples for co-occurring items", `[{"id":1,"uses":3,"triples":2},{"id":2,"uses":3,"triples":2}]`, true},
+		{"item triples exceed three stars", `[{"id":1,"uses":3,"triples":3}]`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got bool
+			if err := conn.QueryRow(t.Context(), "SELECT public.legend_item_triples_within_star_count($1::jsonb, 2::bigint)", tc.value).Scan(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("validator returned %v, want %v", got, tc.want)
+			}
+		})
+	}
 }
