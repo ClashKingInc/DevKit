@@ -8,8 +8,11 @@ DECLARE
     entry jsonb;
     pet_id jsonb;
     previous_pet integer;
+    current_combo integer[];
+    previous_combo integer[];
     uses_value bigint;
     triples_value bigint;
+    total_uses bigint := 0;
 BEGIN
     IF attack_limit < 0 OR jsonb_typeof(value) <> 'array' THEN RETURN false; END IF;
     FOR entry IN SELECT element FROM jsonb_array_elements(value) WITH ORDINALITY AS item(element, position) ORDER BY position LOOP
@@ -21,15 +24,20 @@ BEGIN
            OR (entry->>'uses')::numeric > 9223372036854775807
            OR (entry->>'triples')::numeric > 9223372036854775807 THEN RETURN false; END IF;
         previous_pet := -1;
+        current_combo := '{}'::integer[];
         FOR pet_id IN SELECT element FROM jsonb_array_elements(entry->'petIds') WITH ORDINALITY AS item(element, position) ORDER BY position LOOP
             IF jsonb_typeof(pet_id) <> 'number' OR pet_id #>> '{}' !~ '^[0-9]+$'
                OR (pet_id #>> '{}')::numeric > 2147483647
                OR (pet_id #>> '{}')::integer <= previous_pet THEN RETURN false; END IF;
             previous_pet := (pet_id #>> '{}')::integer;
+            current_combo := array_append(current_combo, previous_pet);
         END LOOP;
         uses_value := (entry->>'uses')::bigint;
         triples_value := (entry->>'triples')::bigint;
-        IF triples_value > uses_value OR uses_value > attack_limit THEN RETURN false; END IF;
+        IF (previous_combo IS NOT NULL AND current_combo <= previous_combo)
+           OR triples_value > uses_value OR uses_value > attack_limit - total_uses THEN RETURN false; END IF;
+        previous_combo := current_combo;
+        total_uses := total_uses + uses_value;
     END LOOP;
     RETURN true;
 EXCEPTION WHEN numeric_value_out_of_range THEN RETURN false;
