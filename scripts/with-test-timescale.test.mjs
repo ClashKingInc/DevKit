@@ -85,6 +85,29 @@ test('uses only retained authoritative migrations and its own disposable contain
       '019_unlimited_personal_bases.sql',
       '020_player_leaderboard_snapshots.sql',
       '021_inline_base_images_votes.sql',
+      '022_personal_army_library.sql',
+      '023_roster_signup_scope.sql',
+      '024_roster_admission_settings.sql',
+      '025_roster_discord_publications.sql',
+      '026_roster_publication_webhooks.sql',
+      '027_roster_embed_color.sql',
+      '028_roster_automation_event_offsets.sql',
+      '029_roster_default_capacity.sql',
+      '030_legend_daily_metadata.sql',
+      '031_legend_daily_pet_combos.sql',
+      '032_remove_server_link_token_policy.sql',
+      '033_cwl_participation.sql',
+      '034_daily_army_setups.sql',
+      '035_remove_army_analysis_timestamp.sql',
+      '036_army_setup_siege_usage.sql',
+      '037_roster_publication_requests.sql',
+      '038_daily_analytics_count_constraints.sql',
+      '039_legend_daily_exclusive_usage.sql',
+      '040_legend_exclusive_triple_totals.sql',
+      '041_legend_item_triples_saved_army_index.sql',
+      '042_cwl_participation_townhall_validation.sql',
+      '043_legend_selected_siege_id.sql',
+      '044_cwl_participation_hitrate_validation.sql',
     ]);
   }
   assert.equal(migrations[1].args.at(-1), 'up');
@@ -106,6 +129,14 @@ test('supports a migration-018 compatibility baseline', () => {
   const migration = result.calls.find(call => call.tool === 'goose' && call.args.includes('up'));
   assert.equal(migration.migrations.at(-1), '018_personal_base_library.sql');
   assert.equal(migration.migrations.length, 18);
+});
+
+test('supports a migration-021 compatibility baseline', () => {
+  const result = runFixture({}, 'test "$CLASHKING_TIMESCALE_PROFILE" = baseline-021', ['--profile', 'baseline-021']);
+  assert.equal(result.status, 0, result.stderr);
+  const migration = result.calls.find(call => call.tool === 'goose' && call.args.includes('up'));
+  assert.equal(migration.migrations.at(-1), '021_inline_base_images_votes.sql');
+  assert.equal(migration.migrations.length, 21);
 });
 
 test('preserves a failing child exit code and still cleans up', () => {

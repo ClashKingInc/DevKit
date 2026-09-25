@@ -16,8 +16,8 @@ channels, users, members, roles, and application_emojis (discord_cache schema).
 
 Existing data changes: basic_clan.capital_gold_total plus global/location ranks;
 app_update_channels.rollback_target_version; billing_subscriptions.
-initial_assignment_applied (true for existing rows, false for new rows); servers.
-require_api_token_when_linking (false for existing and new servers).
+initial_assignment_applied (true for existing rows, false for new rows). Migration
+032 removes the retired per-server token policy; all new links require a valid token.
 
 ## Ticket configuration decision
 

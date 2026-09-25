@@ -134,7 +134,7 @@ func TestBasesUseBigintRelationsAndPrivateVotes(t *testing.T) {
 	}
 }
 
-func TestPersonalBaseLibraryIsUnlimitedAndTyped(t *testing.T) {
+func TestPersonalLibrariesUseCanonicalBaseAndArmyIdentity(t *testing.T) {
 	conn := disposableConn(t)
 	ctx := context.Background()
 	tx, err := conn.Begin(ctx)
@@ -149,9 +149,11 @@ func TestPersonalBaseLibraryIsUnlimitedAndTyped(t *testing.T) {
 		       'https://link.clashofclans.com/en?action=OpenLayout&id=TH17%3AWB%3A'||value,
 		       'Personal base '||value
 		FROM generate_series(1,25) value;
-		INSERT INTO user_saved_bases(user_id,base_id,kind)
-		SELECT 'owner',id,CASE id%3 WHEN 0 THEN NULL WHEN 1 THEN 'war' ELSE 'legend' END
-		FROM bases WHERE description LIKE 'Personal base %'`)
+		INSERT INTO user_saved_bases(user_id,base_id)
+		SELECT 'owner',id FROM bases WHERE description LIKE 'Personal base %';
+		INSERT INTO army_compositions(share_code) VALUES('u1x0');
+		INSERT INTO user_saved_armies(user_id,share_code)
+		VALUES('owner','u1x0')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,8 +161,38 @@ func TestPersonalBaseLibraryIsUnlimitedAndTyped(t *testing.T) {
 	if err = tx.QueryRow(ctx, `SELECT count(*) FROM user_saved_bases WHERE user_id='owner'`).Scan(&savedCount); err != nil || savedCount != 25 {
 		t.Fatalf("unlimited saved rows=%d err=%v", savedCount, err)
 	}
-	if _, err = tx.Exec(ctx, `UPDATE user_saved_bases SET kind='farming' WHERE user_id='owner'`); err == nil {
-		t.Fatal("invalid saved-base kind accepted")
+	var kindAbsent bool
+	if err = tx.QueryRow(ctx, `SELECT NOT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema='public' AND table_name='user_saved_bases' AND column_name='kind'
+	)`).Scan(&kindAbsent); err != nil || !kindAbsent {
+		t.Fatalf("saved-base kind still exists: %v", err)
+	}
+	var armySaved bool
+	if err = tx.QueryRow(ctx, `SELECT saved_at IS NOT NULL FROM user_saved_armies
+		WHERE user_id='owner' AND share_code='u1x0'`).Scan(&armySaved); err != nil || !armySaved {
+		t.Fatalf("personal army save missing: %v", err)
+	}
+	for _, q := range []string{
+		`INSERT INTO user_saved_armies(user_id,share_code) VALUES('owner','u1x0')`,
+		`INSERT INTO user_saved_armies(user_id,share_code) VALUES('owner','missing')`,
+	} {
+		if _, err = tx.Exec(ctx, `SAVEPOINT invalid_personal_army`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(ctx, q); err == nil {
+			t.Fatalf("invalid personal army accepted: %s", q)
+		}
+		if _, err = tx.Exec(ctx, `ROLLBACK TO SAVEPOINT invalid_personal_army`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM user_saved_armies WHERE user_id='owner' AND share_code='u1x0'`); err != nil {
+		t.Fatal(err)
+	}
+	var compositionPresent bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM army_compositions WHERE share_code='u1x0')`).Scan(&compositionPresent); err != nil || !compositionPresent {
+		t.Fatalf("unsave deleted canonical composition: %v", err)
 	}
 	if err = tx.Rollback(ctx); err != nil {
 		t.Fatal(err)
