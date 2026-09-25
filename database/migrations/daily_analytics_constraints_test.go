@@ -18,6 +18,23 @@ func TestDailyAnalyticsUsageConstraints(t *testing.T) {
 	}
 	defer conn.Close(context.Background())
 	for _, tc := range []struct {
+		name, value string
+		want        bool
+	}{
+		{"valid selected siege", `[{"id":1,"uses":1,"triples":0}]`, true},
+		{"zero selected siege", `[{"id":0,"uses":1,"triples":0}]`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got bool
+			if err := conn.QueryRow(t.Context(), "SELECT public.legend_selected_siege_ids_valid($1::jsonb)", tc.value).Scan(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("validator returned %v, want %v", got, tc.want)
+			}
+		})
+	}
+	for _, tc := range []struct {
 		name, function, value string
 		want                  bool
 	}{
