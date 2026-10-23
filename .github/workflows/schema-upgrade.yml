@@ -20,19 +20,10 @@ jobs:
           node-version: 22
       - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck= .github/workflows/schema-upgrade.yml
       - run: go install github.com/pressly/goose/v3/cmd/goose@v3.26.0
-      - run: node --test scripts/with-test-timescale.test.mjs
-      - name: Apply 006 then verify the seeded-data upgrade
+      - name: Build migration tools
         working-directory: database
-        run: bash ../scripts/with-test-timescale.sh --profile baseline-006 -- go test ./schema -run '^TestWorkerAPIUpgrade$' -count=1 -v
-      - name: Apply 013 then verify the army-family compatibility upgrade
-        working-directory: database
-        run: bash ../scripts/with-test-timescale.sh --profile baseline-013 -- go test ./schema -run '^TestArmyCodeFamilyCompatibilityMigration$' -count=1 -v
-      - name: Apply 018 then verify the populated personal-base upgrade
-        working-directory: database
-        run: bash ../scripts/with-test-timescale.sh --profile baseline-018 -- go test ./schema -run '^TestPersonalBaseStorageMigration$' -count=1 -v
-      - name: Apply 021 then verify the populated personal-army upgrade
-        working-directory: database
-        run: bash ../scripts/with-test-timescale.sh --profile baseline-021 -- go test ./schema -run '^TestPersonalArmyStorageMigration$' -count=1 -v
-      - name: Verify daily analytics constraints on the complete retained schema
-        working-directory: database
-        run: bash ../scripts/with-test-timescale.sh --profile retained-api -- go test ./migrations -run '^(TestDailyAnalyticsUsageConstraints|TestCWLParticipationTownHalls|TestCWLParticipationHitRates)$' -count=1 -v
+        run: go build ./...
+      - name: Apply published baseline then verify the release upgrade
+        run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/schema-smoke.sh
+      - name: Verify a clean full schema and repeat migration
+        run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/schema-smoke.sh
