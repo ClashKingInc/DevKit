@@ -1,5 +1,5 @@
 # Canonical migration inventory for retained API tests and local development.
-# This is the same contiguous 001-044 sequence used for production upgrades.
+# Keep the inventory contiguous, including newly authored forward migrations.
 fixture_image='timescale/timescaledb:2.29.2-pg18@sha256:9508616d5b941ed931198504c5db3fb47e8f53f790732ea1e889591f1062057c'
 fixture_sources=(
   001_initial_stats.sql
@@ -23,27 +23,14 @@ fixture_sources=(
   019_unlimited_personal_bases.sql
   020_player_leaderboard_snapshots.sql
   021_inline_base_images_votes.sql
-  022_personal_army_library.sql
-  023_roster_signup_scope.sql
-  024_roster_admission_settings.sql
-  025_roster_discord_publications.sql
-  026_roster_publication_webhooks.sql
-  027_roster_embed_color.sql
-  028_roster_automation_event_offsets.sql
-  029_roster_default_capacity.sql
-  030_legend_daily_metadata.sql
-  031_legend_daily_pet_combos.sql
-  032_remove_server_link_token_policy.sql
-  033_cwl_participation.sql
-  034_daily_army_setups.sql
-  035_remove_army_analysis_timestamp.sql
-  036_army_setup_siege_usage.sql
-  037_roster_publication_requests.sql
-  038_daily_analytics_count_constraints.sql
-  039_legend_daily_exclusive_usage.sql
-  040_legend_exclusive_triple_totals.sql
-  041_legend_item_triples_saved_army_index.sql
-  042_cwl_participation_townhall_validation.sql
-  043_legend_selected_siege_id.sql
-  044_cwl_participation_hitrate_validation.sql
+  022_release_extension.sql
+  023_war_triple_streaks.sql
+  024_farming_autoboards.sql
+  025_home_layouts.sql
+  026_dashboard_scoped_sessions.sql
+  027_home_activity_card.sql
+  028_competitive.sql
+  029_competitive_profiles.sql
+  030_competitive_attack_summaries.sql
+  031_competitive_rule_metadata.sql
 )
