@@ -51,24 +51,8 @@ func runRosters(ctx context.Context, cfg migrateutil.Config) error {
 }
 
 func rosterOneShotPlan() migrateutil.OneShotPlan {
-	return migrateutil.OneShotPlan{
-		ResetSQL: []string{
-			`DELETE FROM public.rosters`,
-			`TRUNCATE TABLE public.roster_automation_executions, public.roster_automation_rules, public.roster_groups`,
-		},
-		DropIndexes: []string{
-			`DROP INDEX IF EXISTS public.idx_roster_automation_rules_server_group`,
-			`DROP INDEX IF EXISTS public.idx_roster_groups_server`,
-			`DROP INDEX IF EXISTS public.idx_rosters_server_clan`,
-			`DROP INDEX IF EXISTS public.idx_rosters_server_group`,
-		},
-		CreateIndexes: []string{
-			`CREATE INDEX idx_roster_automation_rules_server_group ON public.roster_automation_rules (server_id, group_id)`,
-			`CREATE INDEX idx_roster_groups_server ON public.roster_groups (server_id)`,
-			`CREATE INDEX idx_rosters_server_clan ON public.rosters (server_id, clan_tag)`,
-			`CREATE INDEX idx_rosters_server_group ON public.rosters (server_id, group_id)`,
-		},
-	}
+	// Re-importing must preserve application-created rows and edited rosters.
+	return migrateutil.OneShotPlan{}
 }
 
 func migrateRosterDocuments(ctx context.Context, cfg migrateutil.Config, pool interface {
@@ -92,6 +76,11 @@ func migrateRosterDocuments(ctx context.Context, cfg migrateutil.Config, pool in
 			}
 			if legacyID != "" {
 				rosterIDs[legacyID] = rosterID
+				for _, alias := range []any{doc["_id"], doc["token"], doc["custom_id"]} {
+					if value := firstRosterString(alias); value != "" {
+						rosterIDs[value] = rosterID
+					}
+				}
 			}
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -236,9 +225,29 @@ func writeRosterDocument(ctx context.Context, tx pgx.Tx, doc bson.M) (string, uu
 	if _, err := tx.Exec(ctx, `INSERT INTO servers (id, name) VALUES ($1, $1) ON CONFLICT DO NOTHING`, serverID); err != nil {
 		return "", uuid.Nil, err
 	}
-	var rosterID uuid.UUID
+	// Shared deterministic identity lets separately imported reminders resolve
+	// their Mongo roster reference without retaining a migration mapping table.
+	sourceID := firstRosterString(doc["_id"], doc["token"], doc["custom_id"])
+	rosterID := uuid.NewSHA1(uuid.NameSpaceOID, []byte("roster:"+sourceID))
+	var existingID uuid.UUID
+	matchErr := tx.QueryRow(ctx, `SELECT id FROM rosters WHERE server_id=$1 AND id=$2`, serverID, rosterID).Scan(&existingID)
+	if matchErr == nil {
+		return legacyID, existingID, nil
+	}
+	if matchErr != pgx.ErrNoRows {
+		return "", uuid.Nil, matchErr
+	}
+	// Older imports discarded their Mongo identity. An alias collision is not
+	// sufficient evidence to overwrite or fork an existing user-edited roster.
+	var collision bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM rosters WHERE server_id=$1 AND alias=$2)`, serverID, firstRosterString(doc["alias"], doc["clan_name"], "Roster")).Scan(&collision); err != nil {
+		return "", uuid.Nil, err
+	}
+	if collision {
+		return "", uuid.Nil, fmt.Errorf("legacy roster %s has an existing alias without a preserved source identity; explicit reconciliation is required", legacyID)
+	}
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO rosters (
+		INSERT INTO rosters (id,
 			server_id, group_id, clan_tag, alias, description,
 			roster_type, signup_scope, min_townhall, max_townhall,
 			min_signups, max_accounts_per_user, display_column_ids, sort_configuration,
@@ -246,7 +255,7 @@ func writeRosterDocument(ctx context.Context, tx pgx.Tx, doc bson.M) (string, uu
 			image_url, event_start_time,
 			recurrence_days, recurrence_day_of_month, created_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+			$20::uuid, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
 			$11, $12::text[], $13::jsonb, $14, $15,
 			$16, $17, $18, $19, now(), now()
 		)
@@ -258,7 +267,7 @@ func writeRosterDocument(ctx context.Context, tx pgx.Tx, doc bson.M) (string, uu
 		nullableRosterInt(doc["min_signups"]), nullableRosterInt(doc["max_accounts_per_user"]), rosterColumnIDs(doc["columns"]), rosterSortConfigurationJSON(doc["sort"]),
 		nullableRosterString(doc["webhook_id"]), nullableRosterString(doc["message_id"]),
 		firstRosterNullable(doc["image"], doc["image_url"]),
-		nullableRosterInt64(doc["event_start_time"]), nullableRosterInt(doc["recurrence_days"]), nullableRosterInt(doc["recurrence_day_of_month"])).Scan(&rosterID); err != nil {
+		nullableRosterInt64(doc["event_start_time"]), nullableRosterInt(doc["recurrence_days"]), nullableRosterInt(doc["recurrence_day_of_month"]), rosterID).Scan(&rosterID); err != nil {
 		return "", uuid.Nil, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM roster_members WHERE roster_id = $1`, rosterID); err != nil {

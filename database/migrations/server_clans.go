@@ -139,16 +139,12 @@ func writeServerClanDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		return err
 	}
 	if roleID := migrateutil.String(doc["generalRole"]); roleID != "" {
-		if _, err := tx.Exec(ctx, `INSERT INTO server_roles (server_id, clan_tag, type, option, role_id, mode) VALUES ($1, $2, 'clan_role', 'member', $3, 'both')`, serverID, clanTag, roleID); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO server_roles (server_id, clan_tag, type, option, role_id) VALUES ($1, $2, 'clan_role', 'member', $3)`, serverID, clanTag, roleID); err != nil {
 			return err
 		}
 	}
 	if roleID := migrateutil.String(doc["leaderRole"]); roleID != "" {
-		mode := "both"
-		if value, ok := doc["leadership_eval"]; ok && value != nil && !migrateutil.Bool(value) {
-			mode = "remove"
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO server_roles (server_id, clan_tag, type, option, role_id, mode) VALUES ($1, $2, 'clan_role', 'leader', $3, $4)`, serverID, clanTag, roleID, mode); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO server_roles (server_id, clan_tag, type, option, role_id) VALUES ($1, $2, 'clan_role', 'leader', $3)`, serverID, clanTag, roleID); err != nil {
 			return err
 		}
 	}
