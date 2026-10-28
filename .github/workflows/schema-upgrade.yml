@@ -42,3 +42,5 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/capital-raid-history-smoke.sh
       - name: Verify war-event settings and legacy import
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/war-event-settings-smoke.sh
+      - name: Verify automatic role policies and manual job defaults
+        run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/automatic-role-policy-smoke.sh

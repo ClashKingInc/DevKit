@@ -4,6 +4,8 @@ set -euo pipefail
 [[ ${CLASHKING_DISPOSABLE_TIMESCALE:-} == 1 ]] || exit 2
 [[ ${TEST_DATABASE_URL:-} == postgres://clashking_test:clashking_test@127.0.0.1:*/clashking_test?sslmode=disable ]] || exit 2
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Import the current contract even when a caller first checked an older upgrade.
+goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up
 run_dir=$(mktemp -d "${TMPDIR:-/tmp}/ck-donation-import.XXXXXX")
 run_id=${run_dir##*.}
 container=''
@@ -46,7 +48,9 @@ address=$(docker port "$container" 27017/tcp)
 mongo="mongodb://127.0.0.1:${BASH_REMATCH[1]}"
 docker exec "$container" mongosh --quiet --eval '
 const source=db.getSiblingDB("usafam");
-source.server.insertOne({server:"99990002",name:"Import test",logs:{donations:{webhook:"999902",thread:"999912",enabled:true}}});
+source.server.insertOne({server:"99990002",name:"Import test",role_treatment:["Add"],blacklisted_roles:[NumberLong("999999999999996523"),"999999999999996523"],logs:{donations:{webhook:"999902",thread:"999912",enabled:true}}});
+source.server.insertOne({server:"99990003",name:"Remove policy",role_treatment:["Remove"]});
+source.server.insertOne({server:"99990004",name:"Default policy"});
 source.clans.insertOne({server:"99990002",tag:"#PYLQ",events:{war:true},logs:{donation_log:{webhook:"999903",thread:"999913",disabled:true}}});
 ' >/dev/null
 psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO basic_clan(tag,name,public_war_log,war_wins,member_count,badge_token,troops_donated,troops_received) VALUES('#PYLQ','Imported Clan',true,0,0,'',0,0)"
@@ -62,6 +66,9 @@ touch "$run_dir/database/timescale/001_initial_stats.sql" "$run_dir/.env"
 (cd "$run_dir/database" && env -i PATH="$PATH" HOME="$HOME" TIMESCALE_URL="$TEST_DATABASE_URL" STATIC_MONGODB="$mongo" STATS_MONGODB="$mongo" "$run_dir/server-clans")
 psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
 DO $$ BEGIN
+ IF NOT EXISTS(SELECT 1 FROM servers WHERE id='99990002' AND auto_role_treatment='add' AND auto_role_blacklist_ids=ARRAY['999999999999996523']::text[]) THEN RAISE EXCEPTION 'Automatic policy import failed'; END IF;
+ IF NOT EXISTS(SELECT 1 FROM servers WHERE id='99990003' AND auto_role_treatment='remove' AND cardinality(auto_role_blacklist_ids)=0) THEN RAISE EXCEPTION 'Remove-only policy import failed'; END IF;
+ IF NOT EXISTS(SELECT 1 FROM servers WHERE id='99990004' AND auto_role_treatment='both' AND cardinality(auto_role_blacklist_ids)=0) THEN RAISE EXCEPTION 'Default policy import failed'; END IF;
  IF NOT EXISTS(SELECT 1 FROM server_clans WHERE server_id='99990002' AND tag='#PYLQ' AND war_events_enabled) THEN RAISE EXCEPTION 'War event opt-in not preserved'; END IF;
  IF EXISTS(SELECT 1 FROM server_logs WHERE type='donation_log') THEN RAISE EXCEPTION 'Importer recreated donation log'; END IF;
  IF (SELECT count(*) FROM autoboards WHERE server_id='99990002')<>2 THEN RAISE EXCEPTION 'Missing or duplicated imported board'; END IF;

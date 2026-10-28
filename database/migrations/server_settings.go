@@ -5,6 +5,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/ClashKingInc/DevKit/database/migrations/migrateutil"
@@ -175,6 +178,10 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		return nil
 	}
 	name := firstString(doc["name"], serverID)
+	treatment, blacklist, err := legacyAutomaticRolePolicy(doc)
+	if err != nil {
+		return fmt.Errorf("server %s auto refresh policy: %w", serverID, err)
+	}
 	linkParse := migrateutil.Map(doc["link_parse"])
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO servers (
@@ -185,11 +192,11 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 			autoboard_limit, tied_stats_only,
 			family_label,
 			link_parse_clan, link_parse_army, link_parse_player, link_parse_base,
-			link_parse_show, updated_at
+			link_parse_show, auto_role_treatment, auto_role_blacklist_ids, updated_at
 		) VALUES (
 			$1, $2, NULLIF($3, ''),
 			$4, $5, $6, $7, $8, $9, $10, $11, $12,
-			$13, $14, $15, $16, $17, $18, $19, now()
+			$13, $14, $15, $16, $17, $18, $19, $20, $21, now()
 		)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
@@ -210,6 +217,8 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 			link_parse_player = EXCLUDED.link_parse_player,
 			link_parse_base = EXCLUDED.link_parse_base,
 			link_parse_show = EXCLUDED.link_parse_show,
+ auto_role_treatment = EXCLUDED.auto_role_treatment,
+ auto_role_blacklist_ids = EXCLUDED.auto_role_blacklist_ids,
 			updated_at = now()
 	`, serverID, name, migrateutil.String(doc["embed_color"]),
 		nullableString(doc["nickname_rule"]), nullableString(doc["non_family_nickname_rule"]),
@@ -220,7 +229,7 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		boolDefault(doc, "tied", true),
 		migrateutil.String(doc["family_label"]),
 		boolMapDefault(linkParse, "clan", true), boolMapDefault(linkParse, "army", true),
-		boolMapDefault(linkParse, "player", true), boolMapDefault(linkParse, "base", true), boolMapDefault(linkParse, "show", true)); err != nil {
+		boolMapDefault(linkParse, "player", true), boolMapDefault(linkParse, "base", true), boolMapDefault(linkParse, "show", true), treatment, blacklist); err != nil {
 		return err
 	}
 	welcomeLink := migrateutil.Map(migrateutil.Map(doc["logs"])["welcome_link"])
@@ -580,4 +589,62 @@ func firstIntPointer(values ...any) any {
 		}
 	}
 	return nil
+}
+
+// A malformed explicit policy must not silently broaden automatic permissions.
+// Missing legacy settings use the original Both/empty defaults.
+var automaticPolicyRoleID = regexp.MustCompile(`^[0-9]{15,20}$`)
+
+func legacyAutomaticRolePolicy(doc bson.M) (string, []string, error) {
+	treatment := "both"
+	if raw := doc["role_treatment"]; raw != nil {
+		values := migrateutil.Slice(raw)
+		if text, ok := raw.(string); ok {
+			values = []any{text}
+		}
+		add, remove := false, false
+		for _, value := range values {
+			switch strings.ToLower(migrateutil.String(value)) {
+			case "add":
+				add = true
+			case "remove":
+				remove = true
+			case "both":
+				add, remove = true, true
+			default:
+				return "", nil, fmt.Errorf("unrecognized role_treatment")
+			}
+		}
+		switch {
+		case add && remove:
+			treatment = "both"
+		case add:
+			treatment = "add"
+		case remove:
+			treatment = "remove"
+		default:
+			return "", nil, fmt.Errorf("empty role_treatment")
+		}
+	}
+	blacklist := make([]string, 0)
+	values := migrateutil.Slice(doc["blacklisted_roles"])
+	if doc["blacklisted_roles"] != nil && values == nil {
+		return "", nil, fmt.Errorf("blacklisted_roles must be an array")
+	}
+	seen := map[string]bool{}
+	for _, value := range values {
+		id := migrateutil.String(value)
+		if !automaticPolicyRoleID.MatchString(id) {
+			return "", nil, fmt.Errorf("invalid blacklisted role ID")
+		}
+		if !seen[id] {
+			blacklist = append(blacklist, id)
+			seen[id] = true
+		}
+	}
+	if len(blacklist) > 250 {
+		return "", nil, fmt.Errorf("too many blacklisted roles")
+	}
+	sort.Strings(blacklist)
+	return treatment, blacklist, nil
 }
