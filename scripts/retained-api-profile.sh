@@ -40,4 +40,5 @@ fixture_sources=(
   044_legend_day_performance.sql
   045_role_refresh_treatment.sql
   046_automatic_role_policy.sql
+  047_automatic_role_triggers.sql
 )

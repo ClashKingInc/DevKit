@@ -182,6 +182,10 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 	if err != nil {
 		return fmt.Errorf("server %s auto refresh policy: %w", serverID, err)
 	}
+	triggers, err := legacyAutomaticRoleTriggers(doc)
+	if err != nil {
+		return fmt.Errorf("server %s auto refresh triggers: %w", serverID, err)
+	}
 	linkParse := migrateutil.Map(doc["link_parse"])
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO servers (
@@ -192,11 +196,11 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 			autoboard_limit, tied_stats_only,
 			family_label,
 			link_parse_clan, link_parse_army, link_parse_player, link_parse_base,
-			link_parse_show, auto_role_treatment, auto_role_blacklist_ids, updated_at
+			link_parse_show, auto_role_treatment, auto_role_blacklist_ids, auto_role_triggers, updated_at
 		) VALUES (
 			$1, $2, NULLIF($3, ''),
 			$4, $5, $6, $7, $8, $9, $10, $11, $12,
-			$13, $14, $15, $16, $17, $18, $19, $20, $21, now()
+			$13, $14, $15, $16, $17, $18, $19, $20, $21, $22, now()
 		)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
@@ -219,6 +223,7 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 			link_parse_show = EXCLUDED.link_parse_show,
  auto_role_treatment = EXCLUDED.auto_role_treatment,
  auto_role_blacklist_ids = EXCLUDED.auto_role_blacklist_ids,
+ auto_role_triggers = EXCLUDED.auto_role_triggers,
 			updated_at = now()
 	`, serverID, name, migrateutil.String(doc["embed_color"]),
 		nullableString(doc["nickname_rule"]), nullableString(doc["non_family_nickname_rule"]),
@@ -229,7 +234,7 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		boolDefault(doc, "tied", true),
 		migrateutil.String(doc["family_label"]),
 		boolMapDefault(linkParse, "clan", true), boolMapDefault(linkParse, "army", true),
-		boolMapDefault(linkParse, "player", true), boolMapDefault(linkParse, "base", true), boolMapDefault(linkParse, "show", true), treatment, blacklist); err != nil {
+		boolMapDefault(linkParse, "player", true), boolMapDefault(linkParse, "base", true), boolMapDefault(linkParse, "show", true), treatment, blacklist, triggers); err != nil {
 		return err
 	}
 	welcomeLink := migrateutil.Map(migrateutil.Map(doc["logs"])["welcome_link"])
@@ -647,4 +652,37 @@ func legacyAutomaticRolePolicy(doc bson.M) (string, []string, error) {
 	}
 	sort.Strings(blacklist)
 	return treatment, blacklist, nil
+}
+
+// Preserve an explicit old selection, including empty, but leave absent settings
+// unrestricted so importing them does not narrow V2's current automatic inputs.
+func legacyAutomaticRoleTriggers(doc bson.M) ([]string, error) {
+	raw, exists := doc["autoeval_triggers"]
+	if !exists || raw == nil {
+		return nil, nil
+	}
+	values := migrateutil.Slice(raw)
+	if values == nil {
+		return nil, fmt.Errorf("autoeval_triggers must be an array")
+	}
+	result := make([]string, 0)
+	seen := map[string]bool{}
+	for _, value := range values {
+		text, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid automatic trigger")
+		}
+		trigger := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(text)), " ", "_")
+		switch trigger {
+		case "member_join", "member_leave", "townhall_change", "league_change", "role_change":
+		default:
+			return nil, fmt.Errorf("unknown automatic trigger %q", trigger)
+		}
+		if !seen[trigger] {
+			result = append(result, trigger)
+			seen[trigger] = true
+		}
+	}
+	sort.Strings(result)
+	return result, nil
 }

@@ -48,8 +48,8 @@ address=$(docker port "$container" 27017/tcp)
 mongo="mongodb://127.0.0.1:${BASH_REMATCH[1]}"
 docker exec "$container" mongosh --quiet --eval '
 const source=db.getSiblingDB("usafam");
-source.server.insertOne({server:"99990002",name:"Import test",role_treatment:["Add"],blacklisted_roles:[NumberLong("999999999999996523"),"999999999999996523"],logs:{donations:{webhook:"999902",thread:"999912",enabled:true}}});
-source.server.insertOne({server:"99990003",name:"Remove policy",role_treatment:["Remove"]});
+source.server.insertOne({server:"99990002",name:"Import test",autoeval_triggers:["Member Join","member_join","Townhall Change"],role_treatment:["Add"],blacklisted_roles:[NumberLong("999999999999996523"),"999999999999996523"],logs:{donations:{webhook:"999902",thread:"999912",enabled:true}}});
+source.server.insertOne({server:"99990003",name:"Remove policy",autoeval_triggers:[],role_treatment:["Remove"]});
 source.server.insertOne({server:"99990004",name:"Default policy"});
 source.clans.insertOne({server:"99990002",tag:"#PYLQ",events:{war:true},logs:{donation_log:{webhook:"999903",thread:"999913",disabled:true}}});
 ' >/dev/null
@@ -66,6 +66,9 @@ touch "$run_dir/database/timescale/001_initial_stats.sql" "$run_dir/.env"
 (cd "$run_dir/database" && env -i PATH="$PATH" HOME="$HOME" TIMESCALE_URL="$TEST_DATABASE_URL" STATIC_MONGODB="$mongo" STATS_MONGODB="$mongo" "$run_dir/server-clans")
 psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
 DO $$ BEGIN
+ IF NOT EXISTS(SELECT 1 FROM servers WHERE id='99990002' AND auto_role_triggers=ARRAY['member_join','townhall_change']::text[]) THEN RAISE EXCEPTION 'Trigger import failed'; END IF;
+ IF NOT EXISTS(SELECT 1 FROM servers WHERE id='99990003' AND cardinality(auto_role_triggers)=0) THEN RAISE EXCEPTION 'Empty trigger import failed'; END IF;
+ IF NOT EXISTS(SELECT 1 FROM servers WHERE id='99990004' AND auto_role_triggers IS NULL) THEN RAISE EXCEPTION 'Default trigger import failed'; END IF;
  IF NOT EXISTS(SELECT 1 FROM servers WHERE id='99990002' AND auto_role_treatment='add' AND auto_role_blacklist_ids=ARRAY['999999999999996523']::text[]) THEN RAISE EXCEPTION 'Automatic policy import failed'; END IF;
  IF NOT EXISTS(SELECT 1 FROM servers WHERE id='99990003' AND auto_role_treatment='remove' AND cardinality(auto_role_blacklist_ids)=0) THEN RAISE EXCEPTION 'Remove-only policy import failed'; END IF;
  IF NOT EXISTS(SELECT 1 FROM servers WHERE id='99990004' AND auto_role_treatment='both' AND cardinality(auto_role_blacklist_ids)=0) THEN RAISE EXCEPTION 'Default policy import failed'; END IF;

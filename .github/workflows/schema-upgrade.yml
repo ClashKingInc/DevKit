@@ -44,3 +44,5 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/war-event-settings-smoke.sh
       - name: Verify automatic role policies and manual job defaults
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/automatic-role-policy-smoke.sh
+      - name: Verify automatic trigger selection
+        run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/automatic-role-triggers-smoke.sh
