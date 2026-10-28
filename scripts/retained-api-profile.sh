@@ -41,4 +41,5 @@ fixture_sources=(
   045_role_refresh_treatment.sql
   046_automatic_role_policy.sql
   047_automatic_role_triggers.sql
+  048_remove_clan_member_warnings.sql
 )

@@ -36,8 +36,8 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/roster-member-groups-smoke.sh
       - name: Verify roster role refresh inputs
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/roster-role-refresh-smoke.sh
-      - name: Verify clan member warning settings
-        run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/clan-member-warning-smoke.sh
+      - name: Verify removal of clan member warnings
+        run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/remove-clan-member-warnings-smoke.sh
       - name: Verify capital raid history schema
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/capital-raid-history-smoke.sh
       - name: Verify war-event settings and legacy import
