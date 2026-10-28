@@ -6,12 +6,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 echo "Validating Go migration tools..."
-(
-  cd database
-  # Retired isolated tests are not part of the release gate. The dedicated
-  # schema-upgrade workflow exercises real Goose migrations in PostgreSQL.
-  go build ./...
-)
+bash scripts/verify-migration-builds.sh
 
 echo "Validating Goose SQL migrations..."
 goose -dir database/timescale validate

@@ -20,9 +20,8 @@ jobs:
           node-version: 22
       - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck= .github/workflows/schema-upgrade.yml
       - run: go install github.com/pressly/goose/v3/cmd/goose@v3.26.0
-      - name: Build migration tools
-        working-directory: database
-        run: go build ./...
+      - name: Build every migration entry point
+        run: bash scripts/verify-migration-builds.sh
       - name: Apply published baseline then verify the release upgrade
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/schema-smoke.sh
       - name: Verify a clean full schema and repeat migration
@@ -33,3 +32,5 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/donation-log-import-smoke.sh
       - name: Backfill recorded Legend streaks
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/legend-streak-migration-smoke.sh
+      - name: Verify roster player-label upgrade and rollback
+        run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/roster-member-groups-smoke.sh

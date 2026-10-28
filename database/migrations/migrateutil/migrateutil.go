@@ -51,8 +51,9 @@ type Progress struct {
 	lastRender time.Time
 }
 
-// OneShotPlan describes the destructive fresh-start lifecycle used by every
-// importer except clan_wars. Primary keys, unique constraints, and foreign keys
+// OneShotPlan declares each importer's reset/index lifecycle. Some importers
+// deliberately use an empty plan to preserve existing application rows.
+// Primary keys, unique constraints, and foreign keys
 // intentionally stay in place; only secondary indexes that make bulk loading
 // slower are delayed until the complete source stream has committed.
 type OneShotPlan struct {
