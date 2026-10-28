@@ -8,7 +8,7 @@ INSERT INTO servers(id,name) VALUES('999999999999998801','Group fixture'),('9999
 INSERT INTO rosters(id,server_id,alias) VALUES('00000000-0000-4000-8000-000000000001','999999999999998801','Existing');
 INSERT INTO roster_members(roster_id,tag,name) VALUES('00000000-0000-4000-8000-000000000001','#PYL','Existing member');
 SQL
-goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up
+goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up-to 35
 psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
 DO $$ BEGIN
  IF NOT EXISTS(SELECT 1 FROM roster_members WHERE tag='#PYL' AND member_group_id IS NULL) THEN RAISE EXCEPTION 'Existing member changed'; END IF;
@@ -36,5 +36,5 @@ END $$;
 DELETE FROM servers WHERE id IN ('999999999999998801','999999999999998802');
 SQL
 goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" down
-goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up
+goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up-to 35
 echo 'PASS roster label upgrade, existing member preservation, tenant constraints, assigned-label protection and rollback/reapply'

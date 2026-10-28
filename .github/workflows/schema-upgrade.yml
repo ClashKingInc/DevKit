@@ -34,3 +34,5 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/legend-streak-migration-smoke.sh
       - name: Verify roster player-label upgrade and rollback
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/roster-member-groups-smoke.sh
+      - name: Verify roster role refresh inputs
+        run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/roster-role-refresh-smoke.sh
