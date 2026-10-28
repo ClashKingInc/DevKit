@@ -31,3 +31,5 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/donation-log-migration-smoke.sh
       - name: Import legacy donation destinations into autoboards
         run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/donation-log-import-smoke.sh
+      - name: Backfill recorded Legend streaks
+        run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/legend-streak-migration-smoke.sh
