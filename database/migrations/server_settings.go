@@ -5,6 +5,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/ClashKingInc/DevKit/database/migrations/migrateutil"
@@ -48,7 +51,7 @@ func runServerSettings(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 	db := staticClient.Database("usafam")
-	roleModes, err := migrateServerDocuments(ctx, cfg, pool, db.Collection("server"))
+	err = migrateServerDocuments(ctx, cfg, pool, db.Collection("server"))
 	if err != nil {
 		return err
 	}
@@ -69,11 +72,11 @@ func runServerSettings(ctx context.Context, cfg migrateutil.Config) error {
 		{"achievementroles", "achievement"},
 	}
 	for _, source := range roleCollections {
-		if err := migrateRoleCollection(ctx, cfg, pool, db.Collection(source.collection), source.collection, source.roleType, roleModes); err != nil {
+		if err := migrateRoleCollection(ctx, cfg, pool, db.Collection(source.collection), source.collection, source.roleType); err != nil {
 			return err
 		}
 	}
-	if err := migrateStatusRoleCollection(ctx, cfg, pool, db.Collection("statusroles"), roleModes); err != nil {
+	if err := migrateStatusRoleCollection(ctx, cfg, pool, db.Collection("statusroles")); err != nil {
 		return err
 	}
 	return migrateutil.FinishOneShot(ctx, pool, plan)
@@ -139,8 +142,7 @@ func mongoCommandTime(value any) (time.Time, bool) {
 
 func migrateServerDocuments(ctx context.Context, cfg migrateutil.Config, pool interface {
 	Begin(context.Context) (pgx.Tx, error)
-}, collection *mongo.Collection) (map[string]string, error) {
-	roleModes := map[string]string{}
+}, collection *mongo.Collection) error {
 	batch := make([]bson.M, 0, cfg.BatchSize)
 	flush := func() error {
 		if len(batch) == 0 {
@@ -163,14 +165,11 @@ func migrateServerDocuments(ctx context.Context, cfg migrateutil.Config, pool in
 		return nil
 	}
 	seen, err := migrateutil.StreamAll(ctx, cfg, "server_settings", collection, func(doc bson.M) (bool, error) {
-		if serverID := migrateutil.String(doc["server"]); serverID != "" {
-			roleModes[serverID] = roleMode(doc["role_treatment"])
-		}
 		batch = append(batch, doc)
 		return len(batch) >= cfg.BatchSize, nil
 	}, flush)
 	fmt.Printf("server_settings.server: scanned_docs=%d\n", seen)
-	return roleModes, err
+	return err
 }
 
 func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
@@ -179,6 +178,14 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		return nil
 	}
 	name := firstString(doc["name"], serverID)
+	treatment, blacklist, err := legacyAutomaticRolePolicy(doc)
+	if err != nil {
+		return fmt.Errorf("server %s auto refresh policy: %w", serverID, err)
+	}
+	triggers, err := legacyAutomaticRoleTriggers(doc)
+	if err != nil {
+		return fmt.Errorf("server %s auto refresh triggers: %w", serverID, err)
+	}
 	linkParse := migrateutil.Map(doc["link_parse"])
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO servers (
@@ -189,11 +196,11 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 			autoboard_limit, tied_stats_only,
 			family_label,
 			link_parse_clan, link_parse_army, link_parse_player, link_parse_base,
-			link_parse_show, updated_at
+			link_parse_show, auto_role_treatment, auto_role_blacklist_ids, auto_role_triggers, updated_at
 		) VALUES (
 			$1, $2, NULLIF($3, ''),
 			$4, $5, $6, $7, $8, $9, $10, $11, $12,
-			$13, $14, $15, $16, $17, $18, $19, now()
+			$13, $14, $15, $16, $17, $18, $19, $20, $21, $22, now()
 		)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
@@ -214,6 +221,9 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 			link_parse_player = EXCLUDED.link_parse_player,
 			link_parse_base = EXCLUDED.link_parse_base,
 			link_parse_show = EXCLUDED.link_parse_show,
+ auto_role_treatment = EXCLUDED.auto_role_treatment,
+ auto_role_blacklist_ids = EXCLUDED.auto_role_blacklist_ids,
+ auto_role_triggers = EXCLUDED.auto_role_triggers,
 			updated_at = now()
 	`, serverID, name, migrateutil.String(doc["embed_color"]),
 		nullableString(doc["nickname_rule"]), nullableString(doc["non_family_nickname_rule"]),
@@ -224,7 +234,7 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		boolDefault(doc, "tied", true),
 		migrateutil.String(doc["family_label"]),
 		boolMapDefault(linkParse, "clan", true), boolMapDefault(linkParse, "army", true),
-		boolMapDefault(linkParse, "player", true), boolMapDefault(linkParse, "base", true), boolMapDefault(linkParse, "show", true)); err != nil {
+		boolMapDefault(linkParse, "player", true), boolMapDefault(linkParse, "base", true), boolMapDefault(linkParse, "show", true), treatment, blacklist, triggers); err != nil {
 		return err
 	}
 	welcomeLink := migrateutil.Map(migrateutil.Map(doc["logs"])["welcome_link"])
@@ -251,24 +261,20 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 			}
 		}
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM server_autoeval_triggers WHERE server_id = $1`, serverID); err != nil {
-		return err
-	}
+
 	if _, err := tx.Exec(ctx, `DELETE FROM server_logs WHERE server_id = $1 AND clan_tag IS NULL`, serverID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM server_countdowns WHERE server_id = $1 AND clan_tag IS NULL`, serverID); err != nil {
 		return err
 	}
-	if err := insertOrderedStrings(ctx, tx, "server_autoeval_triggers", "trigger", serverID, doc["autoeval_triggers"]); err != nil {
-		return err
-	}
+
 	if _, err := tx.Exec(ctx, `DELETE FROM server_roles WHERE server_id = $1 AND type IN ('clan_category', 'status')`, serverID); err != nil {
 		return err
 	}
 	for category, role := range migrateutil.Map(doc["category_roles"]) {
 		if roleID := migrateutil.String(role); roleID != "" {
-			if _, err := tx.Exec(ctx, `INSERT INTO server_roles (server_id, type, option, role_id, mode) VALUES ($1, 'clan_category', $2, $3, $4) ON CONFLICT DO NOTHING`, serverID, category, roleID, roleMode(doc["role_treatment"])); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO server_roles (server_id, type, option, role_id) VALUES ($1, 'clan_category', $2, $3) ON CONFLICT DO NOTHING`, serverID, category, roleID); err != nil {
 				return err
 			}
 		}
@@ -288,6 +294,17 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 			if clanTag := migrateutil.String(value); clanTag != "" {
 				clans = append(clans, clanTag)
 			}
+		}
+		if logType == "donations" || logType == "donation_log" {
+			if len(clans) == 0 {
+				clans = []string{""}
+			}
+			for _, clanTag := range clans {
+				if err := migrateutil.ImportDonationAutoboard(ctx, tx, serverID, clanTag, webhookID, migrateutil.String(log["thread"]), disabled); err != nil {
+					return err
+				}
+			}
+			continue
 		}
 		for _, expandedType := range expandServerLogTypes(logType) {
 			if expandedType == "reddit_feed" {
@@ -340,9 +357,9 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 				continue
 			}
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO server_roles (server_id, type, option, role_id, mode)
-				VALUES ($1, 'status', $2, $3, $4) ON CONFLICT DO NOTHING
-			`, serverID, firstString(role["key"], role["number"], role["months"], "member"), roleID, roleMode(doc["role_treatment"])); err != nil {
+				INSERT INTO server_roles (server_id, type, option, role_id)
+				VALUES ($1, 'status', $2, $3) ON CONFLICT DO NOTHING
+			`, serverID, firstString(role["key"], role["number"], role["months"], "member"), roleID); err != nil {
 				return err
 			}
 		}
@@ -392,13 +409,11 @@ func canonicalServerLogType(value string) string {
 		return "join_log"
 	case "leave":
 		return "leave_log"
-	case "donations":
-		return "donation_log"
 	case "war":
 		return "war_log"
 	case "capital":
 		return "capital_attacks"
-	case "join_log", "leave_log", "donation_log",
+	case "join_log", "leave_log",
 		"clan_achievement_log", "clan_requirements_log", "clan_description_log",
 		"war_log", "war_panel", "cwl_lineup_change_log",
 		"capital_donations", "capital_attacks", "raid_panel", "capital_weekly_summary",
@@ -415,7 +430,7 @@ func canonicalServerLogType(value string) string {
 
 func migrateRoleCollection(ctx context.Context, cfg migrateutil.Config, pool interface {
 	Begin(context.Context) (pgx.Tx, error)
-}, collection *mongo.Collection, labelSuffix, roleType string, roleModes map[string]string) error {
+}, collection *mongo.Collection, labelSuffix, roleType string) error {
 	rows := make([]bson.M, 0, cfg.BatchSize)
 	flush := func() error {
 		if len(rows) == 0 {
@@ -440,10 +455,10 @@ func migrateRoleCollection(ctx context.Context, cfg migrateutil.Config, pool int
 				continue
 			}
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO server_roles (server_id, type, option, role_id, mode, created_at, updated_at)
-				VALUES ($1, $2, $3, $4, $5, now(), now())
-				ON CONFLICT (server_id, clan_tag, type, option, role_id) DO UPDATE SET mode = EXCLUDED.mode, updated_at = now()
-			`, serverID, storedType, roleKey, roleID, resolvedRoleMode(roleModes[serverID])); err != nil {
+				INSERT INTO server_roles (server_id, type, option, role_id, created_at, updated_at)
+				VALUES ($1, $2, $3, $4, now(), now())
+				ON CONFLICT (server_id, clan_tag, type, option, role_id) DO UPDATE SET updated_at = now()
+			`, serverID, storedType, roleKey, roleID); err != nil {
 				return err
 			}
 		}
@@ -463,7 +478,7 @@ func migrateRoleCollection(ctx context.Context, cfg migrateutil.Config, pool int
 
 func migrateStatusRoleCollection(ctx context.Context, cfg migrateutil.Config, pool interface {
 	Begin(context.Context) (pgx.Tx, error)
-}, collection *mongo.Collection, roleModes map[string]string) error {
+}, collection *mongo.Collection) error {
 	rows := make([]bson.M, 0, cfg.BatchSize)
 	flush := func() error {
 		if len(rows) == 0 {
@@ -484,10 +499,10 @@ func migrateStatusRoleCollection(ctx context.Context, cfg migrateutil.Config, po
 				return err
 			}
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO server_roles (server_id, type, option, role_id, mode, created_at, updated_at)
-				VALUES ($1, 'status', $2, $3, $4, now(), now())
-				ON CONFLICT (server_id, clan_tag, type, option, role_id) DO UPDATE SET mode = EXCLUDED.mode, updated_at = now()
-			`, serverID, firstString(doc["key"], doc["number"], doc["months"], "member"), roleID, resolvedRoleMode(roleModes[serverID])); err != nil {
+				INSERT INTO server_roles (server_id, type, option, role_id, created_at, updated_at)
+				VALUES ($1, 'status', $2, $3, now(), now())
+				ON CONFLICT (server_id, clan_tag, type, option, role_id) DO UPDATE SET updated_at = now()
+			`, serverID, firstString(doc["key"], doc["number"], doc["months"], "member"), roleID); err != nil {
 				return err
 			}
 		}
@@ -532,36 +547,6 @@ func firstString(values ...any) string {
 		}
 	}
 	return ""
-}
-
-func roleMode(raw any) string {
-	hasAdd := false
-	hasRemove := false
-	for _, value := range migrateutil.Slice(raw) {
-		switch migrateutil.String(value) {
-		case "Add":
-			hasAdd = true
-		case "Remove":
-			hasRemove = true
-		}
-	}
-	if hasAdd && hasRemove {
-		return "both"
-	}
-	if hasRemove {
-		return "remove"
-	}
-	if hasAdd {
-		return "add"
-	}
-	return "both"
-}
-
-func resolvedRoleMode(mode string) string {
-	if mode == "add" || mode == "remove" || mode == "both" {
-		return mode
-	}
-	return "both"
 }
 
 func normalizedRoleRule(sourceType string, doc bson.M) (string, string) {
@@ -609,4 +594,95 @@ func firstIntPointer(values ...any) any {
 		}
 	}
 	return nil
+}
+
+// A malformed explicit policy must not silently broaden automatic permissions.
+// Missing legacy settings use the original Both/empty defaults.
+var automaticPolicyRoleID = regexp.MustCompile(`^[0-9]{15,20}$`)
+
+func legacyAutomaticRolePolicy(doc bson.M) (string, []string, error) {
+	treatment := "both"
+	if raw := doc["role_treatment"]; raw != nil {
+		values := migrateutil.Slice(raw)
+		if text, ok := raw.(string); ok {
+			values = []any{text}
+		}
+		add, remove := false, false
+		for _, value := range values {
+			switch strings.ToLower(migrateutil.String(value)) {
+			case "add":
+				add = true
+			case "remove":
+				remove = true
+			case "both":
+				add, remove = true, true
+			default:
+				return "", nil, fmt.Errorf("unrecognized role_treatment")
+			}
+		}
+		switch {
+		case add && remove:
+			treatment = "both"
+		case add:
+			treatment = "add"
+		case remove:
+			treatment = "remove"
+		default:
+			return "", nil, fmt.Errorf("empty role_treatment")
+		}
+	}
+	blacklist := make([]string, 0)
+	values := migrateutil.Slice(doc["blacklisted_roles"])
+	if doc["blacklisted_roles"] != nil && values == nil {
+		return "", nil, fmt.Errorf("blacklisted_roles must be an array")
+	}
+	seen := map[string]bool{}
+	for _, value := range values {
+		id := migrateutil.String(value)
+		if !automaticPolicyRoleID.MatchString(id) {
+			return "", nil, fmt.Errorf("invalid blacklisted role ID")
+		}
+		if !seen[id] {
+			blacklist = append(blacklist, id)
+			seen[id] = true
+		}
+	}
+	if len(blacklist) > 250 {
+		return "", nil, fmt.Errorf("too many blacklisted roles")
+	}
+	sort.Strings(blacklist)
+	return treatment, blacklist, nil
+}
+
+// Preserve an explicit old selection, including empty, but leave absent settings
+// unrestricted so importing them does not narrow V2's current automatic inputs.
+func legacyAutomaticRoleTriggers(doc bson.M) ([]string, error) {
+	raw, exists := doc["autoeval_triggers"]
+	if !exists || raw == nil {
+		return nil, nil
+	}
+	values := migrateutil.Slice(raw)
+	if values == nil {
+		return nil, fmt.Errorf("autoeval_triggers must be an array")
+	}
+	result := make([]string, 0)
+	seen := map[string]bool{}
+	for _, value := range values {
+		text, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid automatic trigger")
+		}
+		trigger := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(text)), " ", "_")
+		switch trigger {
+		case "member_join", "member_leave", "townhall_change", "league_change", "role_change":
+		default:
+			return nil, fmt.Errorf("unknown automatic trigger %q", trigger)
+		}
+		if !seen[trigger] {
+			result = append(result, trigger)
+			seen[trigger] = true
+		}
+	}
+	sort.Strings(result)
+	return result, nil
 }

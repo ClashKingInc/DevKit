@@ -53,7 +53,7 @@ First-click conversion is a two-phase state machine without a legacy status colu
 
 ### Unlimited personal library
 
-`user_saved_bases` is the authenticated user's unlimited durable library. Its identity is `(user_id,base_id)`, where `user_id` references `auth_users` and `base_id` references the existing shared `bases` row. Nullable text `kind` is exactly `war`, `legend`, or NULL when the user has not labeled it. No base link, image, Discord location, vote, or count is duplicated.
+`user_saved_bases` is the authenticated user's unlimited durable library. Its identity is `(user_id,base_id)`, where `user_id` references `auth_users` and `base_id` references the existing shared `bases` row. No base link, image, Discord location, vote, count, or War/Legend label is duplicated. Consumers derive Town Hall grouping from `bases.base_link`.
 
 `bases.downloads` is a JSON object keyed by Discord user ID, with the immutable first-download ISO timestamp as its value. Migration 019 validates the object shape and timestamp values, and rejects removal or replacement of an existing key. A repeated posted-button click leaves the first timestamp unchanged while the personal save upsert can restore a deleted `user_saved_bases` row.
 
@@ -61,8 +61,26 @@ Unsave and the 90-day personal-library cleanup delete only `user_saved_bases`; l
 
 ```json
 {
-  "savedBase": {"baseId":"42","kind":"legend","savedAt":"2026-09-11T06:00:00Z"},
+  "savedBase": {"baseId":"42","savedAt":"2026-09-11T06:00:00Z"},
   "downloads": {"123456789012345678":"2026-09-10T18:05:04.123Z"}
+}
+```
+
+### Personal army library
+
+`user_saved_armies` gives each authenticated user durable references to canonical
+`army_compositions`. Its identity is `(user_id,share_code)`, and `saved_at`
+defaults to the current time. The recent index orders each user's rows by
+`saved_at DESC,share_code`.
+
+Deleting a personal army row never deletes the referenced composition or battle
+history. Composition deletion may clear dangling saved references through its
+foreign key. API writers derive the immutable Clash army link from `share_code`;
+there is no duplicated link column.
+
+```json
+{
+  "shareCode":"u1x0-...","armyLink":"https://link.clashofclans.com/en?action=CopyArmy&army=u1x0-...","savedAt":"2026-09-20T12:00:00Z"
 }
 ```
 

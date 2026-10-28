@@ -107,13 +107,14 @@ func writeServerClanDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO server_clans (tag, server_id, abbreviation, added_at, updated_at)
-		VALUES ($1, $2, $3, $4, now())
+		INSERT INTO server_clans (tag, server_id, abbreviation, added_at, updated_at, war_events_enabled)
+		VALUES ($1, $2, $3, $4, now(), $5)
 		ON CONFLICT (tag, server_id) DO UPDATE SET
 			abbreviation = EXCLUDED.abbreviation,
+			war_events_enabled = EXCLUDED.war_events_enabled,
 			added_at = EXCLUDED.added_at,
 			updated_at = now()
-	`, clanTag, serverID, migrateutil.String(doc["abbreviation"]), addedAt); err != nil {
+	`, clanTag, serverID, migrateutil.String(doc["abbreviation"]), addedAt, migrateutil.Bool(migrateutil.Map(doc["events"])["war"])); err != nil {
 		return err
 	}
 	logs := migrateutil.Map(doc["logs"])
@@ -139,16 +140,12 @@ func writeServerClanDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		return err
 	}
 	if roleID := migrateutil.String(doc["generalRole"]); roleID != "" {
-		if _, err := tx.Exec(ctx, `INSERT INTO server_roles (server_id, clan_tag, type, option, role_id, mode) VALUES ($1, $2, 'clan_role', 'member', $3, 'both')`, serverID, clanTag, roleID); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO server_roles (server_id, clan_tag, type, option, role_id) VALUES ($1, $2, 'clan_role', 'member', $3)`, serverID, clanTag, roleID); err != nil {
 			return err
 		}
 	}
 	if roleID := migrateutil.String(doc["leaderRole"]); roleID != "" {
-		mode := "both"
-		if value, ok := doc["leadership_eval"]; ok && value != nil && !migrateutil.Bool(value) {
-			mode = "remove"
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO server_roles (server_id, clan_tag, type, option, role_id, mode) VALUES ($1, $2, 'clan_role', 'leader', $3, $4)`, serverID, clanTag, roleID, mode); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO server_roles (server_id, clan_tag, type, option, role_id) VALUES ($1, $2, 'clan_role', 'leader', $3)`, serverID, clanTag, roleID); err != nil {
 			return err
 		}
 	}
@@ -156,6 +153,15 @@ func writeServerClanDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		return err
 	}
 	for logType, raw := range logs {
+		if logType == "donations" || logType == "donation_log" {
+			log := migrateutil.Map(raw)
+			if webhookID := migrateutil.String(log["webhook"]); webhookID != "" {
+				if err := migrateutil.ImportDonationAutoboard(ctx, tx, serverID, clanTag, webhookID, migrateutil.String(log["thread"]), clanLogDisabled(log)); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		logType = canonicalClanLogType(logType)
 		if logType == "" {
 			continue
@@ -204,13 +210,11 @@ func canonicalClanLogType(value string) string {
 		return "join_log"
 	case "leave":
 		return "leave_log"
-	case "donations":
-		return "donation_log"
 	case "war":
 		return "war_log"
 	case "capital":
 		return "capital_attacks"
-	case "join_log", "leave_log", "donation_log",
+	case "join_log", "leave_log",
 		"clan_achievement_log", "clan_requirements_log", "clan_description_log",
 		"war_log", "war_panel", "cwl_lineup_change_log",
 		"capital_donations", "capital_attacks", "raid_panel", "capital_weekly_summary",

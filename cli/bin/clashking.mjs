@@ -14,7 +14,7 @@ const [command,...args]=process.argv.slice(2);
 process.umask(0o077);
 const help=`clashking init <folder> [--repo name=/existing/checkout ...]
 clashking doctor | status | logs <service>
-clashking run <proxy|api|gateway|bot|dashboard|app|tunnel>
+clashking run <proxy|api|gateway|bot|dashboard|assistant|app|tunnel>
 clashking up [service ...] | down [service ...]
 clashking bot sync-commands
 clashking repos clone

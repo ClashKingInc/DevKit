@@ -1,5 +1,6 @@
 # Canonical migration inventory for retained API tests and local development.
-# This is the same contiguous 001-021 sequence used for production upgrades.
+# Keep this explicit inventory ordered. IDs 029–033 are reserved for prior
+# deferred work; never reuse an ID a development database may have applied.
 fixture_image='timescale/timescaledb:2.29.2-pg18@sha256:9508616d5b941ed931198504c5db3fb47e8f53f790732ea1e889591f1062057c'
 fixture_sources=(
   001_initial_stats.sql
@@ -23,4 +24,22 @@ fixture_sources=(
   019_unlimited_personal_bases.sql
   020_player_leaderboard_snapshots.sql
   021_inline_base_images_votes.sql
+  022_release_extension.sql
+  023_war_triple_streaks.sql
+  024_farming_autoboards.sql
+  025_home_layouts.sql
+  026_dashboard_scoped_sessions.sql
+  027_home_activity_card.sql
+  028_retire_donation_logs.sql
+  034_legend_attack_streaks.sql
+  035_roster_member_groups.sql
+  040_roster_role_refresh_inputs.sql
+  041_clan_member_warnings.sql
+  042_capital_raid_history.sql
+  043_clan_war_events.sql
+  044_legend_day_performance.sql
+  045_role_refresh_treatment.sql
+  046_automatic_role_policy.sql
+  047_automatic_role_triggers.sql
+  048_remove_clan_member_warnings.sql
 )

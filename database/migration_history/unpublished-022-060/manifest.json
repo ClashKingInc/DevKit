@@ -1,0 +1,311 @@
+{
+  "format": 1,
+  "originalSchemaSha256": "671538003a2ddf917ef258298aa05fe9715d3800d0288dbfde5958ce38020d40",
+  "baselineVersion": 21,
+  "originalHead": 60,
+  "replacementVersion": 22,
+  "files": [
+    {
+      "file": "001_initial_stats.sql",
+      "version": 1,
+      "sha256": "6aaa26a12b72d154365d4d8e726a6d5e54c15849d0733d7702534acad864f830"
+    },
+    {
+      "file": "002_initial_settings.sql",
+      "version": 2,
+      "sha256": "c445b6d0e50898862317ed78b16df355608d907d4a3ab1874a7a7c64b2840755"
+    },
+    {
+      "file": "003_tracking_observability.sql",
+      "version": 3,
+      "sha256": "fffbda9c169cfdf8515cf5767ad786bc8e9e0038fae62d30f9e754286306ea49"
+    },
+    {
+      "file": "004_developer_link_grants.sql",
+      "version": 4,
+      "sha256": "8865d16eb57e13a34f856ab69c05b05e2d0f05d661e0fd4abe8e016874e64c81"
+    },
+    {
+      "file": "005_remove_legacy_admin_auth.sql",
+      "version": 5,
+      "sha256": "839aa2e0c350f110ef8f66ecafbacc2005b339972cacf19c692e7224355367b1"
+    },
+    {
+      "file": "006_simplify_developer_applications.sql",
+      "version": 6,
+      "sha256": "3005ba994817811bee9bc1db8063d1fe677ed30ecedf3311495b36e55ecde73e"
+    },
+    {
+      "file": "007_worker_api.sql",
+      "version": 7,
+      "sha256": "04e5919fdf8bfcebf8b38b70d9aeea31dc10a4680e2a93877526a5759b4a7609"
+    },
+    {
+      "file": "008_ranked_battle_history.sql",
+      "version": 8,
+      "sha256": "77046777d2861fa334f7f39d75f260750620a6db536e3efec332a00460f707a8"
+    },
+    {
+      "file": "009_league_army_analytics.sql",
+      "version": 9,
+      "sha256": "ec8e0d0736df2ec1a6cb6dd8d4c41b343f3f5128801bad51e0a2b7e775ea0364"
+    },
+    {
+      "file": "010_cwl_season_statistics.sql",
+      "version": 10,
+      "sha256": "46d604db95be52250799519a73d1b5f7a7c8e3a21074167f1cad5e467d03cec8"
+    },
+    {
+      "file": "011_active_verified_players.sql",
+      "version": 11,
+      "sha256": "c84a47d89633e1a52a3b8e38adcd08ceddb5fa68ab59f4bcb0ead8f36ab9893d"
+    },
+    {
+      "file": "012_legend_only_army_compositions.sql",
+      "version": 12,
+      "sha256": "0a5965bce38d1d97dc4f096e0801ccb63692bf11d667ae7f9fd9fb75899c04bd"
+    },
+    {
+      "file": "013_battle_player_time_identity.sql",
+      "version": 13,
+      "sha256": "17f9a813be114d382034564d684e6b81ca9a8f1ce34f58607cbae3bc33f1167d"
+    },
+    {
+      "file": "014_ranked_defense_loot_nullable.sql",
+      "version": 14,
+      "sha256": "9b3a9d348448b01278745428d5c43c7fb2369e1192cd592c52a3d505d29cd468"
+    },
+    {
+      "file": "015_army_code_family_compatibility.sql",
+      "version": 15,
+      "sha256": "37cbade684bc72619975dd984dd105c4a98bb085fe5c87a42763d1df7c2e4e8d"
+    },
+    {
+      "file": "016_remove_cwl_season_statistics.sql",
+      "version": 16,
+      "sha256": "57ffa89be853c7c6e522bbdfbc5583466d9514baeb261dd2ae51ab7ba80d71aa"
+    },
+    {
+      "file": "017_final_operational_contract.sql",
+      "version": 17,
+      "sha256": "ee73693fe8598144dbfc0fb8e625212f4ef09ae7917b44d810d5d82b40cf6822"
+    },
+    {
+      "file": "018_personal_base_library.sql",
+      "version": 18,
+      "sha256": "8e209e05acd1c57d2b06ef0a7e51f25721492e3ea1b7a89a0079d472ff909c45"
+    },
+    {
+      "file": "019_unlimited_personal_bases.sql",
+      "version": 19,
+      "sha256": "892a3639391311c0d34348be5679fdb1f7a70ce2cbf82fc3181d3a35e4aff11d"
+    },
+    {
+      "file": "020_player_leaderboard_snapshots.sql",
+      "version": 20,
+      "sha256": "b3606b7b1eeda1408f5daf54dcec84481a39e96293d1c968095b3b9c0033c869"
+    },
+    {
+      "file": "021_inline_base_images_votes.sql",
+      "version": 21,
+      "sha256": "d4ee97ae4581fcc8752e1cda889ab3e6c41820545a12cbb7feb80d0f671b5ba2"
+    },
+    {
+      "file": "022_personal_army_library.sql",
+      "version": 22,
+      "sha256": "74b8b811a05cf46a4a58d218834e8187404f045b8277b23fc326738b56e76cd8"
+    },
+    {
+      "file": "023_roster_signup_scope.sql",
+      "version": 23,
+      "sha256": "b3b44ec712de9cb5b7b5c677c82e253669070c660311acbe40d19a9ea2a4772c"
+    },
+    {
+      "file": "024_roster_admission_settings.sql",
+      "version": 24,
+      "sha256": "94b08fe0977f5a300596430bcff221e78249def4b3ddbf47c039215be03ec742"
+    },
+    {
+      "file": "025_roster_discord_publications.sql",
+      "version": 25,
+      "sha256": "643b3968e052ea2057bb7989d65c5281a474d4d31e71c606dfa158973b675b1c"
+    },
+    {
+      "file": "026_roster_publication_webhooks.sql",
+      "version": 26,
+      "sha256": "b6f32bcfcd1fbc07da6856e78ca3b76c3b86956297a1c69424bf738f2acc2a4d"
+    },
+    {
+      "file": "027_roster_embed_color.sql",
+      "version": 27,
+      "sha256": "b4718e725862c4e3e6a4f1bc84c9f99989d50296fa75ef6a9eb2261777add4fc"
+    },
+    {
+      "file": "028_roster_automation_event_offsets.sql",
+      "version": 28,
+      "sha256": "593d819d4097fde5b4ae0a739746af062a19b530f0d9aacdc15c5466b0169f6d"
+    },
+    {
+      "file": "029_roster_default_capacity.sql",
+      "version": 29,
+      "sha256": "09fdf863cd4d6ccd165df22f79b9c7d92e0ade012afdd9537e5ee41bfeb2e12d"
+    },
+    {
+      "file": "030_legend_daily_metadata.sql",
+      "version": 30,
+      "sha256": "d2d1b06bfa8510ca7707cc0191b7da0acf9949df48a29f0200bf9c922e71c2a0"
+    },
+    {
+      "file": "031_legend_daily_pet_combos.sql",
+      "version": 31,
+      "sha256": "09aa28a2f5830356ae0261ac4a9d78cf73d715ed3dadaff4bc0210194a219121"
+    },
+    {
+      "file": "032_remove_server_link_token_policy.sql",
+      "version": 32,
+      "sha256": "268ab84e00bfe5b38c7ab158a1dcbcc5e4f872227b01c0fceb1610ea321f86ed"
+    },
+    {
+      "file": "033_cwl_participation.sql",
+      "version": 33,
+      "sha256": "b23bc7bd78bdc7f41935757d8bdc56ae8db66c5eebd49df14f2ae5d4da1dc6a5"
+    },
+    {
+      "file": "034_daily_army_setups.sql",
+      "version": 34,
+      "sha256": "3504c3625dcafa93bb930dcf0a900b31a3dc7c30d465bda809630f9f5b785271"
+    },
+    {
+      "file": "035_remove_army_analysis_timestamp.sql",
+      "version": 35,
+      "sha256": "67f0e6d96735ff588f167c66640c8790eb7386a950369ce9adf824cf1ca3abec"
+    },
+    {
+      "file": "036_army_setup_siege_usage.sql",
+      "version": 36,
+      "sha256": "5ae1d42014b32002ff14250a684bd7abc067c6c5e23ea7f5a70a461c86d85922"
+    },
+    {
+      "file": "037_roster_publication_requests.sql",
+      "version": 37,
+      "sha256": "53d1ef6168c09fe7fb26e3e8b167d1fb69bf6f6f75172f7792a8f3c0c348b0b4"
+    },
+    {
+      "file": "038_daily_analytics_count_constraints.sql",
+      "version": 38,
+      "sha256": "7ce297012372e26621fd7199ed7780473eb2e7e77269260d1f378471043863d9"
+    },
+    {
+      "file": "039_legend_daily_exclusive_usage.sql",
+      "version": 39,
+      "sha256": "9caa43b670cbfc4e246a40e00441739c751255f8efa8756ff2050995591c2da9"
+    },
+    {
+      "file": "040_legend_exclusive_triple_totals.sql",
+      "version": 40,
+      "sha256": "0d9e0557db1295dfdd795b66936b3f747921b6aa305b2ee310894c0a4ec202b5"
+    },
+    {
+      "file": "041_legend_item_triples_saved_army_index.sql",
+      "version": 41,
+      "sha256": "20974b69922768f21f3f525edd7ec46f379e8c6437b6ab30bee6081e360bf291"
+    },
+    {
+      "file": "042_cwl_participation_townhall_validation.sql",
+      "version": 42,
+      "sha256": "1d20de776cb6428aa1d9a0b3c530c4e621e0c35df541ecc2de03fa66a2a8a9ae"
+    },
+    {
+      "file": "043_legend_selected_siege_id.sql",
+      "version": 43,
+      "sha256": "c970ad32dcbdbf5ad122c454219259d449a141d7f367428e47eb01cc31f5a382"
+    },
+    {
+      "file": "044_cwl_participation_hitrate_validation.sql",
+      "version": 44,
+      "sha256": "6367444de329403b64822f7fe623ee3612e9a2b24d49745011e2d79453192cbf"
+    },
+    {
+      "file": "045_legend_daily_attack_types.sql",
+      "version": 45,
+      "sha256": "81a780204251ec475eac5f23d74e17b59399fcb3dda69f7d0e29f0321a56be13"
+    },
+    {
+      "file": "046_manual_reminder_requests.sql",
+      "version": 46,
+      "sha256": "1cd39729bdc39e558327b286a9660d943db57d4e43f412061ac79b1f04607165"
+    },
+    {
+      "file": "047_giveaway_runtime.sql",
+      "version": 47,
+      "sha256": "0c3ea65c85b39cebbf09198b12204ac649f63ae50c2e5875915e72116f385b9a"
+    },
+    {
+      "file": "048_giveaway_receipt_retention.sql",
+      "version": 48,
+      "sha256": "3113418955b0aabc8036b167cf3c00bae902c05829b972be9dfac38fab47fd86"
+    },
+    {
+      "file": "049_ticket_runtime.sql",
+      "version": 49,
+      "sha256": "f452d11969158f60d567e7782d0d4e32a322070cb5d5b5fa37240586ca005689"
+    },
+    {
+      "file": "050_ticket_dashboard.sql",
+      "version": 50,
+      "sha256": "059b6799e44a5a627b1f9d1738f29c41f607e122b90939978d02382eca2839ec"
+    },
+    {
+      "file": "051_ticket_panel_publication_edits.sql",
+      "version": 51,
+      "sha256": "f841b56d92510c8753978adf47302ec488e28e0fd92954dec1e8bf7494b13440"
+    },
+    {
+      "file": "052_ticket_application_accounts.sql",
+      "version": 52,
+      "sha256": "29acc07913103c05022c340cb174ffe2c1e32bfb7c41b770976cfed2360af1a5"
+    },
+    {
+      "file": "053_ticket_dashboard_deletion.sql",
+      "version": 53,
+      "sha256": "3ef83051b88f8980b9b38a57144959ba96739dcbf9513c025264b5bcb565bd60"
+    },
+    {
+      "file": "054_ticket_channel_deletion_marker.sql",
+      "version": 54,
+      "sha256": "9dd36c25a8b5c5d397bd2b789fec7e8e750f62d89fd9924e4d19966ce29688f9"
+    },
+    {
+      "file": "055_role_refresh.sql",
+      "version": 55,
+      "sha256": "fc449c8bcd4d86c0407debf388c524d430d81b7ec67eb497db402a1179c73728"
+    },
+    {
+      "file": "056_ticket_button_click_logs.sql",
+      "version": 56,
+      "sha256": "63319186057438d6bfbd7d19790442e517443711b26c2cff661f3876586087c8"
+    },
+    {
+      "file": "057_remove_role_refresh_triggers.sql",
+      "version": 57,
+      "sha256": "a5beb5565eec67198460d7d20b3795c2a0e00d1fa75d620333909f1b678ac0d6"
+    },
+    {
+      "file": "058_server_clan_verification.sql",
+      "version": 58,
+      "sha256": "b3fe34a0c111e50b7a364f5320ca625ceff3f739ee88ca4d2243dead92a94e30"
+    },
+    {
+      "file": "059_short_clan_verification_markers.sql",
+      "version": 59,
+      "sha256": "812eb77aceb1eaebf72c49563b65e4d4f59a852789e78f2a4b4a884677f28a74"
+    },
+    {
+      "file": "060_clan_notification_follows.sql",
+      "version": 60,
+      "sha256": "9e78e3144ad833fc306e2f3e5a9f194c5851c494607715f4da680a694fb55561"
+    }
+  ],
+  "consolidatedFile": "022_release_extension.sql",
+  "consolidatedSha256": "a55ce13f7c5bbbffa01bab383b48650206f4d012f691618a13ef0d19f43d9906"
+}

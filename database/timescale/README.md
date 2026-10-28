@@ -199,7 +199,9 @@ aggregate without changing the retained war and league analytics.
 `017_final_operational_contract.sql` removes compatibility storage and establishes
 the final cross-repository contracts. `018_personal_base_library.sql` introduces
 authenticated saved-base references, and `019_unlimited_personal_bases.sql` supersedes
-its slot model with an unlimited nullable-kind library and base-owned download history.
+its slot model with an unlimited library and base-owned download history. Migration
+`022_personal_army_library.sql` removes the obsolete saved-base kind label and adds
+authenticated saved-army references to canonical compositions.
 Do not use the former 007–028 fixture numbering. See
 [the schema decisions](../../docs/worker-api-schema.md),
 [the disposable upgrade test](../../RETAINED_API_FIXTURE.md).
