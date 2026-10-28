@@ -36,4 +36,5 @@ fixture_sources=(
   040_roster_role_refresh_inputs.sql
   041_clan_member_warnings.sql
   042_capital_raid_history.sql
+  043_clan_war_events.sql
 )

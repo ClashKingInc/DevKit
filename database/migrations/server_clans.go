@@ -107,13 +107,14 @@ func writeServerClanDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO server_clans (tag, server_id, abbreviation, added_at, updated_at)
-		VALUES ($1, $2, $3, $4, now())
+		INSERT INTO server_clans (tag, server_id, abbreviation, added_at, updated_at, war_events_enabled)
+		VALUES ($1, $2, $3, $4, now(), $5)
 		ON CONFLICT (tag, server_id) DO UPDATE SET
 			abbreviation = EXCLUDED.abbreviation,
+			war_events_enabled = EXCLUDED.war_events_enabled,
 			added_at = EXCLUDED.added_at,
 			updated_at = now()
-	`, clanTag, serverID, migrateutil.String(doc["abbreviation"]), addedAt); err != nil {
+	`, clanTag, serverID, migrateutil.String(doc["abbreviation"]), addedAt, migrateutil.Bool(migrateutil.Map(doc["events"])["war"])); err != nil {
 		return err
 	}
 	logs := migrateutil.Map(doc["logs"])

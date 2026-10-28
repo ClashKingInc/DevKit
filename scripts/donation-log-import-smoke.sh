@@ -47,7 +47,7 @@ mongo="mongodb://127.0.0.1:${BASH_REMATCH[1]}"
 docker exec "$container" mongosh --quiet --eval '
 const source=db.getSiblingDB("usafam");
 source.server.insertOne({server:"99990002",name:"Import test",logs:{donations:{webhook:"999902",thread:"999912",enabled:true}}});
-source.clans.insertOne({server:"99990002",tag:"#PYLQ",logs:{donation_log:{webhook:"999903",thread:"999913",disabled:true}}});
+source.clans.insertOne({server:"99990002",tag:"#PYLQ",events:{war:true},logs:{donation_log:{webhook:"999903",thread:"999913",disabled:true}}});
 ' >/dev/null
 psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -c "INSERT INTO basic_clan(tag,name,public_war_log,war_wins,member_count,badge_token,troops_donated,troops_received) VALUES('#PYLQ','Imported Clan',true,0,0,'',0,0)"
 (cd "$root/database" && go build -o "$run_dir/server-settings" ./migrations/server_settings.go && go build -o "$run_dir/server-clans" ./migrations/server_clans.go)
@@ -62,6 +62,7 @@ touch "$run_dir/database/timescale/001_initial_stats.sql" "$run_dir/.env"
 (cd "$run_dir/database" && env -i PATH="$PATH" HOME="$HOME" TIMESCALE_URL="$TEST_DATABASE_URL" STATIC_MONGODB="$mongo" STATS_MONGODB="$mongo" "$run_dir/server-clans")
 psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
 DO $$ BEGIN
+ IF NOT EXISTS(SELECT 1 FROM server_clans WHERE server_id='99990002' AND tag='#PYLQ' AND war_events_enabled) THEN RAISE EXCEPTION 'War event opt-in not preserved'; END IF;
  IF EXISTS(SELECT 1 FROM server_logs WHERE type='donation_log') THEN RAISE EXCEPTION 'Importer recreated donation log'; END IF;
  IF (SELECT count(*) FROM autoboards WHERE server_id='99990002')<>2 THEN RAISE EXCEPTION 'Missing or duplicated imported board'; END IF;
  IF NOT EXISTS(SELECT 1 FROM autoboards WHERE server_id='99990002' AND webhook_id='999902' AND thread_id='999912' AND target_scope='family' AND enabled AND message_id IS NULL) THEN RAISE EXCEPTION 'Family destination not preserved'; END IF;
