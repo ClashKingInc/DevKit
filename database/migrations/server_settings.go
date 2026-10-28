@@ -281,6 +281,17 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 				clans = append(clans, clanTag)
 			}
 		}
+		if logType == "donations" || logType == "donation_log" {
+			if len(clans) == 0 {
+				clans = []string{""}
+			}
+			for _, clanTag := range clans {
+				if err := migrateutil.ImportDonationAutoboard(ctx, tx, serverID, clanTag, webhookID, migrateutil.String(log["thread"]), disabled); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		for _, expandedType := range expandServerLogTypes(logType) {
 			if expandedType == "reddit_feed" {
 				if _, err := tx.Exec(ctx, `
@@ -384,13 +395,11 @@ func canonicalServerLogType(value string) string {
 		return "join_log"
 	case "leave":
 		return "leave_log"
-	case "donations":
-		return "donation_log"
 	case "war":
 		return "war_log"
 	case "capital":
 		return "capital_attacks"
-	case "join_log", "leave_log", "donation_log",
+	case "join_log", "leave_log",
 		"clan_achievement_log", "clan_requirements_log", "clan_description_log",
 		"war_log", "war_panel", "cwl_lineup_change_log",
 		"capital_donations", "capital_attacks", "raid_panel", "capital_weekly_summary",
