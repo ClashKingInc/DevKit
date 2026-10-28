@@ -34,4 +34,5 @@ fixture_sources=(
   034_legend_attack_streaks.sql
   035_roster_member_groups.sql
   040_roster_role_refresh_inputs.sql
+  041_clan_member_warnings.sql
 )
