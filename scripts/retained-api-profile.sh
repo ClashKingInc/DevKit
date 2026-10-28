@@ -37,4 +37,5 @@ fixture_sources=(
   037_competitive_profiles.sql
   038_competitive_attack_summaries.sql
   039_competitive_rule_metadata.sql
+  040_roster_role_refresh_inputs.sql
 )
