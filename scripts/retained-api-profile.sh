@@ -1,5 +1,6 @@
 # Canonical migration inventory for retained API tests and local development.
-# Keep the inventory contiguous, including newly authored forward migrations.
+# Keep this explicit inventory ordered. IDs 029–033 are reserved for prior
+# deferred work; never reuse an ID a development database may have applied.
 fixture_image='timescale/timescaledb:2.29.2-pg18@sha256:9508616d5b941ed931198504c5db3fb47e8f53f790732ea1e889591f1062057c'
 fixture_sources=(
   001_initial_stats.sql
@@ -30,8 +31,9 @@ fixture_sources=(
   026_dashboard_scoped_sessions.sql
   027_home_activity_card.sql
   028_retire_donation_logs.sql
-  029_competitive.sql
-  030_competitive_profiles.sql
-  031_competitive_attack_summaries.sql
-  032_competitive_rule_metadata.sql
+  034_legend_attack_streaks.sql
+  035_competitive.sql
+  036_competitive_profiles.sql
+  037_competitive_attack_summaries.sql
+  038_competitive_rule_metadata.sql
 )
