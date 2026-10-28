@@ -38,3 +38,5 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/roster-role-refresh-smoke.sh
       - name: Verify clan member warning settings
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/clan-member-warning-smoke.sh
+      - name: Verify capital raid history schema
+        run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/capital-raid-history-smoke.sh

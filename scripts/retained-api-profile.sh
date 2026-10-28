@@ -35,4 +35,5 @@ fixture_sources=(
   035_roster_member_groups.sql
   040_roster_role_refresh_inputs.sql
   041_clan_member_warnings.sql
+  042_capital_raid_history.sql
 )
