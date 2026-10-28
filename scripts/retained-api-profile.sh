@@ -32,4 +32,5 @@ fixture_sources=(
   027_home_activity_card.sql
   028_retire_donation_logs.sql
   034_legend_attack_streaks.sql
+  035_roster_member_groups.sql
 )
