@@ -27,3 +27,7 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/schema-smoke.sh
       - name: Verify a clean full schema and repeat migration
         run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/schema-smoke.sh
+      - name: Convert legacy donation-log records
+        run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/donation-log-migration-smoke.sh
+      - name: Import legacy donation destinations into autoboards
+        run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/donation-log-import-smoke.sh

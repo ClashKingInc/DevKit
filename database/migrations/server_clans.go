@@ -152,6 +152,15 @@ func writeServerClanDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		return err
 	}
 	for logType, raw := range logs {
+		if logType == "donations" || logType == "donation_log" {
+			log := migrateutil.Map(raw)
+			if webhookID := migrateutil.String(log["webhook"]); webhookID != "" {
+				if err := migrateutil.ImportDonationAutoboard(ctx, tx, serverID, clanTag, webhookID, migrateutil.String(log["thread"]), clanLogDisabled(log)); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		logType = canonicalClanLogType(logType)
 		if logType == "" {
 			continue
@@ -200,13 +209,11 @@ func canonicalClanLogType(value string) string {
 		return "join_log"
 	case "leave":
 		return "leave_log"
-	case "donations":
-		return "donation_log"
 	case "war":
 		return "war_log"
 	case "capital":
 		return "capital_attacks"
-	case "join_log", "leave_log", "donation_log",
+	case "join_log", "leave_log",
 		"clan_achievement_log", "clan_requirements_log", "clan_description_log",
 		"war_log", "war_panel", "cwl_lineup_change_log",
 		"capital_donations", "capital_attacks", "raid_panel", "capital_weekly_summary",

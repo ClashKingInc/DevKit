@@ -29,4 +29,5 @@ fixture_sources=(
   025_home_layouts.sql
   026_dashboard_scoped_sessions.sql
   027_home_activity_card.sql
+  028_retire_donation_logs.sql
 )
