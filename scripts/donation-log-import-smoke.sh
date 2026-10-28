@@ -21,7 +21,10 @@ endpoint=${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.H
 [[ $endpoint == unix://* ]] || { echo 'Requires local Docker socket' >&2; exit 2; }
 export DOCKER_HOST="$endpoint"
 unset DOCKER_CONTEXT
-container=$(docker run --detach --label "io.clashking.donation-import=$run_id" --publish 127.0.0.1::27017 mongo:8@sha256:e16e606f792ea89d2b4907b54e5e31eb86a7a23e27231dce3a982cc8f2d73cd2)
+# MongoDB 8 refuses newer runner kernels (SERVER-121912). This legacy-import
+# fixture needs no 8-specific features; pin the compatible 7.x multi-arch image.
+# This only selects the disposable test source, never a deployment database.
+container=$(docker run --detach --label "io.clashking.donation-import=$run_id" --publish 127.0.0.1::27017 mongo:7@sha256:8bb4442761a63a8dda452744082cdac9644b429807eb977b42324a63cef59ca4)
 ready=false
 for ((i=0;i<60;i++)); do
   if [[ $(docker inspect --format '{{.State.Running}}' "$container") != true ]]; then
