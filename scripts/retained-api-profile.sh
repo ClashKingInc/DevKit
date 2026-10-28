@@ -37,4 +37,5 @@ fixture_sources=(
   041_clan_member_warnings.sql
   042_capital_raid_history.sql
   043_clan_war_events.sql
+  044_legend_day_performance.sql
 )
