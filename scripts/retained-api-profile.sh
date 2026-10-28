@@ -29,8 +29,4 @@ fixture_sources=(
   025_home_layouts.sql
   026_dashboard_scoped_sessions.sql
   027_home_activity_card.sql
-  028_competitive.sql
-  029_competitive_profiles.sql
-  030_competitive_attack_summaries.sql
-  031_competitive_rule_metadata.sql
 )
