@@ -22,10 +22,22 @@ endpoint=${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.H
 export DOCKER_HOST="$endpoint"
 unset DOCKER_CONTEXT
 container=$(docker run --detach --label "io.clashking.donation-import=$run_id" --publish 127.0.0.1::27017 mongo:8@sha256:e16e606f792ea89d2b4907b54e5e31eb86a7a23e27231dce3a982cc8f2d73cd2)
+ready=false
 for ((i=0;i<60;i++)); do
-  if docker exec "$container" mongosh --quiet --eval 'db.runCommand({ping:1})' >/dev/null 2>&1; then break; fi
+  if [[ $(docker inspect --format '{{.State.Running}}' "$container") != true ]]; then
+    echo 'Disposable Mongo exited before becoming ready:' >&2
+    docker inspect --format '{{json .State}}' "$container" >&2
+    docker logs "$container" >&2
+    exit 1
+  fi
+  if docker exec "$container" mongosh --quiet --eval 'db.runCommand({ping:1})' >/dev/null 2>&1; then ready=true; break; fi
   sleep 0.5
 done
+if [[ $ready != true ]]; then
+  echo 'Disposable Mongo did not become ready within 30 seconds:' >&2
+  docker logs "$container" >&2
+  exit 1
+fi
 address=$(docker port "$container" 27017/tcp)
 [[ $address =~ ^127\.0\.0\.1:([0-9]+)$ ]] || exit 2
 mongo="mongodb://127.0.0.1:${BASH_REMATCH[1]}"
