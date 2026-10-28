@@ -38,4 +38,5 @@ fixture_sources=(
   042_capital_raid_history.sql
   043_clan_war_events.sql
   044_legend_day_performance.sql
+  045_role_refresh_treatment.sql
 )
