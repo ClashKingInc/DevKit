@@ -33,6 +33,10 @@ fixture_sources=(
   028_retire_donation_logs.sql
   034_legend_attack_streaks.sql
   035_roster_member_groups.sql
+  036_competitive.sql
+  037_competitive_profiles.sql
+  038_competitive_attack_summaries.sql
+  039_competitive_rule_metadata.sql
   040_roster_role_refresh_inputs.sql
   041_clan_member_warnings.sql
   042_capital_raid_history.sql
