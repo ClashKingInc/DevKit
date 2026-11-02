@@ -8,7 +8,18 @@ export function serviceDefinition(workspace,name){
  const base=inheritedEnvironment();
  const select=keys=>Object.fromEntries(keys.map(k=>[k,e[k]??'']));
  const node=(script,args=[],cwd=r.devkit,env={})=>({command:process.execPath,args:[script,...args],cwd,env:{...base,...env}});
- if(name==='proxy'){requireValues(e,['COC_KEYS']);return {command:'go',args:['run','.'],cwd:r.proxy,env:{...base,COC_KEYS:e.COC_KEYS,HOST:'127.0.0.1',PORT:String(p.proxy),DEV_COC_URL:''}};}
+ if(name==='proxy'){
+  if(c.proxySsh!==undefined){
+   const {host,user,port=22,remotePort=8011}=c.proxySsh;
+   const validPort=value=>Number.isInteger(value)&&value>=1&&value<=65535;
+   if(typeof host!=='string'||! /^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(host)||typeof user!=='string'||! /^[A-Za-z_][A-Za-z0-9_-]*$/.test(user)||!validPort(port)||!validPort(remotePort)||!validPort(p.proxy)||p.proxy<1024)throw Error('Invalid proxySsh host, user, or port');
+   // Keep the existing loopback origin and supervisor lifecycle. Only the
+   // transport changes; remote API keys stay on the proxy host, and neither
+   // the local listener nor the remote forwarding target is publicly bound.
+   return {command:'ssh',args:['-N','-T','-p',String(port),'-L',`127.0.0.1:${p.proxy}:127.0.0.1:${remotePort}`,'-o','BatchMode=yes','-o','ExitOnForwardFailure=yes','-o','ServerAliveInterval=30','-o','ServerAliveCountMax=3','-o','ConnectTimeout=10','-o','ForwardAgent=no',`${user}@${host}`],cwd:workspace.root,env:base};
+  }
+  requireValues(e,['COC_KEYS']);return {command:'go',args:['run','.'],cwd:r.proxy,env:{...base,COC_KEYS:e.COC_KEYS,HOST:'127.0.0.1',PORT:String(p.proxy),DEV_COC_URL:''}};
+ }
  if(name==='api'){
   requireValues(e,[...secretNames,'DISCORD_CLIENT_ID','DISCORD_CLIENT_SECRET']);
   return node(join(r.api,'scripts/start-local-rewrite-api.mjs'),[],r.api,{

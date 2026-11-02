@@ -143,6 +143,32 @@ data file it names. The decryption key is still required to open the data.
 If you change networks, turn on a VPN, or your public IP changes, update the key's
 allowed IP address. These are developer API keys, not a player's in-game API token.
 
+### Use an existing proxy through SSH
+
+If you already have authorized SSH access to a proxy host, the workspace can
+forward its loopback proxy instead of running the Go proxy locally. Add this
+object to `.clashking/workspace.json`, using your actual SSH host and user:
+
+```json
+"proxySsh": {
+  "host": "your-proxy-host",
+  "user": "your-ssh-user",
+  "port": 22,
+  "remotePort": 8011
+}
+```
+
+Keep `proxy` in the workspace's `services` list. `clashking up proxy` then starts
+the SSH forward under the existing supervisor; `clashking down proxy` stops it.
+The local listener remains `127.0.0.1` at `ports.proxy`, so the API configuration
+does not change. SSH keys and host verification use your normal SSH setup;
+the forward does not copy the remote Clash API keys or require local `COC_KEYS`.
+The connection fails if it cannot bind the local port, and uses keepalives to
+detect a disconnected host. Run `clashking up proxy` again after a disconnect.
+
+To return to a local Go proxy, stop `proxy`, remove `proxySsh`, configure
+`COC_KEYS`, and start `proxy` again.
+
 ## 4. Set up the required Cloudflare tunnel
 
 **A Cloudflare tunnel is required.** It gives the local bot an HTTPS address that

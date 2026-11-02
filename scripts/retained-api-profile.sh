@@ -42,4 +42,8 @@ fixture_sources=(
   046_automatic_role_policy.sql
   047_automatic_role_triggers.sql
   048_remove_clan_member_warnings.sql
+  049_legend_observed_daily_stats.sql
+  050_player_profile_history_fields.sql
+  051_manual_server_limits.sql
+  052_bot_customization_grants.sql
 )

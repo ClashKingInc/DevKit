@@ -154,10 +154,9 @@ or binding revision is stored in the database.
 awarded medal count. League metadata, standings, and eligible players come from
 the stored CWL group and static data when Dashboard renders the workflow.
 
-`cwl_league_history` is temporary-consumption staging for the historical CWL
-league repair. Each clan row contains only a JSONB map from season to numeric
-league ID; the API deletes the row after it fills that clan's missing
-`cwl_groups.cwl_league_id` values.
+`cwl_league_history` retains historical league-repair input as a JSONB map from
+season to numeric league ID. Public API reads do not mutate or consume this
+staging data.
 
 ## Mobile Push State
 
@@ -200,10 +199,99 @@ aggregate without changing the retained war and league analytics.
 the final cross-repository contracts. `018_personal_base_library.sql` introduces
 authenticated saved-base references, and `019_unlimited_personal_bases.sql` supersedes
 its slot model with an unlimited library and base-owned download history. Migration
-`022_personal_army_library.sql` removes the obsolete saved-base kind label and adds
-authenticated saved-army references to canonical compositions.
+`022_release_extension.sql` consolidates the unpublished extensions formerly
+numbered 022 through 060. It includes saved-army references, roster settings,
+daily analytics, CWL participation, reminders, giveaways, tickets, role refresh,
+clan verification, and notification follows. The original Up sections retain
+their order and behavior. Published migrations 001 through 021 are unchanged.
+The extension also adds nullable `basic_player.last_active` and the bounded
+`autoboards.row_limit` (default 10, allowed 1 through 50).
+It also removes inactivity reminder configurations (numeric type 4 or the
+case-insensitive name `inactivity`) and prevents their reintroduction. Export
+those rows before production application if their configuration must be recoverable.
+Player activity and online history remain available. The unpublished standalone
+023 migration has been folded into 022; there is no production migration 023.
+
+The consolidated migration refuses Down because reversing it would lose data.
+Use a verified backup or a reviewed forward migration for rollback.
+
+An existing local database that already applied all original migrations through
+060 must use `scripts/bridge-release-extension-local.mjs` before running Goose
+with this inventory. The bridge verifies the original complete ledger, published
+file hashes, consolidated file hash, and an explicitly approved schema hash. It
+backs up the ledger, adds only the two new columns, and records the consolidated
+head in one transaction. It also removes the obsolete manual-reminder request
+table, but refuses removal when the table contains rows. The ledger backup also
+includes retired inactivity reminder rows before the bridge deletes them. The bridge never
+replays the earlier data migrations. Partial
+histories and non-loopback databases are refused. The bridge is not a production
+migration procedure.
+
+Inspect first with `CLASHKING_API_REPO` and `CLASHKING_LOCAL_DATABASE_URL` set:
+
+```bash
+node scripts/bridge-release-extension-local.mjs
+node scripts/bridge-release-extension-local.mjs --apply-local --expect-schema-sha256=HASH_FROM_INSPECTION
+```
+
+For a local database already at the former consolidated 022 plus unpublished 023,
+use `scripts/adopt-consolidated-022-local.mjs`. Set `CLASHKING_API_REPO`,
+`CLASHKING_LOCAL_DATABASE_URL`, and `CLASHKING_REFERENCE_DATABASE_URL`; the reference
+must be a separate local database freshly migrated through 001–022 with Goose.
+The script compares all public schema dump objects except Goose's ledger, checks
+Timescale dimensions, compression flags and policy settings, verifies
+published and consolidated hashes, and accepts only two previously observed local
+drifts: the obsolete `family_settings` check value and a missing completed-job index.
+The API accepts `roles` instead, and existing `family_settings` rows cause refusal.
+Inspect first, then apply with the exact reported hash:
+
+```bash
+node scripts/adopt-consolidated-022-local.mjs
+node scripts/adopt-consolidated-022-local.mjs --apply-local --expect-schema-sha256=HASH_FROM_INSPECTION
+```
+
+Application rows are not rewritten. The script saves a private ledger/schema backup,
+reconciles those exact schema drifts, checks row counts and definitions, and removes
+only the already-applied 023 ledger row in one transaction. It refuses unexpected
+schema or ledger histories and all non-loopback databases. Run Goose status and
+compare the public schema again after adoption. This local-only adoption does not
+authorize a production ledger rewrite or deployment.
+
+Original unpublished file hashes are retained in
+`database/migration_history/unpublished-022-060/manifest.json`; the original SQL
+snapshot for this consolidation was preserved outside the repository at
+`/tmp/clashking-original-migrations-20261014`.
+
+Manual sends now use the shared API and existing worker's best-effort wake path,
+without a request queue table. The earlier column-reconciliation script is
+retired. A previously bridged local database must be inspected separately before
+removing its obsolete table; never drop nonempty requests without review.
+
+Reminder imports preserve existing SQL rows by default. Use
+`BOT_SERVER_SETTINGS_ONLY=reminders BOT_REMINDERS_DRY_RUN=1` to report new IDs and
+differing field names without writing SQL. After reviewing the differences,
+`BOT_REMINDERS_MERGE_EXISTING=reviewed` explicitly enables replacement from the
+source. Scope a local rehearsal with `MIGRATION_LIMIT_DOCS` and a local
+`TIMESCALE_URL`; source connections remain read-only.
 Do not use the former 007–028 fixture numbering. See
 [the schema decisions](../../docs/worker-api-schema.md),
 [the disposable upgrade test](../../RETAINED_API_FIXTURE.md).
 
 Migration 013 replaces the Ranked/Legend primary key without deleting data. Migration 014 and the bounded cleanup prepare nullable defense loot; migration 015 is the temporary compatibility bridge. Migration 017 removes that bridge, maps legacy NULL duration to zero, and requires coordinated final writers before ingestion resumes.
+
+### Migration 051: manual server limits and AI reservations
+
+Defaults: 10 clans, 5 AutoBoards, $0.05 per UTC month. Existing AutoBoard values
+of 0 (the old SQL default) or 10 (the former UI default) become 5; other overrides are retained.
+Existing boards are never deleted. Historical AI costs retain their original month.
+Rollback refuses once any step reservation exists. A rollback does not reconstruct
+former AutoBoard values; use the release backup if that configuration must be restored.
+
+### Migration 052: bot customization grants
+
+Bot profile customization defaults to disabled for every server. Grant it explicitly
+from Admin's Server limits page. Name, avatar, banner, bio and reset actions require
+both this grant and the caller's existing settings-management permission. Revoking a
+grant prevents future changes but does not reset the current Discord profile.
+Apply 052 before deploying the API that reads this column. Downgrading removes the
+grant data, so retain a backup and coordinate the API rollback.
