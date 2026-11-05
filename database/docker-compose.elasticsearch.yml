@@ -5,6 +5,10 @@ services:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.19.17@sha256:aa6ee0ea2d708cea22a24ed44a420c5bbde9853d58a872e1e870f2086d04f652
     container_name: clashking-search-elasticsearch
     restart: unless-stopped
+    # Cloudflare Tunnel runs on the host and reaches this loopback-only origin.
+    # Keep Elasticsearch private; never publish this port on all interfaces.
+    ports:
+      - "127.0.0.1:9200:9200"
     environment:
       discovery.type: single-node
       xpack.security.enabled: "true"
