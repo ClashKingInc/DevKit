@@ -100,7 +100,7 @@ def main():
         system_id = sql('SELECT system_identifier FROM pg_control_system();')
         # Run the exact forward half of PGSync.pull, then exit as an interrupted
         # process would. The recovery CLI must complete that same observed range.
-        forward = "from pgsync.sync import Sync; from pgsync.utils import config_loader; import json; s=Sync(next(d for d in config_loader('/config/schema.json') if d['index']=='clashking_players_v2')); xid=s.txid_current; s.search_client.bulk(s.index,s.sync(txmin=None,txmax=xid)); print(json.dumps({'xid':xid,'lsn':s.current_wal_lsn}))"
+        forward = 'from pgsync.sync import Sync; from pgsync.utils import config_loader; import json, sqlalchemy as sa; s=Sync(next(d for d in config_loader(\'/config/schema.json\') if d[\'index\']==\'clashking_players_v2\')); xid=s.txid_current; s.search_client.bulk(s.index,s.sync(txmin=None,txmax=xid)); c=s.engine.connect(); c.execute(sa.text("DELETE FROM basic_player WHERE tag=\'#P3\'")); c.commit(); c.close(); print(json.dumps({\'xid\':xid,\'lsn\':s.current_wal_lsn}))'
         result = pgsync(['-c', forward], entrypoint='python')
         boundary = json.loads(result.stdout.strip().splitlines()[-1])
         es('/clashking_players_v2/_refresh', 'POST')
@@ -123,6 +123,8 @@ def main():
         check(sum('PG_LOGICAL_SLOT_PEEK_CHANGES' in line for line in queries) == 1, f'Expected one peek: {queries}')
         check(sum('PG_LOGICAL_SLOT_GET_CHANGES' in line for line in queries) == 1, f'Expected one consume: {queries}')
         check(not any('OFFSET' in line or 'count(' in line.lower() for line in queries), 'Repeated scan/count remains')
+        es('/clashking_players_v2/_refresh', 'POST')
+        check(es('/clashking_players_v2/_count')['count'] == 6001, 'Catch-up missed a deletion committed after its forward transaction boundary')
         check(checkpoint() == str(boundary['xid']), 'Expected checkpoint not persisted')
         check(sql(f"SELECT confirmed_flush_lsn > '{before_lsn}'::pg_lsn FROM pg_replication_slots WHERE slot_name='{slot}';") == 't', 'Successful recovery did not advance the actual slot')
         check(sql(f"SELECT count(*) FROM pg_logical_slot_peek_changes('{slot}', '{boundary['lsn']}', NULL);") == '0', 'Successful recovery left changes inside its consumed boundary')
@@ -130,10 +132,10 @@ def main():
         sql("UPDATE basic_player SET name='Changed' WHERE tag='#P1'; DELETE FROM basic_player WHERE tag='#P2';")
         pgsync(['--config', '/config/schema.json'])
         es('/_refresh', 'POST')
-        check(es('/clashking_players_v2/_count')['count'] == 6001, 'Restart did not preserve deletion')
+        check(es('/clashking_players_v2/_count')['count'] == 6000, 'Restart did not preserve deletion')
         check(es('/clashking_players_v2/_doc/%23P1')['_source']['name'] == 'Changed', 'Restart missed update')
         check(es('/clashking_clans_v2/_count')['count'] == 1, 'Other index did not initialize')
-        print('PASS real PGSync: canonical schema, >5000 changes, one peek/consume, failed bulk leaves slot/checkpoint, preview/retry, restart update/delete and both indexes')
+        print('PASS real PGSync: canonical schema, >5000 changes, one peek/consume, failed bulk leaves slot/checkpoint, preview/retry, pre/during-snapshot deletions, restart update/delete and both indexes')
     finally:
         owned = run(['docker', 'ps', '-aq', '--filter', f'label=io.clashking.fixture.run={run_id}', '--filter', 'label=io.clashking.fixture.owner=pgsync-smoke'], check=False).stdout.split()
         if owned:

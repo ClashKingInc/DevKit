@@ -19,7 +19,7 @@ COPY patch_logical_slot.py patch_bulk_deletes.py resume_initial.py /opt/clashkin
 RUN python /opt/clashking/patch_logical_slot.py \
     && python /opt/clashking/patch_bulk_deletes.py
 
-LABEL ing.clashking.pgsync-patch="single-pass-wal-and-idempotent-delete-v2"
+LABEL ing.clashking.pgsync-patch="complete-wal-range-and-idempotent-delete-v3"
 
 COPY --chown=10001:10001 schema.json /config/schema.json
 

@@ -4,7 +4,7 @@ name: clashking_search_recovery
 
 services:
   pgsync-recovery:
-    image: clashking/pgsync:7.2.0-ck.2
+    image: clashking/pgsync:7.2.0-ck.3
     build:
       context: ./pgsync
       dockerfile: Dockerfile
