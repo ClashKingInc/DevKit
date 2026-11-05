@@ -452,3 +452,19 @@ Its default mode is `preview`. To execute the reviewed preview, explicitly set
 `PGSYNC_RECOVERY_CONFIRMATION=completed-forward-pass`. Disable auto-deployment;
 remove the temporary job after verified recovery. Never reuse the owner-credential
 bootstrap job as an unattended recovery service.
+
+
+For Coolify, mark the seven non-secret `PGSYNC_RECOVERY_*` values as both
+build-time and runtime variables. Coolify interpolates the entire Compose file
+before building; runtime-only identity values fail that build before the job
+starts. These values are public operation metadata, not credentials. Keep the
+existing restricted credential references and do not copy owner credentials.
+
+After stopping the old daemon, its disconnected PostgreSQL session can continue
+executing a long `pg_logical_slot_peek_changes` query. Wait for the slot to become
+inactive. If necessary, cancel only that exact read-only peek after verifying
+its slot name, captured XID/LSN, cluster identity, and the stopped Coolify state.
+Do not advance or drop the slot. Recheck validity and inactivity before preview.
+A completed one-off container can temporarily retain a running/excluded Coolify
+status; inspect its actual exit code and output, then finish it through Coolify
+before starting the next mode.
