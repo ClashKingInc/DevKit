@@ -48,3 +48,5 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/automatic-role-policy-smoke.sh
       - name: Verify automatic trigger selection
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/automatic-role-triggers-smoke.sh
+      - name: Normalize absent legacy giveaway collections
+        run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/giveaway-collections-smoke.sh
