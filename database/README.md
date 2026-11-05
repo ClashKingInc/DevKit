@@ -469,3 +469,11 @@ To delete local data too:
 docker compose -f docker-compose.timescale.yml down -v
 docker compose -f docker-compose.valkey.yml down -v
 ```
+
+### Server activity outage adjustment (059)
+
+Migration `059_server_activity_outage.sql` preserves the relative inactivity of imported bot command dates. It maps the latest imported timestamp (`2026-08-25 20:34:38Z`) to the first v2 Bot deployment (`2026-11-05 18:29:58.483442Z`), adding exactly `71 days 21:55:20.483442` to dates at or before the old anchor. The anchor is observed import data, not proof of the exact outage start. Later activity and NULL dates remain unchanged.
+
+The migration records each original and adjusted timestamp in `server_activity_outage_adjustments`. Goose applies it once. Rollback restores only rows still equal to their recorded adjusted value, so a later genuine command is never rewound. Production preview on November 5 found 15,552 adjusted servers, 186 newer dates retained, 8,453 unknown dates retained, and no future timestamps. Use the actual live preview again before applying; concurrent genuine activity can reduce the affected count.
+
+Local verification: `bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/server-activity-outage-smoke.sh` exercises the real SQL migration, repeat application, and rollback.
