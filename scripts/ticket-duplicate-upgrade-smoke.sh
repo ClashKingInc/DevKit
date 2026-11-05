@@ -8,7 +8,8 @@ psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
 INSERT INTO servers(id,name) VALUES('999999999999991001','Duplicate ticket fixture');
 INSERT INTO ticket_panel(id,server_id,name,description) VALUES('00000000-0000-4000-8000-000000000001','999999999999991001','Recruit','');
 INSERT INTO ticket_panel_buttons(id,panel_id,server_id,custom_id,label) VALUES('00000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000001','999999999999991001','Recruit_0','First');
-INSERT INTO ticket_panels(server_id,name,components,data) VALUES('999999999999991001','Recruit','[{"type":2,"custom_id":"Recruit_0","label":"First","style":1},{"type":2,"custom_id":"Recruit_0","label":"Second","style":2}]','{"Recruit_0_settings":{"questions":["Player tag?"],"account_apply":true},"unrelated":"keep"}');
+INSERT INTO ticket_panels(server_id,name,components,data) VALUES('999999999999991001','Recruit','[{"type":2,"id":0,"custom_id":"Recruit_0","label":"First","style":1},{"type":2,"id":0,"custom_id":"Recruit_0","label":"Second","style":2}]','{"Recruit_0_settings":{"questions":["Player tag?"],"account_apply":true},"unrelated":"keep"}');
+INSERT INTO ticket_panels(server_id,name,components,data) VALUES('999999999999991001','New legacy panel','[{"type":2,"id":0,"custom_id":"New_0","label":"Join","style":1}]','{"New_0_settings":{"account_apply":false}}');
 INSERT INTO tickets(id,server_id,channel_id,panel_id) VALUES('00000000-0000-4000-8000-000000000003','999999999999991001','999999999999991002','00000000-0000-4000-8000-000000000001');
 SQL
 goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up
@@ -17,6 +18,7 @@ DO $$
 DECLARE p record; first_action text; second_action text;
 BEGIN
  SELECT * INTO STRICT p FROM ticket_panels WHERE server_id='999999999999991001' AND name='Recruit';
+ IF NOT EXISTS (SELECT 1 FROM ticket_panels WHERE name='New legacy panel' AND components->0->>'id' ~ '^[0-9a-f-]{36}$' AND components->0->>'custom_id' LIKE 'ck:ticket:open:%') THEN RAISE EXCEPTION 'Unset numeric ID without normalized identity was not upgraded'; END IF;
  IF jsonb_array_length(p.components)<>2 OR p.components->0->>'label'<>'First' OR p.components->1->>'label'<>'Second' OR p.components->1->>'style'<>'2' THEN RAISE EXCEPTION 'Visual buttons changed'; END IF;
  first_action=p.components->0->>'custom_id';second_action=p.components->1->>'custom_id';
  IF first_action=second_action OR p.components->0->>'id'<>'00000000-0000-4000-8000-000000000002' THEN RAISE EXCEPTION 'Canonical identity not preserved/split'; END IF;
