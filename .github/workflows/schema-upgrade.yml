@@ -50,3 +50,5 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/automatic-role-triggers-smoke.sh
       - name: Normalize absent legacy giveaway collections
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/giveaway-collections-smoke.sh
+      - name: Verify reminder webhook repair and safe resume
+        run: bash scripts/with-test-timescale.sh --profile retained-api -- node scripts/reminder-webhooks-smoke.mjs

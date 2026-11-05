@@ -22,6 +22,8 @@ the Compose files used to run Timescale, Valkey, Elasticsearch, and PGSync.
 Schema changes belong in numbered migrations under `database/timescale/`.
 Backfills belong in `database/migrations/` and should use the existing shared
 connection, checkpoint, and schema-discovery utilities.
+See [retained reminder webhook repair](docs/reminder-webhooks.md) for preview,
+safe retry, and resume behavior.
 
 The staging PGSync setup copies selected player and clan fields from PostgreSQL
 into Elasticsearch while PostgreSQL remains the source of truth. Its folder
