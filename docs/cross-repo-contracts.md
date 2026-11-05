@@ -80,3 +80,35 @@ of this cutover.
 # Hero mode in army share codes
 
 Canonical hero sections may contain `m<number>` immediately after the hero ID, for example `h2m1p16e5_41`. Tracking and API normalization preserve the mode in the stored/query share code. Mode does not become a separate composition column and is ignored for family matching. Different exact codes can therefore map to the same family.
+
+## Runtime ownership
+
+The Discord Gateway owns the shared `discord_cache` guild, channel, role, and
+member projection. API consumers distinguish `metadata_complete` from
+`members_complete`; receiving guild metadata does not prove that a large guild's
+member chunks are complete. Missing coverage requests synchronization through
+Valkey and returns a loading or unavailable result. The API must not invent a
+second independent guild cache by fetching its own partial Discord state.
+
+Guild reconciliation uses the Gateway's generation/fencing boundary. A stale
+connection must not mark a newer generation complete or overwrite its members.
+Check the current Tracking gateway implementation when changing this protocol.
+
+Logs, reminders, and AutoBoards use best-effort delivery. Keep authorization and
+data-integrity checks, but do not introduce SQL occurrence ledgers, delivery
+leases, or exactly-once infrastructure. Ticket replay state is separate and
+belongs to the API's ticket runtime.
+
+Use transactions and locks on the existing subject rows for configuration and
+budget changes. Manual server limits and AI reservations follow migration 051;
+older descriptions allowing overlapping AI budget admission are superseded.
+General configuration removal does not delete Discord resources. Feature-owned
+cleanup must explicitly define which resource it may remove.
+
+Ticket configuration uses stable action identities from migration 022. Visually
+distinct legacy buttons retain separate canonical UUIDs even when the old
+custom ID and action settings match. The preserved legacy alias chooses the
+first canonical action deterministically, while each visible action keeps its
+own label, style, emoji, and order. Existing tickets retain their action links.
+The [legacy ticket guide](legacy-ticket-migration.md) covers old publications
+and transcript recovery boundaries.

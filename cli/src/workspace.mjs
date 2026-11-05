@@ -5,6 +5,16 @@ import { parseEnv } from 'node:util';
 
 export const repositoryNames = {devkit:'clashking_schemas',api:'clashking_api',bot:'clashking_bot',dashboard:'ClashKingDashboard',app:'ClashKingApp',proxy:'ClashKingProxy',tracking:'clashking_tracking'};
 export const secretNames=['DATA_ENCRYPTION_KEY','JWT_ACCESS_SECRET','JWT_REFRESH_SECRET','API_BOT_TOKEN','AI_USAGE_SECRET','STRIPE_WEBHOOK_SECRET'];
+export function clashProxyOrigin(workspace) {
+ const origin=workspace.config.clashProxyOrigin;
+ if(origin!==undefined){
+  if(origin!=='https://proxy.clashk.ing')throw Error('Unsupported workspace Clash proxy origin');
+  return origin;
+ }
+ const port=Number(workspace.config.ports.proxy);
+ if(!Number.isInteger(port)||port<1024||port>65535)throw Error('Invalid local proxy port');
+ return `http://127.0.0.1:${port}`;
+}
 export function findWorkspace(start=process.cwd()) {
  if(process.env.CLASHKING_WORKSPACE)return resolve(process.env.CLASHKING_WORKSPACE);
  for(let dir=resolve(start);;dir=dirname(dir)){if(existsSync(join(dir,'.clashking','workspace.json')))return dir;if(dirname(dir)===dir)throw Error('No workspace found. Run clashking init <folder> or set CLASHKING_WORKSPACE.');}
@@ -15,7 +25,7 @@ export function initWorkspace(root,repositories={}) {
  root=resolve(root);const dir=join(root,'.clashking');mkdirSync(dir,{recursive:true,mode:0o700});
  for(const name of ['state','datasets','backups'])mkdirSync(join(dir,name),{recursive:true,mode:0o700});
  const configPath=join(dir,'workspace.json'),envPath=join(dir,'local.env');
- if(!existsSync(configPath))writePrivate(configPath,JSON.stringify({version:1,repositories:Object.fromEntries(Object.entries(repositoryNames).map(([key,name])=>[key,resolve(repositories[key]??join(root,name))])),database:{container:'clashking-timescale',port:54330,name:'clashking_dev'},ports:{api:8787,bot:8788,dashboard:3002,app:7357,proxy:8011},services:['proxy','api','gateway','bot','dashboard','tunnel'],tunnelConfig:''},null,2),true);
+ if(!existsSync(configPath))writePrivate(configPath,JSON.stringify({version:1,repositories:Object.fromEntries(Object.entries(repositoryNames).map(([key,name])=>[key,resolve(repositories[key]??join(root,name))])),database:{container:'clashking-timescale',port:54330,name:'clashking_dev'},ports:{api:8787,bot:8788,dashboard:3002,assistant:8789,app:7357,proxy:8011},services:['proxy','api','gateway','bot','dashboard','tunnel'],tunnelConfig:''},null,2),true);
  if(!existsSync(envPath)){
   const env={TIMESCALE_HOST:'127.0.0.1',TIMESCALE_PORT:'54330',TIMESCALE_DATABASE:'clashking_dev',TIMESCALE_USERNAME:'clashking_local',TIMESCALE_PASSWORD:'clashking_local',TIMESCALE_SSLMODE:'disable',VALKEY_HOST:'127.0.0.1',VALKEY_PORT:'6379',VALKEY_PASSWORD:'',DISCORD_CLIENT_ID:'',DISCORD_CLIENT_SECRET:'',DISCORD_BOT_TOKEN:'',DISCORD_PUBLIC_KEY:'',DISCORD_GUILD_ALLOWLIST:'',COC_KEYS:'',CLASHKING_API_ORIGIN:'http://127.0.0.1:8787',CLASHKING_DASHBOARD_ORIGIN:'http://localhost:3002',DATASET_KEY_FILE:''};
   env.DATASET_DECRYPTION_KEY='';env.DATASET_R2_BUCKET='clashking-bucket';env.R2_ENDPOINT='';

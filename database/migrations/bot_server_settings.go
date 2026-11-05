@@ -4,10 +4,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -23,12 +26,27 @@ func main() {
 }
 
 func runBotServerSettings(ctx context.Context, cfg migrateutil.Config) error {
+	if os.Getenv("BOT_REMINDERS_DRY_RUN") == "1" && os.Getenv("BOT_SERVER_SETTINGS_ONLY") != "reminders" {
+		return fmt.Errorf("reminder dry-run requires BOT_SERVER_SETTINGS_ONLY=reminders")
+	}
 	if scope := strings.TrimSpace(os.Getenv("BOT_SERVER_SETTINGS_ONLY")); scope != "" {
 		switch scope {
 		case "giveaways":
 			return runGiveawaysOnly(ctx, cfg)
 		case "reminders":
 			return runRemindersOnly(ctx, cfg)
+		case "ticket-panels":
+			client, err := migrateutil.StaticClient(ctx, cfg)
+			if err != nil {
+				return err
+			}
+			defer client.Disconnect(ctx)
+			pool, err := migrateutil.TimescalePool(ctx, cfg)
+			if err != nil {
+				return err
+			}
+			defer pool.Close()
+			return migrateTicketPanels(ctx, cfg, pool, client.Database("usafam").Collection("tickets"))
 		default:
 			return fmt.Errorf("unsupported BOT_SERVER_SETTINGS_ONLY scope %q", scope)
 		}
@@ -60,9 +78,6 @@ func runBotServerSettings(ctx context.Context, cfg migrateutil.Config) error {
 		return err
 	}
 	if err := migrateTicketPanels(ctx, cfg, pool, staticClient.Database("usafam").Collection("tickets")); err != nil {
-		return err
-	}
-	if err := migrateCanonicalTicketPanels(ctx, cfg, pool, staticClient.Database("usafam").Collection("tickets")); err != nil {
 		return err
 	}
 	if err := migrateOpenTickets(ctx, cfg, pool, staticClient.Database("usafam").Collection("open_tickets")); err != nil {
@@ -101,7 +116,8 @@ func runRemindersOnly(ctx context.Context, cfg migrateutil.Config) error {
 		return fmt.Errorf("preflight source reminders: %w", err)
 	}
 	if sourceCount == 0 {
-		return fmt.Errorf("refusing to truncate reminders: source collection is empty")
+		fmt.Println("settings.reminders: source is empty; existing reminders preserved")
+		return nil
 	}
 	fmt.Printf("settings.reminders: source_docs=%d\n", sourceCount)
 	plan := remindersOneShotPlan()
@@ -115,13 +131,9 @@ func runRemindersOnly(ctx context.Context, cfg migrateutil.Config) error {
 }
 
 func remindersOneShotPlan() migrateutil.OneShotPlan {
-	return migrateutil.OneShotPlan{
-		ResetSQL:    []string{`TRUNCATE TABLE public.reminders`},
-		DropIndexes: []string{`DROP INDEX IF EXISTS public.idx_reminders_server_type_name`},
-		CreateIndexes: []string{
-			`CREATE INDEX idx_reminders_server_type_name ON public.reminders (server_id, type_name)`,
-		},
-	}
+	// Stable source IDs make retries idempotent. Never erase reminders created
+	// in the new application when importing historical Mongo settings.
+	return migrateutil.OneShotPlan{}
 }
 
 func runGiveawaysOnly(ctx context.Context, cfg migrateutil.Config) error {
@@ -180,13 +192,7 @@ func botSettingsOneShotPlan() migrateutil.OneShotPlan {
 	return migrateutil.OneShotPlan{
 		ResetSQL: []string{
 			`TRUNCATE TABLE
-				public.tickets,
-				public.ticket_panel_buttons,
-				public.ticket_panel_staff_permissions,
-				public.ticket_panel,
-				public.ticket_panels,
 				public.server_custom_embeds,
-				public.reminders,
 				public.giveaways,
 				public.short_links,
 				public.user_settings`,
@@ -284,11 +290,12 @@ func migrateTicketPanels(ctx context.Context, cfg migrateutil.Config, pool inter
 }, collection *mongo.Collection) error {
 	rows := make([][]any, 0, cfg.BatchSize)
 	flush := func() error {
-		err := flushRows(ctx, pool, "ticket_panels", []string{"server_id", "name", "components", "data"}, rows, []int{0, 1}, `
-			INSERT INTO ticket_panels (server_id, name, components, data)
-			SELECT server_id, name, components::jsonb, data::jsonb FROM _ck_rows
+		err := flushRows(ctx, pool, "ticket_panels", []string{"server_id", "name", "components", "data", "id"}, rows, []int{0, 1}, `
+			INSERT INTO servers(id,name) SELECT DISTINCT server_id,server_id FROM _ck_rows WHERE server_id<>'' ON CONFLICT DO NOTHING;
+			INSERT INTO ticket_panels (id, server_id, name, components, data)
+			SELECT id::uuid, server_id, name, components::jsonb, data::jsonb FROM _ck_rows
 			WHERE server_id <> '' AND name <> ''
-			ON CONFLICT (server_id, name) DO UPDATE SET components = EXCLUDED.components, data = EXCLUDED.data, updated_at = now()
+			ON CONFLICT (server_id, name) WHERE archived_at IS NULL DO NOTHING
 		`)
 		if err == nil {
 			rows = rows[:0]
@@ -296,7 +303,47 @@ func migrateTicketPanels(ctx context.Context, cfg migrateutil.Config, pool inter
 		return err
 	}
 	seen, err := migrateutil.StreamAll(ctx, cfg, "ticket_panels", collection, func(doc bson.M) (bool, error) {
-		rows = append(rows, []any{migrateutil.String(doc["server_id"]), migrateutil.String(doc["name"]), migrateutil.RawJSON(doc["components"]), migrateutil.RawJSON(doc)})
+		serverID, name := firstSettingString(doc["server_id"], doc["server"]), migrateutil.String(doc["name"])
+		panelID := stableUUID("ticket-panel", serverID+"\x00"+name)
+		data := bson.M{}
+		for key, value := range doc {
+			data[key] = value
+		}
+		for _, key := range []string{"open-category", "sleep-category", "closed-category", "status_change_log", "ticket_button_click_log", "ticket_close_log"} {
+			if data[key] != nil {
+				data[key] = migrateutil.String(data[key])
+			}
+		}
+		components := bson.A{}
+		aliases := bson.M{}
+		for _, raw := range migrateutil.Slice(doc["components"]) {
+			component := migrateutil.Map(raw)
+			oldID := migrateutil.String(component["custom_id"])
+			if oldID == "" {
+				continue
+			}
+			buttonID := stableUUID("ticket-panel-button", serverID+"\x00"+name+"\x00"+oldID)
+			newID := "ck:ticket:open:" + panelID + ":" + buttonID
+			copy := bson.M{}
+			for key, value := range component {
+				copy[key] = value
+			}
+			copy["id"], copy["custom_id"] = buttonID, newID
+			components = append(components, copy)
+			aliases[oldID] = newID
+			if settings, exists := data[oldID+"_settings"]; exists {
+				typed := migrateutil.Map(settings)
+				for _, key := range []string{"mod_role", "no_ping_mod_role", "roles_to_add", "roles_to_remove"} {
+					if typed[key] != nil {
+						typed[key] = stringSlice(typed[key])
+					}
+				}
+				data[newID+"_settings"] = typed
+				delete(data, oldID+"_settings")
+			}
+		}
+		data["legacy_button_ids"] = aliases
+		rows = append(rows, []any{serverID, name, migrateutil.RawJSON(components), migrateutil.RawJSON(data), panelID})
 		return len(rows) >= cfg.BatchSize, nil
 	}, flush)
 	fmt.Printf("settings.ticket_panels: scanned_docs=%d\n", seen)
@@ -529,10 +576,13 @@ func writeOpenTicket(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO public.ticket_panel (id, server_id, name, description)
-		VALUES ($1::uuid, $2, $3, '')
-		ON CONFLICT (id) DO NOTHING
+		INSERT INTO public.ticket_panels (id, server_id, name, components, data)
+		VALUES ($1::uuid, $2, $3, '[]', '{}')
+		ON CONFLICT (server_id,name) WHERE archived_at IS NULL DO NOTHING
 	`, panelID, serverID, panelName); err != nil {
+		return err
+	}
+	if err := tx.QueryRow(ctx, `SELECT id::text FROM ticket_panels WHERE server_id=$1 AND name=$2`, serverID, panelName).Scan(&panelID); err != nil {
 		return err
 	}
 	status := migrateutil.String(doc["status"])
@@ -565,17 +615,7 @@ func writeOpenTicket(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 			NULLIF($10, ''), NULLIF($11, ''), $12,
 			COALESCE($13, now()), $14
 		)
-		ON CONFLICT (channel_id) DO UPDATE SET
-			server_id = EXCLUDED.server_id,
-			number = EXCLUDED.number,
-			panel_id = EXCLUDED.panel_id,
-			applicant_accounts = EXCLUDED.applicant_accounts,
-			applicant_user_id = EXCLUDED.applicant_user_id,
-			thread_id = EXCLUDED.thread_id,
-			status = EXCLUDED.status,
-			naming_convention = EXCLUDED.naming_convention,
-			assigned_clan_tag = EXCLUDED.assigned_clan_tag,
-			opted_in_user_ids = EXCLUDED.opted_in_user_ids
+		ON CONFLICT (channel_id) DO NOTHING
 	`, stableUUID("ticket", serverID+"\x00"+channelID), serverID, channelID,
 		max(1, migrateutil.Int(doc["number"])), panelID, accounts,
 		firstSettingString(doc["user"], doc["user_id"]),
@@ -640,20 +680,29 @@ func timeFromMongoDocument(doc bson.M) any {
 
 func reminderMinutes(value any) int {
 	raw := strings.TrimSpace(strings.ToLower(migrateutil.String(value)))
-	raw = strings.TrimSpace(strings.TrimSuffix(raw, "hr"))
+	multiplier := 60.0 // Historical unsuffixed Mongo values are hours.
+	for _, suffix := range []string{"min", "hr", "h", "m"} {
+		if strings.HasSuffix(raw, suffix) {
+			if suffix == "min" || suffix == "m" {
+				multiplier = 1
+			}
+			raw = strings.TrimSpace(strings.TrimSuffix(raw, suffix))
+			break
+		}
+	}
 	if raw == "" {
 		return 0
 	}
 	hours, err := strconv.ParseFloat(raw, 64)
-	if err != nil || hours <= 0 {
+	if err != nil || math.IsNaN(hours) || math.IsInf(hours, 0) || hours*multiplier < math.MinInt32 || hours*multiplier > math.MaxInt32 {
 		return 0
 	}
-	return int(hours*60 + 0.5)
+	return int(math.Round(hours * multiplier))
 }
 
 func reminderMinutesFromDocument(doc bson.M) int {
-	if minutes := migrateutil.Int(doc["minutes_remaining"]); minutes > 0 {
-		return minutes
+	if value, ok := doc["minutes_remaining"]; ok && value != nil {
+		return migrateutil.Int(value)
 	}
 	return reminderMinutes(doc["time"])
 }
@@ -663,11 +712,12 @@ func migrateReminders(ctx context.Context, cfg migrateutil.Config, pool interfac
 }, collection *mongo.Collection) error {
 	rows := make([][]any, 0, cfg.BatchSize)
 	flush := func() error {
-		err := flushRows(ctx, pool, "reminders", []string{"id", "server_id", "type", "type_name", "clan_tag", "webhook_token", "minutes_remaining", "channel_id", "thread_id", "trigger_time", "custom_text", "data"}, rows, []int{0}, `
-			INSERT INTO reminders (id, server_id, type, type_name, clan_tag, webhook_token, minutes_remaining, channel_id, thread_id, trigger_time, custom_text, data)
-			SELECT id::uuid, server_id, type, type_name, clan_tag, webhook_token, minutes_remaining, NULLIF(channel_id, ''), NULLIF(thread_id, ''), NULLIF(trigger_time, ''), custom_text, data::jsonb
+		columns := []string{"id", "server_id", "type", "type_name", "clan_tag", "webhook_token", "minutes_remaining", "channel_id", "thread_id", "trigger_time", "custom_text", "data", "townhalls", "roles", "war_type_names", "trigger_threshold", "point_threshold", "attack_threshold", "roster_id", "ping_type"}
+		mergeSQL := `
+			INSERT INTO reminders (id, server_id, type, type_name, clan_tag, webhook_token, minutes_remaining, channel_id, thread_id, trigger_time, custom_text, data, townhalls, roles, war_type_names, trigger_threshold, point_threshold, attack_threshold, roster_id, ping_type)
+			SELECT id::uuid, server_id, type, type_name, clan_tag, webhook_token, minutes_remaining, NULLIF(channel_id, ''), NULLIF(thread_id, ''), NULLIF(trigger_time, ''), custom_text, data::jsonb, townhalls, roles, war_type_names, trigger_threshold, point_threshold::jsonb, attack_threshold::jsonb, NULLIF(roster_id,''), NULLIF(ping_type,'')
 			FROM _ck_rows
-			WHERE server_id <> '' AND type_name <> '' AND clan_tag <> ''
+			WHERE server_id <> '' AND type_name <> '' AND (clan_tag <> '' OR (type_name='roster' AND roster_id<>''))
 			ON CONFLICT (id) DO UPDATE SET
 				server_id = EXCLUDED.server_id,
 				type = EXCLUDED.type,
@@ -680,19 +730,93 @@ func migrateReminders(ctx context.Context, cfg migrateutil.Config, pool interfac
 				trigger_time = EXCLUDED.trigger_time,
 				custom_text = EXCLUDED.custom_text,
 				data = EXCLUDED.data,
+				townhalls = EXCLUDED.townhalls,
+				roles = EXCLUDED.roles,
+				war_type_names = EXCLUDED.war_type_names,
+				trigger_threshold = EXCLUDED.trigger_threshold,
+				point_threshold = EXCLUDED.point_threshold,
+				attack_threshold = EXCLUDED.attack_threshold,
+				roster_id = EXCLUDED.roster_id,
+				ping_type = EXCLUDED.ping_type,
 				updated_at = now()
-		`)
+		`
+		if err := previewReminderImport(ctx, pool, rows, columns); err != nil {
+			return err
+		}
+		if os.Getenv("BOT_REMINDERS_DRY_RUN") == "1" {
+			rows = rows[:0]
+			return nil
+		}
+		mode := os.Getenv("BOT_REMINDERS_MERGE_EXISTING")
+		if mode != "" && mode != "reviewed" {
+			return fmt.Errorf("BOT_REMINDERS_MERGE_EXISTING must be empty or reviewed")
+		}
+		if mode != "reviewed" {
+			mergeSQL = strings.Split(mergeSQL, "ON CONFLICT (id)")[0] + "ON CONFLICT (id) DO NOTHING"
+		}
+		err := flushRows(ctx, pool, "reminders", columns, rows, []int{0}, mergeSQL)
 		if err == nil {
 			rows = rows[:0]
 		}
 		return err
 	}
 	seen, err := migrateutil.StreamAll(ctx, cfg, "reminders", collection, func(doc bson.M) (bool, error) {
+		typeName := migrateutil.String(doc["type"])
+		// Skip retired configurations so a legacy import cannot restore them.
+		if strings.EqualFold(typeName, "inactivity") {
+			return false, nil
+		}
+		typeID := map[string]int{"War": 1, "Clan Capital": 2, "Clan Games": 3, "roster": 5}[typeName]
+		if typeID == 0 {
+			return false, fmt.Errorf("unsupported reminder type %q", typeName)
+		}
+		townhalls := []int{}
+		for _, value := range migrateutil.Slice(firstSettingValue(doc["townhall_filter"], doc["townhalls"])) {
+			townhalls = append(townhalls, migrateutil.Int(value))
+		}
+		warTypes := stringSlice(firstSettingValue(doc["types"], doc["war_types"]))
+		for i, value := range warTypes {
+			warTypes[i] = strings.ToLower(value)
+		}
+		roles := stringSlice(doc["roles"])
+		for i, value := range roles {
+			switch strings.ToLower(strings.ReplaceAll(value, "-", "")) {
+			case "member":
+				roles[i] = "member"
+			case "elder", "admin":
+				roles[i] = "admin"
+			case "coleader":
+				roles[i] = "coLeader"
+			case "leader":
+				roles[i] = "leader"
+			default:
+				return false, fmt.Errorf("unsupported reminder clan role %q", value)
+			}
+		}
+		var pointThreshold, attackThreshold, threshold any
+		if value := doc["point_threshold"]; value != nil {
+			pointThreshold = migrateutil.Int(value)
+		} else if typeName == "Clan Games" {
+			pointThreshold = 4000
+		}
+		if value := doc["attack_threshold"]; value != nil {
+			attackThreshold = migrateutil.Int(value)
+		} else if typeName == "Clan Capital" {
+			attackThreshold = 1
+		}
+		threshold = pointThreshold
+		if typeName == "Clan Capital" {
+			threshold = attackThreshold
+		}
+		pingType := migrateutil.String(doc["ping_type"])
+		if typeName == "roster" && pingType == "" {
+			pingType = "All Roster Members"
+		}
 		rows = append(rows, []any{
 			stableUUID("reminder", migrateutil.String(doc["_id"])),
 			migrateutil.String(doc["server"]),
-			migrateutil.Int(doc["type"]),
-			migrateutil.String(doc["type"]),
+			typeID,
+			typeName,
 			migrateutil.String(doc["clan"]),
 			migrateutil.String(doc["webhook_token"]),
 			reminderMinutesFromDocument(doc),
@@ -701,11 +825,121 @@ func migrateReminders(ctx context.Context, cfg migrateutil.Config, pool interfac
 			migrateutil.String(doc["time"]),
 			migrateutil.String(doc["custom_text"]),
 			migrateutil.RawJSON(doc),
+			townhalls, roles, warTypes, threshold,
+			reminderJSONThreshold(pointThreshold), reminderJSONThreshold(attackThreshold),
+			reminderRosterID(firstSettingValue(doc["roster_id"], doc["roster"])), pingType,
 		})
 		return len(rows) >= cfg.BatchSize, nil
 	}, flush)
 	fmt.Printf("settings.reminders: scanned_docs=%d\n", seen)
 	return err
+}
+
+// Report field names only: the dry run never logs webhook credentials or
+// message contents and performs no SQL mutations.
+func previewReminderImport(ctx context.Context, pool interface {
+	Begin(context.Context) (pgx.Tx, error)
+}, rows [][]any, columns []string) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "SET TRANSACTION READ ONLY"); err != nil {
+		return err
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row[0].(string))
+	}
+	current, err := tx.Query(ctx, `SELECT id::text,to_jsonb(r)-'data'-'created_at'-'updated_at' FROM reminders r WHERE id=ANY($1::uuid[])`, ids)
+	if err != nil {
+		return err
+	}
+	stored := map[string]map[string]any{}
+	for current.Next() {
+		var id string
+		var raw []byte
+		if err := current.Scan(&id, &raw); err != nil {
+			current.Close()
+			return err
+		}
+		var value map[string]any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			current.Close()
+			return err
+		}
+		stored[id] = value
+	}
+	current.Close()
+	if err := current.Err(); err != nil {
+		return err
+	}
+	changes := []map[string]any{}
+	for _, row := range rows {
+		id := row[0].(string)
+		existing, found := stored[id]
+		if !found {
+			continue
+		}
+		fields := []string{}
+		for index, column := range columns {
+			if column == "id" || column == "data" {
+				continue
+			}
+			value := row[index]
+			if column == "point_threshold" || column == "attack_threshold" {
+				if raw, ok := value.(string); ok {
+					if err := json.Unmarshal([]byte(raw), &value); err != nil {
+						return err
+					}
+				}
+			}
+			if column == "channel_id" || column == "thread_id" || column == "trigger_time" || column == "roster_id" || column == "ping_type" {
+				if value == "" {
+					value = nil
+				}
+			}
+			raw, err := json.Marshal(value)
+			if err != nil {
+				return err
+			}
+			var normalized any
+			if err := json.Unmarshal(raw, &normalized); err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(existing[column], normalized) {
+				fields = append(fields, column)
+			}
+		}
+		if len(fields) > 0 {
+			changes = append(changes, map[string]any{"id": id, "fields": fields})
+		}
+	}
+	report, _ := json.Marshal(map[string]any{"new": len(rows) - len(stored), "existing": len(stored), "changes": changes, "existingRowsPreserved": os.Getenv("BOT_REMINDERS_MERGE_EXISTING") != "reviewed"})
+	fmt.Println("settings.reminders.diff:", string(report))
+	return nil
+}
+
+func reminderJSONThreshold(value any) any {
+	if value == nil {
+		return nil
+	}
+	return migrateutil.RawJSON(value)
+}
+
+func reminderRosterID(value any) string {
+	legacyID := migrateutil.String(value)
+	if legacyID == "" {
+		return ""
+	}
+	if _, err := uuid.Parse(legacyID); err == nil {
+		return legacyID
+	}
+	return stableUUID("roster", legacyID)
 }
 
 func migrateGiveaways(ctx context.Context, cfg migrateutil.Config, pool interface {
@@ -879,6 +1113,10 @@ func flushRows(ctx context.Context, pool interface {
 	if table == "reminders" {
 		defs[2] = "type int"
 		defs[6] = "minutes_remaining int"
+		defs[12] = "townhalls integer[]"
+		defs[13] = "roles text[]"
+		defs[14] = "war_type_names text[]"
+		defs[15] = "trigger_threshold integer"
 	}
 	if _, err := tx.Exec(ctx, "CREATE TEMP TABLE _ck_rows ("+strings.Join(defs, ", ")+") ON COMMIT DROP"); err != nil {
 		return err

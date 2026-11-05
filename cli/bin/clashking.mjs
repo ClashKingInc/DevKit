@@ -14,7 +14,7 @@ const [command,...args]=process.argv.slice(2);
 process.umask(0o077);
 const help=`clashking init <folder> [--repo name=/existing/checkout ...]
 clashking doctor | status | logs <service>
-clashking run <proxy|api|gateway|bot|dashboard|app|tunnel>
+clashking run <proxy|api|gateway|bot|dashboard|assistant|app|tunnel>
 clashking up [service ...] | down [service ...]
 clashking bot sync-commands
 clashking repos clone
@@ -47,10 +47,10 @@ async function main(){
   }return;
  }
  if(command==='doctor'){
-  let failed=false;for(const tool of ['node','git','docker','go','goose','gpg','cloudflared']){const r=spawnSync(tool,tool==='go'?['version']:tool==='docker'?['info','--format','{{.ServerVersion}}']:['--version'],{encoding:'utf8',env:inheritedEnvironment()});const okay=!r.error&&r.status===0;console.log(`${okay?'OK':'UNAVAILABLE'} ${tool}`);if(!okay)failed=true;}
+  let failed=false;for(const tool of ['node','git','docker','go','goose','gpg','cloudflared',...(w.config.proxySsh?['ssh']:[])]){const r=spawnSync(tool,tool==='go'?['version']:tool==='docker'?['info','--format','{{.ServerVersion}}']:tool==='ssh'?['-V']:['--version'],{encoding:'utf8',env:inheritedEnvironment()});const okay=!r.error&&r.status===0;console.log(`${okay?'OK':'UNAVAILABLE'} ${tool}`);if(!okay)failed=true;}
   if(Number(process.versions.node.split('.')[0])<26)console.log('WARNING: CLI supports this Node version, but Dashboard declares Node >=26.1.0');
   for(const [name,path]of Object.entries(w.config.repositories)){const okay=existsSync(join(path,'.git'));console.log(`${okay?'OK':'MISSING'} ${name}: ${path}`);if(!okay)failed=true;}
-  for(const key of ['DISCORD_CLIENT_ID','DISCORD_CLIENT_SECRET','DISCORD_BOT_TOKEN','DISCORD_PUBLIC_KEY','COC_KEYS']){console.log(`${w.env[key]?'SET':'MISSING'} ${key}`);if(!w.env[key])failed=true;}
+  for(const key of ['DISCORD_CLIENT_ID','DISCORD_CLIENT_SECRET','DISCORD_BOT_TOKEN','DISCORD_PUBLIC_KEY',...(w.config.proxySsh?[]:['COC_KEYS'])]){console.log(`${w.env[key]?'SET':'MISSING'} ${key}`);if(!w.env[key])failed=true;}
   console.log(`Database: 127.0.0.1:${w.env.TIMESCALE_PORT}/${w.env.TIMESCALE_DATABASE}\nAPI: ${w.env.CLASHKING_API_ORIGIN}\nDashboard: ${w.env.CLASHKING_DASHBOARD_ORIGIN}`);
   console.log('App uses its repository process manager (bash/tmux; Windows requires WSL). No trackers are started.');if(failed)process.exitCode=1;return;
  }
