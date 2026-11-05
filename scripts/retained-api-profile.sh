@@ -51,4 +51,5 @@ fixture_sources=(
   055_clash_maintenance_log.sql
   056_autoboard_refresh_policy.sql
   057_account_avatar.sql
+  058_giveaway_collection_shapes.sql
 )
