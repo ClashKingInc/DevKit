@@ -26,6 +26,6 @@ SELECT
         pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)
     ) AS retained_wal
 FROM pg_replication_slots
-WHERE slot_name LIKE '%clashking_players_v1'
-   OR slot_name LIKE '%clashking_clans_v1'
+WHERE slot_name LIKE '%clashking_players_v%'
+   OR slot_name LIKE '%clashking_clans_v%'
 ORDER BY slot_name;
