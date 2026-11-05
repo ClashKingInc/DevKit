@@ -1,3 +1,5 @@
 *
 !Dockerfile
 !schema.json
+!patch_logical_slot.py
+!resume_initial.py

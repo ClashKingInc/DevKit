@@ -40,3 +40,20 @@ jobs:
 
       - name: Validate repository
         run: scripts/validate-repository.sh
+
+  pgsync-services:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: database/go.mod
+      - name: Install Goose
+        run: go install github.com/pressly/goose/v3/cmd/goose@latest
+      - name: Build pinned PGSync with reviewed catch-up patch
+        run: docker build -t clashking/pgsync:single-pass-local database/pgsync
+      - name: Verify real database, cache, search and PGSync recovery
+        env:
+          CLASHKING_FIXTURE_LOGICAL_WAL: "1"
+        run: bash scripts/with-test-integration.sh --profile retained-api -- python3 scripts/pgsync-service-smoke.py

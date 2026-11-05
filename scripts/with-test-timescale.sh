@@ -113,6 +113,16 @@ for fixture_source in "${fixture_sources[@]}"; do
   cp -- "$fixture_root/database/timescale/$fixture_source" "$fixture_migrations/$fixture_source"
 done
 
+fixture_postgres_args=()
+if [[ ${CLASHKING_FIXTURE_LOGICAL_WAL:-0} == 1 ]]; then
+  # PGSync exercises real logical slots. Set this at startup so the default
+  # disposable tmpfs fixture never needs a restart that would erase its schema.
+  fixture_postgres_args=(-c wal_level=logical)
+elif [[ ${CLASHKING_FIXTURE_LOGICAL_WAL:-0} != 0 ]]; then
+  echo 'CLASHKING_FIXTURE_LOGICAL_WAL must be 0 or 1.' >&2
+  exit 2
+fi
+
 fixture_container="$(docker run --detach \
   --label "io.clashking.fixture=timescale-$fixture_run_id" \
   --label "io.clashking.fixture.run=$fixture_run_id" \
@@ -122,7 +132,7 @@ fixture_container="$(docker run --detach \
   --env POSTGRES_DB=clashking_test \
   --env POSTGRES_USER=clashking_test \
   --env POSTGRES_PASSWORD=clashking_test \
-  "$fixture_image")"
+  "$fixture_image" "${fixture_postgres_args[@]}")"
 if [[ ! $fixture_container =~ ^[a-f0-9]{64}$ ]]; then
   fixture_container=''
   echo 'Docker did not return a valid container ID; refusing an ambiguous cleanup target.' >&2

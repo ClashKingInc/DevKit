@@ -1,0 +1,64 @@
+# Manually deployed, evidence-gated recovery job. Use the runtime role, never owner credentials.
+# Defaults to a read-only preview; both mode and confirmation must be explicit to apply.
+name: clashking_search_recovery
+
+services:
+  pgsync-recovery:
+    image: clashking/pgsync:7.2.0-ck.1
+    build:
+      context: ./pgsync
+      dockerfile: Dockerfile
+      args:
+        PGSYNC_VERSION: "7.2.0"
+        PGSYNC_GIT_REF: d438650e6b6a046505e847a604d5be0e9338f2d6
+    container_name: clashking-search-pgsync-recovery
+    restart: "no"
+    entrypoint: ["python", "/opt/clashking/resume_initial.py"]
+    command:
+      - --config
+      - /config/schema.json
+      - --index
+      - ${PGSYNC_RECOVERY_INDEX:?exact index required}
+      - --expect-database
+      - ${POSTGRES_DB}
+      - --expect-host
+      - ${PG_HOST}
+      - --expect-system-id
+      - ${PGSYNC_RECOVERY_SYSTEM_ID:?cluster identity required}
+      - --expect-index-count
+      - ${PGSYNC_RECOVERY_INDEX_COUNT:?observed count required}
+      - --through-xid
+      - ${PGSYNC_RECOVERY_XID:?observed forward-pass xid required}
+      - --through-lsn
+      - ${PGSYNC_RECOVERY_LSN:?observed forward-pass lsn required}
+      - --mode
+      - ${PGSYNC_RECOVERY_MODE:-preview}
+      - --forward-pass-confirmation
+      - ${PGSYNC_RECOVERY_CONFIRMATION:-unconfirmed}
+    environment:
+      PG_DRIVER: psycopg2
+      PG_HOST: ${PG_HOST}
+      PG_PORT: ${PG_PORT}
+      POSTGRES_DB: ${POSTGRES_DB}
+      PG_USER: ${PG_USER}
+      PG_PASSWORD: ${PG_PASSWORD}
+      PG_SSLMODE: ${PG_SSLMODE}
+      ELASTICSEARCH: "true"
+      ELASTICSEARCH_HOST: ${ELASTICSEARCH_HOST}
+      ELASTICSEARCH_PORT: ${ELASTICSEARCH_PORT}
+      ELASTICSEARCH_SCHEME: ${ELASTICSEARCH_SCHEME}
+      ELASTICSEARCH_API_KEY_ID: ${ELASTICSEARCH_API_KEY_ID}
+      ELASTICSEARCH_API_KEY: ${ELASTICSEARCH_API_KEY}
+      ELASTICSEARCH_RAISE_ON_ERROR: "true"
+      ELASTICSEARCH_RAISE_ON_EXCEPTION: "true"
+      ELASTICSEARCH_STREAMING_BULK: "true"
+      ELASTICSEARCH_CHUNK_SIZE: "2000"
+      ELASTICSEARCH_MAX_RETRIES: "5"
+      REDIS_CHECKPOINT: "true"
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_DB: "1"
+      REDIS_AUTH: ${REDIS_AUTH}
+      SQLALCHEMY_POOL_SIZE: "4"
+      SQLALCHEMY_MAX_OVERFLOW: "4"
+      NUM_WORKERS: "2"

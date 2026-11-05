@@ -378,3 +378,77 @@ deployment. The process runs `bootstrap --config /config/schema.json`, exits,
 and has no restart policy. Confirm exit code zero and both v2 slots before
 starting the existing daemon application. Remove the owner references from the
 completed bootstrap application after recording its result.
+
+
+### Single-pass WAL catch-up
+
+The pinned upstream 7.2.0 implementation counts the logical-slot result and then
+queries each page with SQL `LIMIT`/`OFFSET`. PostgreSQL decodes the retained WAL
+again for each query. This becomes prohibitively expensive after a large initial
+load. `patch_logical_slot.py` replaces that method at image build time and verifies
+the exact original method hash before changing it. Compose tags the patched image
+`clashking/pgsync:7.2.0-ck.1`; the upstream package remains pinned to 7.2.0. An upstream source change
+fails the build and requires review.
+
+The replacement streams one `pg_logical_slot_peek_changes` query through bounded
+5,000-row client batches. It preserves operation/table ordering and the existing
+payload, indexing, slot-consumption, and checkpoint logic. A failed parse or
+Elasticsearch bulk operation leaves the slot and checkpoint unchanged. Successful
+partial document writes can be replayed because document IDs are stable. The
+PostgreSQL set-returning function may still spool results to temporary disk; this
+patch bounds Python memory and eliminates repeated scans, not server disk usage.
+
+Run the real service recovery check with a disposable logical-WAL fixture:
+
+```bash
+docker build -t clashking/pgsync:single-pass-local database/pgsync
+CLASHKING_FIXTURE_LOGICAL_WAL=1 \
+  bash scripts/with-test-integration.sh --profile retained-api -- \
+  python3 scripts/pgsync-service-smoke.py
+```
+
+It uses canonical Goose schema, Valkey, Elasticsearch and the built PGSync image.
+It verifies more than one 5,000-row batch, a real rejected Elasticsearch write,
+unchanged slot/checkpoint on failure, one peek/consume on success, preview and
+retry, and update/delete delivery after restarting the normal CLI. It never
+accepts external endpoints or production fixtures.
+
+### Interrupted first-load recovery
+
+Do not restart an interrupted initial forward pass blindly: before its first
+checkpoint is saved, a normal restart repeats the full table scan. The optional
+`/opt/clashking/resume_initial.py` command finishes the normal catch-up phase only
+when the completed forward pass and its exact `txmax`/`upto_lsn` arguments have
+been recorded from the running `pull()` operation. It is not a substitute for
+missing evidence and must not receive a newly guessed checkpoint.
+
+1. Record the running operation, its exact XID/LSN arguments, index count,
+   PostgreSQL system identifier, current checkpoint, slot state, and free disk.
+2. Stop the daemon through Coolify and recheck that no worker uses its slot.
+3. In a manually deployed Coolify job using the patched image and the daemon's
+   existing restricted credentials, run the command without `--apply`. Supply
+   `--config`, `--index`, `--expect-database`, `--expect-host`,
+   `--expect-system-id`, `--expect-index-count`, `--through-xid`, and
+   `--through-lsn` from that evidence. The preview requires an existing valid
+   inactive slot and no prior checkpoint. It performs no bootstrap or writes.
+4. Review the preview, then repeat the exact arguments with `--apply` and
+   `--confirm-forward-pass-complete`. The command runs the normal patched
+   catch-up before saving its checkpoint; it never skips changes by assigning
+   a checkpoint directly. A failed run is retried with the same evidence.
+5. Verify completion and restart the normal patched daemon through Coolify.
+   Continue count/sample/lag validation for both indexes before alias cutover.
+
+A repeated completed invocation reports its existing checkpoint and exits. If
+another daemon has advanced the checkpoint, the slot is lost, the cluster or
+index count differs, or completion of the original forward pass is uncertain,
+stop and investigate. Do not remove a guard or invent a replacement boundary.
+
+
+`database/docker-compose.pgsync-recovery.yml` is the corresponding one-off
+Coolify job. It uses the runtime role and exits without restarting. Set its
+`PGSYNC_RECOVERY_*` identity/count/boundary values from the stopped-run evidence.
+Its default mode is `preview`. To execute the reviewed preview, explicitly set
+`PGSYNC_RECOVERY_MODE=apply` and
+`PGSYNC_RECOVERY_CONFIRMATION=completed-forward-pass`. Disable auto-deployment;
+remove the temporary job after verified recovery. Never reuse the owner-credential
+bootstrap job as an unattended recovery service.
