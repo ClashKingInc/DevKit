@@ -4,7 +4,7 @@ name: clashking_search_bootstrap
 
 services:
   pgsync-bootstrap:
-    image: clashking/pgsync:7.2.0
+    image: clashking/pgsync:7.2.0-ck.1
     build:
       context: ./pgsync
       dockerfile: Dockerfile

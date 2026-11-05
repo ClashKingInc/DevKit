@@ -15,6 +15,11 @@ RUN apt-get update \
     && python -c "from importlib.metadata import version; assert version('pgsync') == '${PGSYNC_VERSION}'" \
     && useradd --no-create-home --shell /usr/sbin/nologin --uid 10001 pgsync
 
+COPY patch_logical_slot.py resume_initial.py /opt/clashking/
+RUN python /opt/clashking/patch_logical_slot.py
+
+LABEL ing.clashking.pgsync-patch="single-pass-wal-v1"
+
 COPY --chown=10001:10001 schema.json /config/schema.json
 
 USER 10001
