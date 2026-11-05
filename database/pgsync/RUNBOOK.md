@@ -1,6 +1,6 @@
-# ClashKing staging search sync
+# ClashKing search synchronization
 
-This staging stack copies selected `basic_player` and `basic_clan` columns from
+This stack copies selected `basic_player` and `basic_clan` columns from
 PostgreSQL into Elasticsearch. PostgreSQL remains authoritative. Do not connect
 the application search API until the validation section has passed.
 
@@ -140,10 +140,10 @@ Do not start PGSync yet.
 
 Using a secret-enabled administrative client on the private network:
 
-1. `PUT /clashking_players_v1` with
-   `indexes/clashking_players_v1.json` as the body.
-2. `PUT /clashking_clans_v1` with
-   `indexes/clashking_clans_v1.json` as the body.
+1. `PUT /clashking_players_v2` with
+   `indexes/clashking_players_v2.json` as the body.
+2. `PUT /clashking_clans_v2` with
+   `indexes/clashking_clans_v2.json` as the body.
 3. `POST /_security/api_key` with `elasticsearch-api-key.json` as the body.
 4. Store the returned `id` and `api_key` in the two Coolify runtime secrets.
 
@@ -174,7 +174,7 @@ search field; `enabled: false` retains it in `_source` without parsing or
 indexing its contents.
 
 Do not give the daemon the Elasticsearch administrator password. The API key is
-restricted to the two v1 physical indexes. A separate administrative credential
+restricted to the two configured physical indexes. A separate administrative credential
 will create or switch the stable aliases only after staging validation.
 
 ## One-time PGSync bootstrap
@@ -241,8 +241,8 @@ index queryable.
 
 With Redis database `1`, each schema entry gets independent queue and checkpoint
 metadata keys derived from its database/index slot name. They have the form
-`queue:<database>_clashking_players_v1[:meta]` and
-`queue:<database>_clashking_clans_v1[:meta]`; do not share or manually copy
+`queue:<database>_clashking_players_v2[:meta]` and
+`queue:<database>_clashking_clans_v2[:meta]`; do not share or manually copy
 checkpoint metadata between them.
 
 ## Repository smoke-test result
@@ -344,3 +344,25 @@ keys, and physical index, then bootstrap the complete remaining configuration.
 An invalidated/deleted slot or an untrusted checkpoint requires a controlled
 full reindex into a new physical version. Never advance a slot or checkpoint by
 guessing.
+
+## November 5 production recovery
+
+The checked-in configuration now targets physical version v2. The original v1
+indexes are empty and both v1 slots are invalidated (`wal_removed`). Keep those
+indexes and the stable aliases unchanged until v2 has loaded and passed read-only
+comparison. Do not advance or reuse either lost checkpoint.
+
+Extend the existing PGSync key only to the two exact v2 indexes. Bootstrap the
+complete v2 configuration once with the existing database owner credential,
+then run the daemon with its existing restricted runtime role. All production
+job and service lifecycle operations go through Coolify. The bootstrap credential
+must not become the continuously running daemon credential.
+
+Five replication slots permit the two retained v1 slots, two new v2 slots, and
+the transient validation slot. Recheck actual slot inventory before execution.
+Production currently permits 150 GB retained WAL; do not replace that live value
+with the earlier staging sizing example. Monitor disk and WAL during the load.
+
+After count/sample/lag validation, switch both stable aliases atomically to v2.
+For the next rebuild, use a fresh physical version (v3), not the same v2
+checkpoints. Old artifacts are removed only after the rollback window.

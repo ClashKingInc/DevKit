@@ -1,7 +1,7 @@
 [
   {
     "database": "${POSTGRES_DB}",
-    "index": "clashking_players_v1",
+    "index": "clashking_players_v2",
     "setting": {
       "number_of_shards": 4,
       "number_of_replicas": 0,
@@ -78,7 +78,7 @@
   },
   {
     "database": "${POSTGRES_DB}",
-    "index": "clashking_clans_v1",
+    "index": "clashking_clans_v2",
     "setting": {
       "number_of_shards": 1,
       "number_of_replicas": 0,
