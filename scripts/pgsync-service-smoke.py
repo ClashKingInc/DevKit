@@ -94,6 +94,9 @@ def main():
         sql("INSERT INTO basic_clan(tag,name,public_war_log,war_wins,member_count,badge_token,troops_donated,troops_received) VALUES('#CLAN','Fixture',true,0,1,'',0,0); INSERT INTO basic_player(tag,name,townhall_level) VALUES('#BASE','Base',16);")
         pgsync(['--config', '/config/schema.json'], entrypoint='bootstrap')
         sql("INSERT INTO basic_player(tag,name,townhall_level) SELECT '#P'||i,'Player '||i,16 FROM generate_series(1,6001) i;")
+        # A deletion committed before the first forward scan is already absent
+        # from the new index. Replaying its WAL delete must remain successful.
+        sql("INSERT INTO basic_player(tag,name,townhall_level) VALUES('#GONE','Deleted before snapshot',16); DELETE FROM basic_player WHERE tag='#GONE';")
         system_id = sql('SELECT system_identifier FROM pg_control_system();')
         # Run the exact forward half of PGSync.pull, then exit as an interrupted
         # process would. The recovery CLI must complete that same observed range.

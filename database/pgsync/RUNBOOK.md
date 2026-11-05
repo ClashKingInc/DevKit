@@ -387,7 +387,7 @@ queries each page with SQL `LIMIT`/`OFFSET`. PostgreSQL decodes the retained WAL
 again for each query. This becomes prohibitively expensive after a large initial
 load. `patch_logical_slot.py` replaces that method at image build time and verifies
 the exact original method hash before changing it. Compose tags the patched image
-`clashking/pgsync:7.2.0-ck.1`; the upstream package remains pinned to 7.2.0. An upstream source change
+`clashking/pgsync:7.2.0-ck.2`; the upstream package remains pinned to 7.2.0. An upstream source change
 fails the build and requires review.
 
 The replacement streams one `pg_logical_slot_peek_changes` query through bounded
@@ -468,3 +468,20 @@ Do not advance or drop the slot. Recheck validity and inactivity before preview.
 A completed one-off container can temporarily retain a running/excluded Coolify
 status; inspect its actual exit code and output, then finish it through Coolify
 before starting the next mode.
+
+
+### Replayed deletions in a fresh index
+
+A retained WAL deletion can refer to a document that was already absent when
+its new index was built. Elasticsearch returns a delete result with status404
+and `result=not_found`. PGSync's upstream streaming helper treats this as a
+fatal bulk error. `patch_bulk_deletes.py` accepts only that exact successful
+end state: operation `delete`, status404, `result=not_found`, and no error object.
+Missing-index errors, update failures, mapping errors, authorization failures
+and all other bulk errors still stop catch-up before checkpointing. The image
+build verifies the pinned upstream initializer hash before applying this patch.
+
+The real service check includes a row deleted before the initial forward scan,
+so its first WAL replay must handle an already-absent document. The recovery CLI
+prints only aggregate operation/status/error-type metadata on a bulk failure;
+it does not print source documents or values embedded in error reasons.

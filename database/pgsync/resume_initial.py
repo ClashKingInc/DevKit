@@ -1,6 +1,9 @@
 """Finish an interrupted initial forward pass without guessing a checkpoint."""
 import argparse
 import json
+import logging
+from collections import Counter
+from elasticsearch.helpers import BulkIndexError
 import os
 import re
 import sqlalchemy as sa
@@ -69,7 +72,20 @@ def main():
     # These are the exact arguments observed in the interrupted pull(), not a
     # newly chosen horizon. The normal method indexes before consuming the slot
     # and setting its checkpoint. Failures remain retryable from the same slot.
-    sync.logical_slot_changes(txmin=None, txmax=args.through_xid, upto_lsn=args.through_lsn)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    try:
+        sync.logical_slot_changes(txmin=None, txmax=args.through_xid, upto_lsn=args.through_lsn)
+    except BulkIndexError as error:
+        # Error metadata is sufficient for operations; never print source docs,
+        # player names, IDs, or an Elasticsearch reason containing field values.
+        failures = Counter()
+        for item in error.errors:
+            operation, result = next(iter(item.items()))
+            detail = result.get('error') or {}
+            error_type = detail.get('type') if isinstance(detail, dict) else 'unknown'
+            failures[(operation, result.get('status'), error_type, result.get('result'))] += 1
+        print(json.dumps({'failed_bulk': [dict(operation=k[0], status=k[1], error_type=k[2], result=k[3], count=v) for k, v in failures.items()]}), flush=True)
+        raise
     if sync.checkpoint != args.through_xid:
         raise RuntimeError('Catch-up did not persist its expected checkpoint')
     print(json.dumps({'index': args.index, 'complete': True, 'checkpoint': sync.checkpoint}))
