@@ -332,6 +332,11 @@ go run migrations/reminder_webhooks.go
 REMINDER_WEBHOOKS_APPLY=1 go run migrations/reminder_webhooks.go
 ```
 
+The command retains unavailable Discord destinations unchanged and reports their
+count separately. HTTP 403/404 on one destination does not block other rows.
+Explicit rate-limit rejections are retried within the provider delay; ambiguous
+transport failures stop the run so webhook creation is never blindly repeated.
+
 The first command is read-only. The apply command resolves each parent channel,
 reuses an existing incoming webhook owned by the bot, creates one only when none
 exists, and saves its ID. Threads share their parent's hook. The server-row lock
