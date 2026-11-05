@@ -29,7 +29,7 @@ try{
  const binary=join(temp,'repair'),source=join(temp,'source.json'),working=join(temp,'workspace','database');
  await mkdir(join(working,'timescale'),{recursive:true});
  await writeFile(join(temp,'workspace','.env'),'');await writeFile(join(working,'timescale','001_initial_stats.sql'),'');
- await writeFile(source,JSON.stringify([{server_id:guild,destination_id:thread,role_id:role,accounts:['Recruiter']} ]));
+ await writeFile(source,JSON.stringify([{server_id:guild,destination_id:thread,role_id:role,accounts:['Recruiter','r/legacy-value']} ]));
  await sql(`INSERT INTO servers(id,name) VALUES('${guild}','Reddit repair')`);
  await exec('go',['build','-o',binary,'migrations/reddit_feeds.go'],{cwd:resolve('database')});
  const env={...process.env,TIMESCALE_URL:dsn,BOT_TOKEN:'fixture',REDDIT_DISCORD_API_URL:`http://127.0.0.1:${provider.address().port}`,REDDIT_EXPECTED_APPLICATION_ID:app,REDDIT_FEEDS_SOURCE:source,REDDIT_FEEDS_APPLY:'0'};
@@ -38,6 +38,7 @@ try{
  await run({REDDIT_FEEDS_APPLY:'1'});
  assert.equal(await sql(`SELECT webhook_id||':'||thread_id||':'||reddit_role_id||':'||reddit_accounts[1] FROM server_logs WHERE server_id='${guild}'`),`${hookID}:${thread}:${role}:Recruiter`);
  await run({REDDIT_FEEDS_APPLY:'1'});assert.equal(creates,0);
+ assert.equal(await sql(`SELECT reddit_accounts[2] FROM server_logs WHERE server_id='${guild}'`),'r/legacy-value');
  await sql(`UPDATE server_logs SET reddit_accounts=ARRAY['Newer'] WHERE server_id='${guild}'`);
  assert.match((await run({REDDIT_FEEDS_APPLY:'1'})).stdout,/conflicts=1/u);assert.equal(await sql(`SELECT reddit_accounts[1] FROM server_logs WHERE server_id='${guild}'`),'Newer');
  await sql(`DELETE FROM server_logs WHERE server_id='${guild}'`);available=false;

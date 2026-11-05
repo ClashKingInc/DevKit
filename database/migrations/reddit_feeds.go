@@ -150,8 +150,11 @@ func runRedditFeeds(ctx context.Context, cfg migrateutil.Config) error {
 		}
 		ids[r.ServerID] = true
 		for _, a := range r.Accounts {
+			// Preserve malformed legacy account values instead of inventing a
+			// username or discarding an otherwise valid feed. Exact author
+			// matching leaves these inert until the owner corrects them.
 			if !username.MatchString(a) {
-				return fmt.Errorf("invalid source Reddit account for server %s", r.ServerID)
+				fmt.Printf("server %s: malformed legacy account retained for review\n", r.ServerID)
 			}
 		}
 	}
