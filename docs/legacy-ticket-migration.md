@@ -30,30 +30,16 @@ matching files are skipped on repeat runs. HTML downloads discover transcript
 attachment URLs within the same bounded run. `--report FILE` records failures
 explicitly. There is no R2 upload, CDN write/delete, or SQL update path.
 
-Three real historical closed-ticket URLs were inventoried in this task and all
-returned 404. Those objects were not copied and must not be reported as migrated.
-The report is `/tmp/clashking-real-ticket-media-report.json`.
+## Transcript recovery boundary
 
-## November 3, 2026 follow-up: bounded recovery sample
+Inventory retained ticket channel/thread IDs and any orphaned storage objects
+before copying historical transcripts. Preserve content hashes and a
+source-to-destination manifest. Keep missing objects explicit; a failed HEAD
+request alone does not prove deletion.
 
-A read-only sample of the 20 most recent retained `delete` ticket records from
-`usafam.open_tickets` yielded 20 transcript URLs. All 20 HTML documents and
-18 referenced attachments were downloaded to private local staging (65,059,085
-bytes). All source receipts and SHA-256 hashes matched; the HTML contained
-chat-exporter message markup. This is sample evidence, not a full inventory.
-The earlier three 404s are not representative of all historical transcripts.
-
-The locally configured Bunny storage credential returned HTTP 401 for the
-root listing, so no full storage inventory was possible. The public CDN GET
-path worked for the sample. No upload, SQL update, Discord change, or CDN
-change was performed. Private evidence is in `/tmp/ck-legacy-followup/`; it is
-temporary staging, not a durable backup or a release artifact.
-
-A full migration must enumerate retained ticket channel/thread IDs and inventory
-storage for orphaned transcripts if valid read credentials become available.
-Copy HTML and attachments with hashes and a source-to-destination manifest.
-Keep missing objects explicit; do not infer deletion from a failed HEAD alone.
-Existing API HTML serving requires a capability, manifest and ownership metadata;
-copying raw files into the bucket is not enough. Legacy HTML also needs a reviewed
-archive-serving or conversion path with attachment rewrites and appropriate
-content restrictions. Retain the source until migration acceptance.
+Existing API HTML serving requires capability checks, a manifest, and ownership
+metadata. Copying raw files into the bucket is not sufficient. Legacy HTML needs
+a reviewed archive-serving or conversion path, attachment rewrites, and the
+current content restrictions. Retain the source until migration acceptance.
+Local samples and temporary download directories are not durable backups or
+proof that the historical archive has migrated.

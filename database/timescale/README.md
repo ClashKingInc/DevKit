@@ -60,7 +60,7 @@ Migration 008 adds one-year farming history, two-perspective Ranked/Legend histo
 
 Migration 009 adds permanent normal-PostgreSQL rollups for league hit rates, Ranked tier populations, Legend daily item usage, and immutable army-family assignments. It does not add a Ranked group parent table, item presence registry, prefix tables, or compression policies for rollups. See [the complete storage contract](../../docs/ranked-battle-history.md).
 
-Migration 016 removes the rejected CWL season-statistics table, reconciliation procedure, and JSON validator while leaving the canonical CWL group, clan, and member tables unchanged. Migration 009's public war and league rollups are unrelated and remain available. See [the cross-repository removal contract](../../docs/cwl-season-statistics-removal.md).
+Migration 016 removes the rejected CWL season-statistics table, reconciliation procedure, and JSON validator while leaving the canonical CWL group, clan, and member tables unchanged. Migration 009's public war and league rollups are unrelated and remain available. Consumers must not call the removed reconciliation procedure.
 
 Migration 017 is the irreversible final contract: numeric battle codes, non-null smallint durations, share-code composition/family identity, cohort-keyed unsuffixed aggregates, compact current/daily leaderboard storage, user-level notification preferences, and relational bigint bases. See [the consumer contract](../../docs/final-operational-contract.md) and [the battle contract](../../docs/ranked-battle-history.md).
 
@@ -209,8 +209,9 @@ The extension also adds nullable `basic_player.last_active` and the bounded
 It also removes inactivity reminder configurations (numeric type 4 or the
 case-insensitive name `inactivity`) and prevents their reintroduction. Export
 those rows before production application if their configuration must be recoverable.
-Player activity and online history remain available. The unpublished standalone
-023 migration has been folded into 022; there is no production migration 023.
+Player activity and online history remain available. The former unpublished extension files were folded into 022. The current
+023 migration adds war triple streaks; use the explicit retained profile inventory
+in `scripts/retained-api-profile.sh` for subsequent migrations.
 
 The consolidated migration refuses Down because reversing it would lose data.
 Use a verified backup or a reviewed forward migration for rollback.
@@ -274,7 +275,7 @@ differing field names without writing SQL. After reviewing the differences,
 source. Scope a local rehearsal with `MIGRATION_LIMIT_DOCS` and a local
 `TIMESCALE_URL`; source connections remain read-only.
 Do not use the former 007–028 fixture numbering. See
-[the schema decisions](../../docs/worker-api-schema.md),
+the numbered migrations,
 [the disposable upgrade test](../../RETAINED_API_FIXTURE.md).
 
 Migration 013 replaces the Ranked/Legend primary key without deleting data. Migration 014 and the bounded cleanup prepare nullable defense loot; migration 015 is the temporary compatibility bridge. Migration 017 removes that bridge, maps legacy NULL duration to zero, and requires coordinated final writers before ingestion resumes.
