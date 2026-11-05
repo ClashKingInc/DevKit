@@ -26,9 +26,11 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/schema-smoke.sh
       - name: Verify a clean full schema and repeat migration
         run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/schema-smoke.sh
-      - name: Convert legacy donation-log records
+      - name: Preserve duplicate legacy ticket actions during upgrade
+        run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/ticket-duplicate-upgrade-smoke.sh
+      - name: Retire legacy donation-log records
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/donation-log-migration-smoke.sh
-      - name: Import legacy donation destinations into autoboards
+      - name: Skip retired donation destinations during import
         run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/donation-log-import-smoke.sh
       - name: Backfill recorded Legend streaks
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/legend-streak-migration-smoke.sh

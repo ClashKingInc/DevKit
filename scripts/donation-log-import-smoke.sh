@@ -61,8 +61,7 @@ mkdir -p "$run_dir/database/timescale"
 touch "$run_dir/database/timescale/001_initial_stats.sql" "$run_dir/.env"
 (cd "$run_dir/database" && env -i PATH="$PATH" HOME="$HOME" TIMESCALE_URL="$TEST_DATABASE_URL" STATIC_MONGODB="$mongo" STATS_MONGODB="$mongo" "$run_dir/server-settings")
 (cd "$run_dir/database" && env -i PATH="$PATH" HOME="$HOME" TIMESCALE_URL="$TEST_DATABASE_URL" STATIC_MONGODB="$mongo" STATS_MONGODB="$mongo" "$run_dir/server-clans")
-# Clan imports may be retried during a cutover. Existing matching boards must
-# not multiply or replace the new board's message identity on a retry.
+# A retry must not recreate retired donation settings or create AutoBoards.
 (cd "$run_dir/database" && env -i PATH="$PATH" HOME="$HOME" TIMESCALE_URL="$TEST_DATABASE_URL" STATIC_MONGODB="$mongo" STATS_MONGODB="$mongo" "$run_dir/server-clans")
 psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
 DO $$ BEGIN
@@ -74,9 +73,7 @@ DO $$ BEGIN
  IF NOT EXISTS(SELECT 1 FROM servers WHERE id='99990004' AND auto_role_treatment='both' AND cardinality(auto_role_blacklist_ids)=0) THEN RAISE EXCEPTION 'Default policy import failed'; END IF;
  IF NOT EXISTS(SELECT 1 FROM server_clans WHERE server_id='99990002' AND tag='#PYLQ' AND war_events_enabled) THEN RAISE EXCEPTION 'War event opt-in not preserved'; END IF;
  IF EXISTS(SELECT 1 FROM server_logs WHERE type='donation_log') THEN RAISE EXCEPTION 'Importer recreated donation log'; END IF;
- IF (SELECT count(*) FROM autoboards WHERE server_id='99990002')<>2 THEN RAISE EXCEPTION 'Missing or duplicated imported board'; END IF;
- IF NOT EXISTS(SELECT 1 FROM autoboards WHERE server_id='99990002' AND webhook_id='999902' AND thread_id='999912' AND target_scope='family' AND enabled AND message_id IS NULL) THEN RAISE EXCEPTION 'Family destination not preserved'; END IF;
- IF NOT EXISTS(SELECT 1 FROM autoboards a JOIN autoboard_targets t ON t.autoboard_id=a.id WHERE a.server_id='99990002' AND a.webhook_id='999903' AND a.thread_id='999913' AND NOT a.enabled AND t.target='#PYLQ') THEN RAISE EXCEPTION 'Disabled clan destination not preserved'; END IF;
+ IF EXISTS(SELECT 1 FROM autoboards WHERE server_id='99990002') THEN RAISE EXCEPTION 'Importer created an unsolicited board'; END IF;
 END $$;
 SQL
-printf 'Legacy donation importer E2E passed: actual Mongo documents -> server/clan migration programs -> donation autoboards; retry did not duplicate boards.\n'
+printf 'Legacy donation importer E2E passed: actual Mongo documents -> server/clan migration programs -> no donation logs or replacement AutoBoards, including after retry.\n'

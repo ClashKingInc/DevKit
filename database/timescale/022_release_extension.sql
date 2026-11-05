@@ -918,15 +918,6 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'ticket panel component is missing a valid custom_id or contains an invalid UUID id';
     END IF;
-    IF EXISTS (
-        SELECT 1
-        FROM public.ticket_panels p
-        CROSS JOIN LATERAL jsonb_array_elements(p.components) component
-        GROUP BY p.server_id, p.name, component->>'custom_id'
-        HAVING count(*) > 1
-    ) THEN
-        RAISE EXCEPTION 'ticket panel contains duplicate component custom_id values';
-    END IF;
 END
 $$;
 -- +goose StatementEnd
@@ -974,9 +965,16 @@ CREATE TEMP TABLE ticket_component_identity (
 
 WITH identity_candidates AS (
     SELECT panel.id AS panel_id, component.ordinality, component.value->>'custom_id' AS legacy_custom_id,
-           COALESCE(legacy.id,
+           -- Python allowed several visual buttons to invoke one action ID.
+           -- Preserve every label/style/emoji and clone that action's settings.
+           -- Only its first occurrence reuses the normalized identity; aliases
+           -- keep old Discord messages routed to the same shared action.
+           CASE WHEN row_number() OVER (
+               PARTITION BY panel.id, component.value->>'custom_id'
+               ORDER BY component.ordinality
+           ) = 1 THEN COALESCE(legacy.id,
                CASE WHEN component.value ? 'id' THEN (component.value->>'id')::uuid END,
-               uuidv7()) AS button_id
+               uuidv7()) ELSE uuidv7() END AS button_id
     FROM public.ticket_panels panel
     CROSS JOIN LATERAL jsonb_array_elements(panel.components) WITH ORDINALITY component(value, ordinality)
     LEFT JOIN public.ticket_panel_buttons legacy
@@ -1032,10 +1030,22 @@ WITH rewritten AS (
       ON component.ordinality = identity.ordinal
     GROUP BY panel.id
 )
+, aliases AS (
+    SELECT panel_id, jsonb_object_agg(legacy_custom_id, custom_id) AS mapping
+    FROM (
+        SELECT DISTINCT ON (panel_id, legacy_custom_id)
+            panel_id, legacy_custom_id, custom_id
+        FROM ticket_component_identity
+        ORDER BY panel_id, legacy_custom_id, ordinal
+    ) first_actions
+    GROUP BY panel_id
+)
 UPDATE public.ticket_panels panel
 SET components = rewritten.components,
     data = (panel.data - rewritten.old_settings_keys) || rewritten.moved_settings
-FROM rewritten
+        || jsonb_build_object('legacy_button_ids',
+            COALESCE(panel.data->'legacy_button_ids', '{}'::jsonb) || aliases.mapping)
+FROM rewritten JOIN aliases ON aliases.panel_id = rewritten.panel_id
 WHERE panel.id = rewritten.panel_id;
 
 -- +goose StatementBegin

@@ -153,13 +153,9 @@ func writeServerClanDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 		return err
 	}
 	for logType, raw := range logs {
+		// Donation event logs are retired. Never turn an old destination into
+		// an AutoBoard: opting into that separate feature is a user decision.
 		if logType == "donations" || logType == "donation_log" {
-			log := migrateutil.Map(raw)
-			if webhookID := migrateutil.String(log["webhook"]); webhookID != "" {
-				if err := migrateutil.ImportDonationAutoboard(ctx, tx, serverID, clanTag, webhookID, migrateutil.String(log["thread"]), clanLogDisabled(log)); err != nil {
-					return err
-				}
-			}
 			continue
 		}
 		logType = canonicalClanLogType(logType)

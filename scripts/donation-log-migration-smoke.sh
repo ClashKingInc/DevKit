@@ -18,10 +18,7 @@ goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_UR
 psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
 DO $$ BEGIN
  IF EXISTS(SELECT 1 FROM server_logs WHERE type='donation_log') THEN RAISE EXCEPTION 'Old donation log remains'; END IF;
- IF (SELECT count(*) FROM autoboards WHERE server_id='99990001' AND board_type='donations')<>3 THEN RAISE EXCEPTION 'Destination lost'; END IF;
- IF NOT EXISTS(SELECT 1 FROM autoboards a JOIN autoboard_targets t ON t.autoboard_id=a.id WHERE a.webhook_id='999901' AND a.thread_id='999911' AND a.enabled AND a.message_id IS NULL AND t.target='#PYLQ') THEN RAISE EXCEPTION 'Clan/thread destination changed'; END IF;
- IF NOT EXISTS(SELECT 1 FROM autoboards a JOIN autoboard_targets t ON t.autoboard_id=a.id WHERE a.webhook_id='999902' AND NOT a.enabled AND a.next_run_at IS NULL AND t.target='#PYLR') THEN RAISE EXCEPTION 'Disabled destination changed'; END IF;
- IF NOT EXISTS(SELECT 1 FROM autoboards a WHERE a.webhook_id='999903' AND a.target_scope='family' AND NOT EXISTS(SELECT 1 FROM autoboard_targets t WHERE t.autoboard_id=a.id)) THEN RAISE EXCEPTION 'Family scope changed'; END IF;
+ IF EXISTS(SELECT 1 FROM autoboards WHERE server_id='99990001') THEN RAISE EXCEPTION 'Retirement created an unsolicited board'; END IF;
  IF (SELECT count(*) FROM server_logs WHERE type='join_log' AND server_id='99990001')<>1 THEN RAISE EXCEPTION 'Unrelated log changed'; END IF;
  BEGIN
   INSERT INTO server_logs(server_id,type,webhook_id) VALUES('99990001','donation_log','999901');
@@ -31,4 +28,4 @@ DO $$ BEGIN
 END $$;
 SQL
 goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up
-printf 'Donation-log migration E2E passed: destination/thread/scope/disabled state preserved; event message not reused; retired type rejected.\n'
+printf 'Donation-log migration E2E passed: retired settings removed; no replacement boards created; unrelated logs retained; retired type rejected.\n'

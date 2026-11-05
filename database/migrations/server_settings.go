@@ -295,15 +295,9 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 				clans = append(clans, clanTag)
 			}
 		}
+		// Donation event logs are retired. Never turn an old destination into
+		// an AutoBoard: opting into that separate feature is a user decision.
 		if logType == "donations" || logType == "donation_log" {
-			if len(clans) == 0 {
-				clans = []string{""}
-			}
-			for _, clanTag := range clans {
-				if err := migrateutil.ImportDonationAutoboard(ctx, tx, serverID, clanTag, webhookID, migrateutil.String(log["thread"]), disabled); err != nil {
-					return err
-				}
-			}
 			continue
 		}
 		for _, expandedType := range expandServerLogTypes(logType) {

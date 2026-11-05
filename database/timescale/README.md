@@ -295,3 +295,52 @@ both this grant and the caller's existing settings-management permission. Revoki
 grant prevents future changes but does not reset the current Discord profile.
 Apply 052 before deploying the API that reads this column. Downgrading removes the
 grant data, so retain a backup and coordinate the API rollback.
+
+### Migration 053: tracking observation ordering
+
+Adds `basic_player.observed_at` with an epoch default for legacy/unobserved rows
+and a singleton `tracking_availability` row for the controller's current outage
+state. Official recovery updates war clocks and clears this row's official
+interval in one transaction. This is current operational state, not a history
+or notification delivery ledger.
+
+Apply 053 before the new Tracking writers. Restart all participating profile
+writers together; an old binary does not honor the observation guard. Start the
+new controller outside a legacy in-progress maintenance interval. Down removes
+only this metadata; stop the new writers before Down. Existing war-clock
+corrections and player facts are not reversed by Down.
+
+### Donation-log retirement
+
+Migration 028 removes legacy donation event-log settings without creating
+AutoBoards. Mongo server/clan importers skip both `donations` and `donation_log`.
+Separately configured donation AutoBoards and Discord webhooks are retained.
+A database that already ran the earlier unpublished conversion needs an explicit
+review of its generated boards: their current rows do not reliably distinguish
+them from user-created boards. Do not delete all donation AutoBoards as cleanup.
+Migration 028 is forward-only; retain the pre-cutover settings export for rollback.
+
+### Migration 054: reminder webhook identities
+
+Adds nullable `reminders.webhook_id` (text; no default). Apply before the new API
+and Tracking delivery worker. After the legacy settings import, run from
+`database/` with the reviewed database and bot credentials:
+
+```bash
+go run migrations/reminder_webhooks.go
+REMINDER_WEBHOOKS_APPLY=1 go run migrations/reminder_webhooks.go
+```
+
+The first command is read-only. The apply command resolves each parent channel,
+reuses an existing incoming webhook owned by the bot, creates one only when none
+exists, and saves its ID. Threads share their parent's hook. The server-row lock
+serializes this with API resource creation. It never deletes hooks or enables
+disabled reminders. Failed requests stop the run; rerun after fixing the cause.
+A successful run must cover all required reminders before enabling new delivery.
+Run again after any subsequent legacy import that changes destinations.
+
+For loopback service verification only, `REMINDER_DISCORD_API_URL` overrides the
+Discord origin; non-loopback overrides are rejected. The old token column is
+retained for compatibility but cleared by migrated/saved rows and ignored by new
+delivery. Stop the new consumers before Down. Shared Discord webhooks survive
+rollback and must not be blindly deleted.

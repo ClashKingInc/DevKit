@@ -46,4 +46,9 @@ fixture_sources=(
   050_player_profile_history_fields.sql
   051_manual_server_limits.sql
   052_bot_customization_grants.sql
+  053_tracking_observation_order.sql
+  054_reminder_webhooks.sql
+  055_clash_maintenance_log.sql
+  056_autoboard_refresh_policy.sql
+  057_account_avatar.sql
 )
