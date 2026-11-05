@@ -121,6 +121,8 @@ def main():
         check(sum('PG_LOGICAL_SLOT_GET_CHANGES' in line for line in queries) == 1, f'Expected one consume: {queries}')
         check(not any('OFFSET' in line or 'count(' in line.lower() for line in queries), 'Repeated scan/count remains')
         check(checkpoint() == str(boundary['xid']), 'Expected checkpoint not persisted')
+        check(sql(f"SELECT confirmed_flush_lsn > '{before_lsn}'::pg_lsn FROM pg_replication_slots WHERE slot_name='{slot}';") == 't', 'Successful recovery did not advance the actual slot')
+        check(sql(f"SELECT count(*) FROM pg_logical_slot_peek_changes('{slot}', '{boundary['lsn']}', NULL);") == '0', 'Successful recovery left changes inside its consumed boundary')
         pgsync(args + ['--mode', 'apply', '--forward-pass-confirmation', 'completed-forward-pass'], entrypoint='python')
         sql("UPDATE basic_player SET name='Changed' WHERE tag='#P1'; DELETE FROM basic_player WHERE tag='#P2';")
         pgsync(['--config', '/config/schema.json'])
