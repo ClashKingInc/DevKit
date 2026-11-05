@@ -904,6 +904,9 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'ticket panel JSON configuration has an invalid top-level shape';
     END IF;
+    -- Legacy Discord serializers emitted numeric id=0 as an unset component
+    -- index. It is not the button UUID. Preserve the custom_id action mapping;
+    -- reject every other malformed identity rather than guessing.
     IF EXISTS (
         SELECT 1
         FROM public.ticket_panels p
@@ -911,7 +914,7 @@ BEGIN
         WHERE jsonb_typeof(component) <> 'object'
            OR jsonb_typeof(component->'custom_id') <> 'string'
            OR component->>'custom_id' = ''
-           OR (component ? 'id' AND (
+           OR (component ? 'id' AND component->'id' <> '0'::jsonb AND (
                 jsonb_typeof(component->'id') <> 'string'
                 OR component->>'id' !~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
            ))
@@ -973,7 +976,7 @@ WITH identity_candidates AS (
                PARTITION BY panel.id, component.value->>'custom_id'
                ORDER BY component.ordinality
            ) = 1 THEN COALESCE(legacy.id,
-               CASE WHEN component.value ? 'id' THEN (component.value->>'id')::uuid END,
+               CASE WHEN jsonb_typeof(component.value->'id') = 'string' THEN (component.value->>'id')::uuid END,
                uuidv7()) ELSE uuidv7() END AS button_id
     FROM public.ticket_panels panel
     CROSS JOIN LATERAL jsonb_array_elements(panel.components) WITH ORDINALITY component(value, ordinality)
@@ -998,7 +1001,8 @@ BEGIN
           ON component.ordinality = identity.ordinal
         JOIN public.ticket_panel_buttons legacy
           ON legacy.panel_id = panel.id AND legacy.custom_id = identity.legacy_custom_id
-        WHERE component.value ? 'id' AND (component.value->>'id')::uuid <> legacy.id
+        WHERE CASE WHEN jsonb_typeof(component.value->'id') = 'string'
+                   THEN (component.value->>'id')::uuid END <> legacy.id
     ) THEN
         RAISE EXCEPTION 'ticket button identity is ambiguous: JSON and normalized UUIDs disagree';
     END IF;
