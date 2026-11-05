@@ -366,3 +366,15 @@ with the earlier staging sizing example. Monitor disk and WAL during the load.
 After count/sample/lag validation, switch both stable aliases atomically to v2.
 For the next rebuild, use a fresh physical version (v3), not the same v2
 checkpoints. Old artifacts are removed only after the rollback window.
+
+### Coolify bootstrap application
+
+Create a separate, manually deployed application using the same DevKit revision
+and `/database` base directory, with Compose path
+`/docker-compose.pgsync-bootstrap.yml`. Copy the daemon's private network and
+environment references, but bind `PG_USER` and `PG_PASSWORD` to the existing
+Timescale owner references only in this one-time application. Disable automatic
+deployment. The process runs `bootstrap --config /config/schema.json`, exits,
+and has no restart policy. Confirm exit code zero and both v2 slots before
+starting the existing daemon application. Remove the owner references from the
+completed bootstrap application after recording its result.
