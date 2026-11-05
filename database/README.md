@@ -58,7 +58,7 @@ Services:
 | --- | --- |
 | Timescale/Postgres | `postgres://${TIMESCALE_USERNAME}:${TIMESCALE_PASSWORD}@${HOST_BIND_IP}:${TIMESCALE_PORT}/${TIMESCALE_DATABASE}?sslmode=${TIMESCALE_SSLMODE}` |
 | Valkey | `${HOST_BIND_IP}:${VALKEY_PORT}` |
-| Elasticsearch | Private Compose network only at `http://elasticsearch:9200` |
+| Elasticsearch | Private Compose network at `http://elasticsearch:9200`; host loopback at `http://127.0.0.1:9200` for Cloudflare Tunnel |
 | PGSync | Private worker with no listening/public port |
 
 Set `HOST_BIND_IP` to `127.0.0.1` when only same-host access is needed. Use an
