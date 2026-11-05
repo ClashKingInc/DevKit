@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/ClashKingInc/DevKit/database/migrations/migrateutil"
 	"io"
@@ -17,6 +18,10 @@ import (
 	"strings"
 	"time"
 )
+
+type discordStatusError struct{ code int }
+
+func (e *discordStatusError) Error() string { return fmt.Sprintf("Discord returned HTTP %d", e.code) }
 
 type object map[string]any
 
@@ -29,6 +34,9 @@ type discordReader struct {
 }
 
 func (d discordReader) request(ctx context.Context, method, path string, body any) (json.RawMessage, error) {
+	return d.requestAttempt(ctx, method, path, body, 0)
+}
+func (d discordReader) requestAttempt(ctx context.Context, method, path string, body any, attempt int) (json.RawMessage, error) {
 	var payload io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
@@ -45,8 +53,27 @@ func (d discordReader) request(ctx context.Context, method, path string, body an
 		return nil, fmt.Errorf("Discord request failed")
 	}
 	defer res.Body.Close()
+	// A 429 explicitly rejects the request; retrying it cannot duplicate a
+	// created webhook. Transport errors and ambiguous 5xx responses are not retried.
+	if res.StatusCode == 429 && attempt < 3 {
+		var limit struct {
+			RetryAfter float64 `json:"retry_after"`
+		}
+		if json.NewDecoder(io.LimitReader(res.Body, 4096)).Decode(&limit) != nil || limit.RetryAfter <= 0 || limit.RetryAfter > 60 {
+			return nil, &discordStatusError{code: 429}
+		}
+		res.Body.Close()
+		timer := time.NewTimer(time.Duration(limit.RetryAfter * float64(time.Second)))
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+		return d.requestAttempt(ctx, method, path, body, attempt+1)
+	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("Discord returned HTTP %d", res.StatusCode)
+		return nil, &discordStatusError{code: res.StatusCode}
 	}
 	b, e := io.ReadAll(io.LimitReader(res.Body, 4*1024*1024+1))
 	if e != nil || len(b) > 4*1024*1024 {
@@ -115,8 +142,8 @@ func run(ctx context.Context, cfg migrateutil.Config) error {
 	if e != nil {
 		return e
 	}
-	reused, created, updated := 0, 0, 0
-	for _, id := range ids {
+	reused, created, updated, unavailable := 0, 0, 0, 0
+	process := func(id string) error {
 		tx, e := pool.Begin(ctx)
 		if e != nil {
 			return e
@@ -213,7 +240,23 @@ func run(ctx context.Context, cfg migrateutil.Config) error {
 		} else {
 			_ = tx.Rollback(ctx)
 		}
+		return nil
 	}
-	fmt.Printf("reminder webhook migration: apply=%t scanned=%d reused=%d created=%d updated=%d\n", apply, len(ids), reused, created, updated)
+	for _, id := range ids {
+		if err := process(id); err != nil {
+			var status *discordStatusError
+			// Old configurations can reference removed channels or servers the
+			// bot has left. Retain those rows untouched and keep repairing the
+			// reachable destinations; never delete configuration or fall back
+			// to bot messages because a webhook cannot be resolved.
+			if errors.As(err, &status) && (status.code == 403 || status.code == 404) {
+				unavailable++
+				fmt.Printf("reminder %s: unavailable destination (HTTP %d); unchanged\n", id, status.code)
+				continue
+			}
+			return err
+		}
+	}
+	fmt.Printf("reminder webhook migration: apply=%t scanned=%d reused=%d created=%d updated=%d unavailable=%d\n", apply, len(ids), reused, created, updated, unavailable)
 	return nil
 }
