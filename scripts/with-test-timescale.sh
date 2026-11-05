@@ -113,6 +113,8 @@ for fixture_source in "${fixture_sources[@]}"; do
   cp -- "$fixture_root/database/timescale/$fixture_source" "$fixture_migrations/$fixture_source"
 done
 
+# Bash 3 treats an empty array as unset under nounset; expand optional arguments
+# only when present so the default fixture does not pass an empty server option.
 fixture_postgres_args=()
 if [[ ${CLASHKING_FIXTURE_LOGICAL_WAL:-0} == 1 ]]; then
   # PGSync exercises real logical slots. Set this at startup so the default
@@ -132,7 +134,7 @@ fixture_container="$(docker run --detach \
   --env POSTGRES_DB=clashking_test \
   --env POSTGRES_USER=clashking_test \
   --env POSTGRES_PASSWORD=clashking_test \
-  "$fixture_image" "${fixture_postgres_args[@]}")"
+  "$fixture_image" ${fixture_postgres_args[@]+"${fixture_postgres_args[@]}"})"
 if [[ ! $fixture_container =~ ^[a-f0-9]{64}$ ]]; then
   fixture_container=''
   echo 'Docker did not return a valid container ID; refusing an ambiguous cleanup target.' >&2

@@ -363,7 +363,18 @@ the transient validation slot. Recheck actual slot inventory before execution.
 Production currently permits 150 GB retained WAL; do not replace that live value
 with the earlier staging sizing example. Monitor disk and WAL during the load.
 
-After count/sample/lag validation, switch both stable aliases atomically to v2.
+After count/sample/lag validation, extend the separate API search key's existing
+`read` and `view_index_metadata` grants to `clashking_players_v2` and
+`clashking_clans_v2`, preserving its existing grants. Alias access alone permits
+opening a point-in-time context but does not authorize the subsequent PIT
+search against its concrete index. Keep the key restricted to explicit indexes;
+do not add wildcard or write privileges.
+
+Switch both stable aliases atomically to v2. Verify the public player and clan
+search routes and a second cursor page for each before restoring collectors.
+A successful PIT-open request or an unscoped `/_search` request is insufficient.
+Use a fresh HTTP request body for each diagnostic operation; reusing a client
+configured with an empty body can accidentally omit the PIT and mask this error.
 For the next rebuild, use a fresh physical version (v3), not the same v2
 checkpoints. Old artifacts are removed only after the rollback window.
 
