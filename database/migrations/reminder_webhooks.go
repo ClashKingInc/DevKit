@@ -50,11 +50,26 @@ func (d discordReader) requestAttempt(ctx context.Context, method, path string, 
 	req.Header.Set("Content-Type", "application/json")
 	res, e := d.client.Do(req)
 	if e != nil {
+		if method == "GET" && attempt < 3 {
+			if e := waitReadRetry(ctx, attempt); e != nil {
+				return nil, e
+			}
+			return d.requestAttempt(ctx, method, path, body, attempt+1)
+		}
 		return nil, fmt.Errorf("Discord request failed")
 	}
 	defer res.Body.Close()
+	// GET has no provider side effect. A transport error or temporary server
+	// failure can be retried; an ambiguous webhook-creation POST never can.
+	if method == "GET" && res.StatusCode >= 500 && attempt < 3 {
+		res.Body.Close()
+		if e := waitReadRetry(ctx, attempt); e != nil {
+			return nil, e
+		}
+		return d.requestAttempt(ctx, method, path, body, attempt+1)
+	}
 	// A 429 explicitly rejects the request; retrying it cannot duplicate a
-	// created webhook. Transport errors and ambiguous 5xx responses are not retried.
+	// created webhook. Ambiguous POST transport/5xx failures are not retried.
 	if res.StatusCode == 429 && attempt < 3 {
 		var limit struct {
 			RetryAfter float64 `json:"retry_after"`
@@ -80,6 +95,16 @@ func (d discordReader) requestAttempt(ctx context.Context, method, path string, 
 		return nil, fmt.Errorf("invalid Discord response")
 	}
 	return b, nil
+}
+func waitReadRetry(ctx context.Context, attempt int) error {
+	timer := time.NewTimer(time.Duration(1<<attempt) * time.Second)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 func (d discordReader) get(ctx context.Context, path string) (object, error) {
 	b, e := d.request(ctx, "GET", path, nil)
@@ -142,7 +167,26 @@ func run(ctx context.Context, cfg migrateutil.Config) error {
 	if e != nil {
 		return e
 	}
-	reused, created, updated, unavailable := 0, 0, 0, 0
+	// Resume inclusively at the failed reminder in the same stable SQL order.
+	// Resolve the anchor from the current real IDs; an unknown anchor must not
+	// silently turn a partial repair into a successful empty run.
+	if anchor := strings.TrimSpace(os.Getenv("REMINDER_WEBHOOKS_START_AT")); anchor != "" {
+		found := -1
+		for i, id := range ids {
+			if id == anchor {
+				found = i
+				break
+			}
+		}
+		if found < 0 {
+			return fmt.Errorf("resume reminder does not exist")
+		}
+		ids = ids[found:]
+	}
+	reused, created, updated, unavailable, scanned := 0, 0, 0, 0, 0
+	defer func() {
+		fmt.Printf("reminder webhook migration: apply=%t scanned=%d total=%d reused=%d created=%d updated=%d unavailable=%d\n", apply, scanned, len(ids), reused, created, updated, unavailable)
+	}()
 	process := func(id string) error {
 		tx, e := pool.Begin(ctx)
 		if e != nil {
@@ -251,12 +295,13 @@ func run(ctx context.Context, cfg migrateutil.Config) error {
 			// to bot messages because a webhook cannot be resolved.
 			if errors.As(err, &status) && (status.code == 403 || status.code == 404) {
 				unavailable++
+				scanned++
 				fmt.Printf("reminder %s: unavailable destination (HTTP %d); unchanged\n", id, status.code)
 				continue
 			}
 			return err
 		}
+		scanned++
 	}
-	fmt.Printf("reminder webhook migration: apply=%t scanned=%d reused=%d created=%d updated=%d unavailable=%d\n", apply, len(ids), reused, created, updated, unavailable)
 	return nil
 }
