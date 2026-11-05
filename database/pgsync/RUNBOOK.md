@@ -387,7 +387,7 @@ queries each page with SQL `LIMIT`/`OFFSET`. PostgreSQL decodes the retained WAL
 again for each query. This becomes prohibitively expensive after a large initial
 load. `patch_logical_slot.py` replaces that method at image build time and verifies
 the exact original method hash before changing it. Compose tags the patched image
-`clashking/pgsync:7.2.0-ck.2`; the upstream package remains pinned to 7.2.0. An upstream source change
+`clashking/pgsync:7.2.0-ck.3`; the upstream package remains pinned to 7.2.0. An upstream source change
 fails the build and requires review.
 
 The replacement streams one `pg_logical_slot_peek_changes` query through bounded
@@ -485,3 +485,19 @@ The real service check includes a row deleted before the initial forward scan,
 so its first WAL replay must handle an already-absent document. The recovery CLI
 prints only aggregate operation/status/error-type metadata on a bulk failure;
 it does not print source documents or values embedded in error reasons.
+
+
+### Forward-scan transactions and the consumed WAL range
+
+The table forward scan retains PGSync's transaction bounds. The WAL replay does
+not apply those XID filters: `pg_logical_slot_get_changes` consumes its entire
+LSN range even when an outer SQL WHERE filters returned rows. Filtering the peek
+at the older forward-scan XID can therefore miss a deletion committed while the
+forward scan runs, then consume past that deletion. PGSync's CLI also performs
+its first pull before enabling notification buffering.
+
+The patched replay indexes every relevant record through the observed LSN
+horizon before consuming that exact horizon. Its saved XID checkpoint remains
+conservative; a later forward pass may safely repeat newer rows. The real service
+check deletes a row after the forward bulk finishes but before the LSN horizon
+is captured, and verifies the deletion survives recovery and a normal restart.

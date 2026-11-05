@@ -24,10 +24,14 @@ replacement = '''    def logical_slot_changes(
         # OFFSET over pg_logical_slot_peek_changes decodes the entire retained
         # WAL again for every page. Stream one query instead; fetch batches keep
         # Python memory bounded. The PostgreSQL function may still use temp disk.
+        # XID bounds belong to the forward table scan, not WAL consumption.
+        # get_changes advances through its full LSN range even when an outer
+        # WHERE excludes newer XIDs. Replay that entire same range first or a
+        # deletion committed during the forward scan can be lost permanently.
         with self.advisory_lock(self.__name, max_retries=None, retry_interval=0.1):
             statement = self._logical_slot_changes(
                 self.__name, sa.func.PG_LOGICAL_SLOT_PEEK_CHANGES,
-                txmin=txmin, txmax=txmax, upto_lsn=upto_lsn,
+                upto_lsn=upto_lsn,
             )
             with self.engine.connect() as connection:
                 connection = connection.execution_options(
@@ -54,7 +58,7 @@ replacement = '''    def logical_slot_changes(
         # Replaying a successful partial batch is safe because document IDs are
         # stable. Never advance the slot or checkpoint to make an error disappear.
         self.logical_slot_get_changes(
-            slot_name=self.__name, txmin=txmin, txmax=txmax, upto_lsn=upto_lsn,
+            slot_name=self.__name, upto_lsn=upto_lsn,
         )
         self.checkpoint = txmax or self.txid_current
 '''
