@@ -52,4 +52,5 @@ fixture_sources=(
   056_autoboard_refresh_policy.sql
   057_account_avatar.sql
   058_giveaway_collection_shapes.sql
+  059_server_activity_outage.sql
 )

@@ -52,3 +52,5 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/giveaway-collections-smoke.sh
       - name: Verify reminder webhook repair and safe resume
         run: bash scripts/with-test-timescale.sh --profile retained-api -- node scripts/reminder-webhooks-smoke.mjs
+      - name: Preserve relative server inactivity across the outage
+        run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/server-activity-outage-smoke.sh
