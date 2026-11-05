@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 const exec = promisify(execFile);
@@ -46,8 +46,14 @@ try {
     await sql(`INSERT INTO reminders(id,server_id,type,type_name,clan_tag,webhook_token,channel_id,minutes_remaining) VALUES('${ids[i]}','${guild}',1,'War','#PYLQ','fixture','${channel}',${(i+1)*60})`);
   }
   await exec("go", ["build", "-o", binary, "migrations/reminder_webhooks.go"], { cwd: root });
+  // The CLI discovers a workspace .env. Give it an owned empty workspace so
+  // this check never depends on or reads a developer's private configuration.
+  const working = join(temporary, "workspace", "database")
+  await mkdir(join(working, "timescale"), { recursive: true })
+  await writeFile(join(temporary, "workspace", ".env"), "")
+  await writeFile(join(working, "timescale", "001_initial_stats.sql"), "")
   const env = { ...process.env, TIMESCALE_URL: dsn, BOT_TOKEN: "fixture", REMINDER_DISCORD_API_URL: `http://127.0.0.1:${provider.address().port}`, REMINDER_WEBHOOKS_APPLY: "0", REMINDER_WEBHOOKS_START_AT: "" };
-  const run = (extra = {}) => exec(binary, [], { cwd: root, env: { ...env, ...extra } });
+  const run = (extra = {}) => exec(binary, [], { cwd: working, env: { ...env, ...extra } });
   const preview = await run();
   assert.match(preview.stdout, /apply=false scanned=4 total=4/u);
   assert(parentReads >= 2); assert.equal(creates, 0);
