@@ -279,6 +279,9 @@ func writeServerDocument(ctx context.Context, tx pgx.Tx, doc bson.M) error {
 			}
 		}
 	}
+	// Top-level reddit_feed is a channel ID, unlike webhook-based logs below.
+	// Restore it with reddit_feeds.go after import; never treat it as a webhook
+	// or silently discard its optional reddit_role/reddit_accounts settings.
 	for logType, raw := range migrateutil.Map(doc["logs"]) {
 		if logType == "welcome_link" {
 			continue

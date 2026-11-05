@@ -477,3 +477,11 @@ Migration `059_server_activity_outage.sql` preserves the relative inactivity of 
 The migration records each original and adjusted timestamp in `server_activity_outage_adjustments`. Goose applies it once. Rollback restores only rows still equal to their recorded adjusted value, so a later genuine command is never rewound. Production preview on November 5 found 15,552 adjusted servers, 186 newer dates retained, 8,453 unknown dates retained, and no future timestamps. Use the actual live preview again before applying; concurrent genuine activity can reduce the affected count.
 
 Local verification: `bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/server-activity-outage-smoke.sh` exercises the real SQL migration, repeat application, and rollback.
+
+### Restore legacy Reddit feeds (060)
+
+The legacy `server.reddit_feed` field is a channel/thread ID, not a webhook. It also has optional `reddit_role` and `reddit_accounts` settings. Migration060 adds `server_logs.reddit_role_id` and `reddit_accounts`; it does not invent or import destinations. Comment subscriptions match the original Reddit post author, not the commenter.
+
+From the database directory, export only these settings with `REDDIT_FEEDS_SOURCE=/absolute/path/reddit.json go run migrations/reddit_feeds_export.go`. This is a read-only Mongo operation. Then run `REDDIT_FEEDS_SOURCE=/absolute/path/reddit.json REDDIT_EXPECTED_APPLICATION_ID=<bot-id> go run migrations/reddit_feeds.go` against the intended SQL target. The default is preview-only. Review unavailable destinations and conflicts before setting `REDDIT_FEEDS_APPLY=1` for the same source and target.
+
+The repair checks Discord guild/parent ownership, reuses a bot-owned shared webhook or creates one when needed, and never sends a message. It keeps newer SQL destinations, disabled state, and conflicting nonempty options. Deleted/inaccessible destinations remain unchanged. A failed ambiguous webhook creation is not automatically retried; rerun only after review, when the next scan can find a previously created hook. Keep the source export until reconciliation is complete. The general server importer must not be rerun in production to fix this narrow gap.

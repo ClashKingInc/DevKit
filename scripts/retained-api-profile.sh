@@ -53,4 +53,5 @@ fixture_sources=(
   057_account_avatar.sql
   058_giveaway_collection_shapes.sql
   059_server_activity_outage.sql
+  060_reddit_feed_settings.sql
 )

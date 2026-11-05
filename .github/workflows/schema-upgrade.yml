@@ -54,3 +54,5 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile retained-api -- node scripts/reminder-webhooks-smoke.mjs
       - name: Preserve relative server inactivity across the outage
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/server-activity-outage-smoke.sh
+      - name: Restore legacy Reddit settings without overwriting newer destinations
+        run: bash scripts/with-test-timescale.sh --profile retained-api -- node scripts/reddit-feeds-smoke.mjs
