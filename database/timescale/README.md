@@ -424,3 +424,13 @@ change. A clan that qualifies for another metric must not appear as an unranked
 entry on the requested board. Individual clan responses already omit absent
 placements. Down recomputes the prior unrestricted derived view from current
 source rows before swapping back; it does not restore stale historical data.
+
+## 066 — publish exact shared counts
+
+Migration 064 adds the derived daily history counts and grouped population snapshots. Before applying 066 to a nonempty database, initialize **every historical day**, oldest first, with `database/historycounts`. The command accepts an explicit UTC end date, verifies the database name and PostgreSQL system identifier, and previews by default. `--apply --max-batches 1` refreshes at most one existing physical time chunk. Output buckets remain daily. Physical-chunk batches avoid repeatedly scanning a large chunk without a standalone time index. Re-run to resume; progress uses the existing `tracking_scheduled_jobs` table. Raw history is never changed. A crash after aggregate refresh but before its cursor repeats that safe interval.
+
+The initializer shares maintenance advisory lock 73194201 and refuses a new batch when a valid logical slot has less than 32 GiB safe WAL space. Production execution must also check filesystem headroom and use the existing Coolify-managed path. Keep Tracking running. A completed initializer is not permission to apply a migration by itself.
+
+Migration 066 refuses publication when existing history lacks a completed bootstrap through at least yesterday’s UTC boundary. Use today’s UTC date for the initial production run; an old partial-period bootstrap cannot satisfy the publication guard. It initializes the two population snapshots, builds replacement public count views, then swaps their names transactionally. Public column names and integer types remain unchanged. Existing operator/API consumers continue to read `api_global_counts`, `api_league_tier_counts`, `townhall_counts`, and `war_league_counts`. Rollback reconstructs their prior raw-table queries without changing raw data.
+
+Deploy the companion Tracking refresh implementation after 066. It must refresh historical invalidations before the grouped population snapshots and publish all related count views in one transaction. New or future rows remain visible in the real-time aggregate tail; late changes to older buckets require the invalidation refresh. Do not substitute a fixed recent-only history lookback.

@@ -62,5 +62,8 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/shared-count-snapshots-smoke.sh
       - name: Verify capped clan rankings and rollback
         run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/capped-clan-rankings-smoke.sh
+
+      - name: Verify bounded historical count initialization and publication
+        run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/shared-count-publication-smoke.sh
       - name: Verify durable manual refresh schema rollback safety
         run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/manual-refresh-requests-smoke.sh

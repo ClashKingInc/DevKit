@@ -2,6 +2,8 @@
 set -euo pipefail
 [[ ${CLASHKING_DISPOSABLE_TIMESCALE:-} == 1 ]] || { echo 'Disposable Timescale required' >&2; exit 2; }
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Exercise this migration even when later release migrations are in the fixture.
+goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" down-to 66
 psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
 INSERT INTO servers(id,name) VALUES('999999999999994900','Manual refresh migration');
 INSERT INTO role_refresh_requests(id,server_id,actor_id,target_id,target_kind,channel_id,categories)
