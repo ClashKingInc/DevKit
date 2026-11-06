@@ -65,9 +65,11 @@ func (s *service) bridge(ctx context.Context) error {
 		// Each peek returns complete committed transactions, even when a transaction
 		// exceeds the requested row count. Stream its rows and flush key sets through
 		// the second connection, so memory remains bounded by one 1000-key set.
+		// Filter unrelated row payloads before network transfer; COMMIT records
+		// retain a safe consumption boundary even for irrelevant transactions.
 		for {
 			began := time.Now()
-			rows, err := s.db.Query(ctx, "SELECT lsn::text,data FROM pg_logical_slot_peek_changes($1,$2::pg_lsn,5000,'skip-empty-xacts','1')", slot, boundary)
+			rows, err := s.db.Query(ctx, "SELECT lsn::text,data FROM pg_logical_slot_peek_changes($1,$2::pg_lsn,5000,'skip-empty-xacts','1') WHERE data LIKE $3 OR data LIKE 'COMMIT %'", slot, boundary, "table public."+e.table+": %")
 			if err != nil {
 				return err
 			}
