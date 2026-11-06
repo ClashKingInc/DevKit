@@ -9,7 +9,7 @@ def run(args,input=None):
  return p.stdout.strip()
 items=json.loads(run(['docker','inspect',*run(['docker','ps','-q','--filter',f'label=io.clashking.fixture.run={rid}']).split()]))
 db=next(v['Id'] for v in items if v['Config']['Labels']['io.clashking.fixture.owner']=='with-test-timescale')
-network='ck-full-'+rid.lower();state=tempfile.mkdtemp(prefix='ck-full-state-');os.chmod(state,0o777);esid=None;daemon=None
+network='ck-full-'+rid.lower();state=tempfile.mkdtemp(prefix='ck-full-state-');os.chmod(state,0o777);esid=None;daemon=None;blocker=None
 label=['--label',f'io.clashking.fixture.run={rid}','--label','io.clashking.fixture.owner=search-full']
 def sql(q):return run(['docker','exec','-i',db,'psql','-XAt','-U','clashking_test','-d','clashking_test','-v','ON_ERROR_STOP=1'],q)
 def es(path,method='GET',body=None):
@@ -48,6 +48,21 @@ try:
  wait(lambda:readstate().get('Snapshot',{}).get('Rows',{}).get('player',0)>=1000,'snapshot start')
  target=sql("BEGIN; UPDATE basic_player SET name='Changed behind' WHERE tag='#P000001'; UPDATE basic_player SET name='Changed ahead' WHERE tag='#P099999'; DELETE FROM basic_player WHERE tag IN('#P000002','#P098888'); UPDATE basic_player SET tag='#RENAMED' WHERE tag='#P000003'; UPDATE basic_clan SET member_count=42; COMMIT; SELECT pg_current_wal_lsn();").splitlines()[-1]
  wait(lambda:sql("SELECT confirmed_flush_lsn>='"+target+"'::pg_lsn FROM pg_replication_slots WHERE slot_name='clashking_full_test'")=='t','WAL advances while snapshot incomplete')
+ # Block only the snapshot's player reads; the real clan WAL stream can still
+ # change. A 30-second snapshot timeout must not replace the running consumer.
+ blocker=subprocess.Popen(['docker','exec','-i',db,'psql','-XAt','-U','clashking_test','-d','clashking_test','-v','ON_ERROR_STOP=1'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+ blocker.stdin.write("BEGIN; LOCK TABLE basic_player IN ACCESS EXCLUSIVE MODE; SELECT 'LOCKED';\n");blocker.stdin.flush()
+ while blocker.stdout.readline().strip()!='LOCKED':
+  assert blocker.poll() is None,'snapshot lock failed'
+ started=run(['docker','inspect','--format','{{.State.StartedAt}}',daemon])
+ def retried():
+  p=subprocess.run(['docker','logs',daemon],capture_output=True,text=True)
+  return 'retrying current cursor while WAL stream continues' in p.stdout+p.stderr
+ wait(retried,'isolated snapshot timeout',50)
+ target=sql("UPDATE basic_clan SET member_count=43; SELECT pg_current_wal_lsn();").splitlines()[-1]
+ wait(lambda:sql("SELECT confirmed_flush_lsn>='"+target+"'::pg_lsn FROM pg_replication_slots WHERE slot_name='clashking_full_test'")=='t','WAL advances during snapshot retry')
+ assert run(['docker','inspect','--format','{{.State.StartedAt}}',daemon])==started,'snapshot timeout restarted the service'
+ blocker.stdin.write('ROLLBACK;\n');blocker.stdin.close();assert blocker.wait(timeout=10)==0;blocker=None
  before=readstate()['Snapshot']['Rows']['player'];assert before<100000,'fixture did not overlap snapshot and WAL'
  run(['docker','rm','-f',daemon]);daemon=None
  sql("INSERT INTO basic_player(tag,name,townhall_level) VALUES('#P000002','Recreated while stopped',18); UPDATE basic_player SET clan_tag=NULL,name='After restart' WHERE tag='#P000010';")
@@ -61,10 +76,12 @@ try:
  assert es('/clashking_players_v2/_doc/%23P000002')['_source']['name']=='Recreated while stopped'
  assert es('/clashking_players_v2/_doc/%23P000010')['_source']['name']=='After restart'
  assert es('/clashking_players_v2/_doc/%23RENAMED')['_source']['name']=='Base 3'
- assert es('/clashking_clans_v2/_doc/%23CLAN')['_source']['member_count']==42
+ assert es('/clashking_clans_v2/_doc/%23CLAN')['_source']['member_count']==43
  assert sql("SELECT to_regclass('search_sync_pending') IS NULL")=='t'
- print(json.dumps({'result':'PASS','mode':'full snapshot plus concurrent WAL','rows':99999,'snapshot_rows_before_restart':before,'coverage':'checkpoint advances during snapshot; changes behind/ahead; deletes; key move; crash/resume; recreate while stopped; unchanged existing schema; no DB queue'}))
+ print(json.dumps({'result':'PASS','mode':'full snapshot plus concurrent WAL','rows':99999,'snapshot_rows_before_restart':before,'coverage':'snapshot SQL timeout retries without interrupting WAL; checkpoint advances during snapshot; changes behind/ahead; deletes; key move; crash/resume; recreate while stopped; unchanged existing schema; no DB queue'}))
 finally:
+ if blocker is not None:
+  blocker.stdin.close();blocker.wait(timeout=10)
  ids=run(['docker','ps','-aq','--filter',f'label=io.clashking.fixture.run={rid}','--filter','label=io.clashking.fixture.owner=search-full']).split()
  if ids:run(['docker','rm','-f','-v',*ids])
  subprocess.run(['docker','network','disconnect',network,db],capture_output=True);subprocess.run(['docker','network','rm',network],capture_output=True);shutil.rmtree(state)

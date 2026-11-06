@@ -34,6 +34,12 @@ func (s *service) request(ctx context.Context, method, path string, body []byte)
 	}
 	res, err := s.http.Do(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, 0, ctx.Err()
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, 0, context.DeadlineExceeded
+		}
 		return nil, 0, errors.New("Elasticsearch request failed")
 	}
 	defer res.Body.Close()
