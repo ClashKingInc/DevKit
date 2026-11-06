@@ -14,6 +14,10 @@ services:
       - max_replication_slots=5
       - -c
       - max_wal_senders=5
+      # A 1 GB budget forces continuous checkpoints under full tracking load.
+      # This soft checkpoint target is separate from replication-slot retention.
+      - -c
+      - max_wal_size=${TIMESCALE_MAX_WAL_SIZE:-16GB}
     environment:
       POSTGRES_DB: ${TIMESCALE_DATABASE}
       POSTGRES_USER: ${TIMESCALE_USERNAME}

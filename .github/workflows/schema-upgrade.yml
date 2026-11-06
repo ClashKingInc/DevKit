@@ -56,3 +56,5 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/server-activity-outage-smoke.sh
       - name: Restore legacy Reddit settings without overwriting newer destinations
         run: bash scripts/with-test-timescale.sh --profile retained-api -- node scripts/reddit-feeds-smoke.mjs
+      - name: Verify online checkpoint configuration and rollback
+        run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/checkpoint-budget-smoke.sh
