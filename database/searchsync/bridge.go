@@ -65,11 +65,12 @@ func (s *service) bridge(ctx context.Context) error {
 		// Each peek returns complete committed transactions, even when a transaction
 		// exceeds the requested row count. Stream its rows and flush key sets through
 		// the second connection, so memory remains bounded by one 1000-key set.
-		// Filter unrelated row payloads before network transfer; COMMIT records
-		// retain a safe consumption boundary even for irrelevant transactions.
+		// Suppress unrelated row payloads before network transfer, but retain
+		// every LSN (including logical messages) so an empty filtered payload
+		// never masquerades as completion of the full capture boundary.
 		for {
 			began := time.Now()
-			rows, err := s.db.Query(ctx, "SELECT lsn::text,data FROM pg_logical_slot_peek_changes($1,$2::pg_lsn,5000,'skip-empty-xacts','1') WHERE data LIKE $3 OR data LIKE 'COMMIT %'", slot, boundary, "table public."+e.table+": %")
+			rows, err := s.db.Query(ctx, "SELECT lsn::text,CASE WHEN data LIKE $3 THEN data END FROM pg_logical_slot_peek_changes($1,$2::pg_lsn,5000,'skip-empty-xacts','1')", slot, boundary, "table public."+e.table+": %")
 			if err != nil {
 				return err
 			}
@@ -96,14 +97,18 @@ func (s *service) bridge(ctx context.Context) error {
 				return nil
 			}
 			for rows.Next() {
-				var lsn, data string
+				var lsn string
+				var data *string
 				if err = rows.Scan(&lsn, &data); err != nil {
 					rows.Close()
 					return err
 				}
 				lastLSN = lsn
 				records++
-				tags, parseErr := legacyTags(data, e.table)
+				if data == nil {
+					continue
+				}
+				tags, parseErr := legacyTags(*data, e.table)
 				if parseErr != nil {
 					rows.Close()
 					return parseErr

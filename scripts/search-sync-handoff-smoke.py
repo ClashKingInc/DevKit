@@ -38,7 +38,7 @@ try:
     job(pgimage,pgenv,['--config','/config/schema.json'],entry='bootstrap',mount=mount)
     job(pgimage,pgenv,['--config','/config/schema.json'],mount=mount)
     # Accumulate an old unprocessed gap before the new queue exists.
-    sql("UPDATE basic_player SET trophies=1234; UPDATE basic_player SET name='Old gap' WHERE tag<'#P005000'; DELETE FROM basic_player WHERE tag>='#P009001'; UPDATE basic_player SET tag='#RENAMED' WHERE tag='#P000001'; UPDATE basic_clan SET member_count=12; CREATE TABLE bridge_noise(id int); INSERT INTO bridge_noise SELECT generate_series(1,5000);")
+    sql("UPDATE basic_player SET trophies=1234; UPDATE basic_player SET name='Old gap' WHERE tag<'#P005000'; DELETE FROM basic_player WHERE tag>='#P009001'; UPDATE basic_player SET tag='#RENAMED' WHERE tag='#P000001'; UPDATE basic_clan SET member_count=12; CREATE TABLE bridge_noise(id int); INSERT INTO bridge_noise SELECT generate_series(1,5000); SELECT pg_logical_emit_message(false,'unrelated','outside transaction');")
     run(['goose','-env','/dev/null','-dir',str(root/'database/timescale'),'postgres',os.environ['TEST_DATABASE_URL'],'up-to','63'])
     sql("UPDATE basic_player SET name='New captured',clan_tag=NULL WHERE tag='#P000002'; INSERT INTO basic_player(tag,name,townhall_level) VALUES('#P009999','Recreated after capture',18); UPDATE basic_player SET name=$q$Literal tag[text]:'#FALSE' inside name$q$ WHERE tag='#P000003';")
     slots=['clashking_test_clashking_players_v2','clashking_test_clashking_clans_v2']
