@@ -58,4 +58,5 @@ fixture_sources=(
   062_search_notification_filter.sql
   063_search_stream_publication.sql
   064_shared_count_snapshots.sql
+  065_capped_clan_rankings.sql
 )

@@ -403,3 +403,24 @@ Down drops only these four new derived objects. It leaves raw histories and the
 previous API snapshots intact. Switch any future reader/coordinator off these
 objects before rolling back. `shared-count-snapshots-smoke.sh` exercises the real
 Timescale aggregate invalidation and publication path against disposable SQL.
+
+### Migration 065: capped clan rankings
+
+Each existing global metric retains its top 100,000 placements. Each existing
+country metric retains its top 1,000 placements. The view retains the union of
+qualifying clans, with a null in any metric outside its cap. The global streak
+metric additionally requires a positive streak and retains its 50-win minimum.
+Score ordering and the deterministic tag tie-break stay unchanged.
+
+The migration populates a replacement materialized view beside the serving view
+before an atomic name swap. A five-second lock timeout bounds the final swap;
+a lock conflict rolls back the whole migration without changing the old view.
+Raw `basic_clan` rows are not changed. Partial metric indexes omit null ranks.
+The calculation still considers every source clan so qualifying ranks remain
+exact; fewer stored rows do not mean that all source scans disappear.
+
+Deploy API readers that filter the selected rank to non-null before this schema
+change. A clan that qualifies for another metric must not appear as an unranked
+entry on the requested board. Individual clan responses already omit absent
+placements. Down recomputes the prior unrestricted derived view from current
+source rows before swapping back; it does not restore stale historical data.
