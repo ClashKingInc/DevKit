@@ -378,3 +378,28 @@ row writes retain their normal transaction guarantees. Fresh databases leave fun
 creation and ownership to the patched PGSync bootstrap. Down restores the prior
 comparison. See [the PGSync runbook](../pgsync/RUNBOOK.md#configured-column-notification-filtering-ck4--migration-062)
 for verification and image coordination.
+
+### Migration 064: additive shared-count snapshots
+
+Adds daily count aggregates over `join_leave_history.time` and `wars.end_time`,
+plus two population snapshots computed with grouping sets. Counts retain the
+existing `COUNT(*)` contract. Player league NULL maps to zero; unranked CWL zero
+remains distinct from the grand-total row. Each source population is scanned
+once to compute its total and distributions.
+
+The migration uses `WITH NO DATA` and does not change any existing API read path
+or start a history backfill. Keep the current published snapshots until the new
+coordinator has filled and validated the needed history ranges. Historical
+inserts, date moves and deletions require refreshing the affected old buckets;
+a recent-only lookback is insufficient. The current-day tail is available via
+the aggregates' real-time mode. Do not query an uninitialized aggregate in the
+public path, because its tail can encompass the whole source history.
+
+Refresh the player/clan snapshots and publish their dependent cached outputs in
+one transaction. The unique `(scope, dimension_id)` indexes use `NULLS NOT
+DISTINCT`, so the total rows participate in concurrent-refresh identity.
+
+Down drops only these four new derived objects. It leaves raw histories and the
+previous API snapshots intact. Switch any future reader/coordinator off these
+objects before rolling back. `shared-count-snapshots-smoke.sh` exercises the real
+Timescale aggregate invalidation and publication path against disposable SQL.

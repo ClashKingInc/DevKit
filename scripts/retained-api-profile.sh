@@ -57,4 +57,5 @@ fixture_sources=(
   061_cwl_active_round_index.sql
   062_search_notification_filter.sql
   063_search_stream_publication.sql
+  064_shared_count_snapshots.sql
 )
