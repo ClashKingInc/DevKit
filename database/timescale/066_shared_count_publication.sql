@@ -6,11 +6,11 @@ SET LOCAL lock_timeout='5s';
 -- +goose StatementBegin
 DO $$ BEGIN
  IF EXISTS(SELECT 1 FROM join_leave_history LIMIT 1)
- AND NOT EXISTS(SELECT 1 FROM tracking_scheduled_jobs WHERE job='count_history_bootstrap_join_leave_history' AND completed_at IS NOT NULL) THEN
+ AND NOT EXISTS(SELECT 1 FROM tracking_scheduled_jobs WHERE job='count_history_bootstrap_join_leave_history' AND completed_at IS NOT NULL AND period >= (now() AT TIME ZONE 'UTC')::date - 1) THEN
   RAISE EXCEPTION 'Complete bounded join/leave count bootstrap before migration 066';
  END IF;
  IF EXISTS(SELECT 1 FROM wars LIMIT 1)
- AND NOT EXISTS(SELECT 1 FROM tracking_scheduled_jobs WHERE job='count_history_bootstrap_wars' AND completed_at IS NOT NULL) THEN
+ AND NOT EXISTS(SELECT 1 FROM tracking_scheduled_jobs WHERE job='count_history_bootstrap_wars' AND completed_at IS NOT NULL AND period >= (now() AT TIME ZONE 'UTC')::date - 1) THEN
   RAISE EXCEPTION 'Complete bounded war count bootstrap before migration 066';
  END IF;
 END $$;

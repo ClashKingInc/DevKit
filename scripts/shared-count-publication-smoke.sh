@@ -13,14 +13,20 @@ SQL
 if goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up-to 66; then
  echo 'Unsafe publication was not rejected' >&2; exit 1
 fi
+psql "$TEST_DATABASE_URL" -Xq -v ON_ERROR_STOP=1 -c "INSERT INTO tracking_scheduled_jobs(job,period,last_tag,completed_at) VALUES('count_history_bootstrap_join_leave_history','2000-01-01','2000-01-01',now()),('count_history_bootstrap_wars','2000-01-01','2000-01-01',now())"
+if goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up-to 66; then
+ echo 'Stale partial history marker was accepted' >&2; exit 1
+fi
+psql "$TEST_DATABASE_URL" -Xq -v ON_ERROR_STOP=1 -c "DELETE FROM tracking_scheduled_jobs WHERE job LIKE 'count_history_bootstrap_%'"
+through=$(date -u +%F)
 system=$(psql "$TEST_DATABASE_URL" -XAtc 'SELECT system_identifier FROM pg_control_system()')
 cd "$root/database"
-DATABASE_URL="$TEST_DATABASE_URL" go run ./historycounts --expected-database clashking_test --expected-system "$system" --through 2020-01-15
+DATABASE_URL="$TEST_DATABASE_URL" go run ./historycounts --expected-database clashking_test --expected-system "$system" --through "$through"
 [[ $(psql "$TEST_DATABASE_URL" -XAtc "SELECT count(*) FROM tracking_scheduled_jobs WHERE job LIKE 'count_history_bootstrap_%'") == 0 ]]
-DATABASE_URL="$TEST_DATABASE_URL" go run ./historycounts --expected-database clashking_test --expected-system "$system" --through 2020-01-15 --max-batches 1 --apply
-[[ $(psql "$TEST_DATABASE_URL" -XAtc "SELECT count(*) FROM tracking_scheduled_jobs WHERE job LIKE 'count_history_bootstrap_%' AND completed_at IS NOT NULL") == 1 ]]
-DATABASE_URL="$TEST_DATABASE_URL" go run ./historycounts --expected-database clashking_test --expected-system "$system" --through 2020-01-15 --max-batches 100 --apply
-DATABASE_URL="$TEST_DATABASE_URL" go run ./historycounts --expected-database clashking_test --expected-system "$system" --through 2020-01-15 --max-batches 100 --apply
+DATABASE_URL="$TEST_DATABASE_URL" go run ./historycounts --expected-database clashking_test --expected-system "$system" --through "$through" --max-batches 1 --apply
+[[ $(psql "$TEST_DATABASE_URL" -XAtc "SELECT count(*) FROM tracking_scheduled_jobs WHERE job LIKE 'count_history_bootstrap_%' AND completed_at IS NOT NULL") == 0 ]]
+DATABASE_URL="$TEST_DATABASE_URL" go run ./historycounts --expected-database clashking_test --expected-system "$system" --through "$through" --max-batches 100 --apply
+DATABASE_URL="$TEST_DATABASE_URL" go run ./historycounts --expected-database clashking_test --expected-system "$system" --through "$through" --max-batches 100 --apply
 goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up-to 66
 psql "$TEST_DATABASE_URL" -Xq -v ON_ERROR_STOP=1 <<'SQL'
 DO $$ BEGIN
