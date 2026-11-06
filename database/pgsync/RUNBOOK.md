@@ -72,6 +72,31 @@ controlled full reindex. `wal_level`, `max_replication_slots`, and
 `max_wal_senders` require a PostgreSQL restart when their current values differ.
 Report the preflight findings before performing that restart.
 
+## Checkpoint budget under tracking load
+
+The Timescale Compose service defaults `TIMESCALE_MAX_WAL_SIZE` to `16GB`.
+`max_wal_size` is a soft target for checkpoint scheduling, not a replication-slot
+retention limit. Keep `max_slot_wal_keep_size` independently sized and monitored.
+The November 2026 production rollout uses an explicitly approved 150 GB slot
+limit; do not replace that value with the minimal 5 GB example above.
+
+The previous 1 GB checkpoint target caused repeated WAL-triggered checkpoints
+5–24 seconds apart under full tracking load. Each new checkpoint made later
+page modifications produce full-page WAL images again. Continuous flushing then
+stalled commits in otherwise independent trackers. A 16 GB target gives the
+existing five-minute timeout room to spread writes; it does not disable fsync,
+full-page writes, synchronous commits, or the 150 GB slot limit.
+
+Before changing an existing deployment, verify the database identity, free
+volume space, slot validity/headroom, current settings, and recent checkpoint
+logs. Record the previous value. Apply `ALTER SYSTEM SET max_wal_size='16GB'`
+through the managed deployment path, then `SELECT pg_reload_conf()` and read the
+setting back in a new connection. This setting does not require a restart.
+Keep the Compose setting aligned for future deployments. Roll back to the
+recorded value with `ALTER SYSTEM` and reload; do not manually delete WAL files.
+The setting is soft, so retained slots and bursts can still make actual WAL
+usage exceed it. Monitor generation rate, checkpoint spacing, and slot progress.
+
 ## Host preparation
 
 Elasticsearch uses many memory-mapped Lucene segments. Verify the host value:
