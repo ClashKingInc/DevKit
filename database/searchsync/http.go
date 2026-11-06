@@ -64,7 +64,7 @@ func (s *service) bulk(ctx context.Context, e entity, items []item) error {
 		return err
 	}
 	if status != 200 {
-		return fmt.Errorf("bulk HTTP %d; queue retained", status)
+		return fmt.Errorf("bulk HTTP %d; checkpoint retained", status)
 	}
 	var response struct {
 		Items []map[string]struct {
@@ -78,7 +78,7 @@ func (s *service) bulk(ctx context.Context, e entity, items []item) error {
 		return err
 	}
 	if len(response.Items) != len(items) {
-		return errors.New("bulk result length mismatch; queue retained")
+		return errors.New("bulk result length mismatch; checkpoint retained")
 	}
 	for _, r := range response.Items {
 		if len(r) != 1 {
@@ -94,7 +94,7 @@ func (s *service) bulk(ctx context.Context, e entity, items []item) error {
 			if v.Status == 409 && v.Error != nil && v.Error.Type == "version_conflict_engine_exception" {
 				continue
 			}
-			return fmt.Errorf("bulk item HTTP %d; queue retained", v.Status)
+			return fmt.Errorf("bulk item HTTP %d; checkpoint retained", v.Status)
 		}
 	}
 	return nil

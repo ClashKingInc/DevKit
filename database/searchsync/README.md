@@ -19,9 +19,11 @@ are excluded from the normal pgoutput stream.
 3. Go creates one `pgoutput` slot and atomically saves its fixed initial boundary
    and target identity in `/state/handoff.json` (file and directory fsync).
 4. Go bridges both old `test_decoding` slots only through that boundary. It
-   suppresses unrelated payloads before network transfer while retaining every
-   returned LSN. It coalesces tags, reads current minimal SQL documents, sends
-   bulk upserts/deletes, and only then consumes each old committed batch.
+   keeps one continuous replication connection per legacy slot, so a pinned
+   restart position does not cause repeated decoding for each batch. Both slots
+   progress independently. Go ignores unrelated table payloads, coalesces tags,
+   reads current minimal SQL documents, and sends bounded bulk upserts/deletes.
+   Only completed transactions whose bulks succeeded are acknowledged.
 5. After bridging, Go persists handoff completion and streams the new slot.
    Old pending changes and changes during handoff are covered. No 56-million-row
    snapshot, new index, or alias switch is used.
@@ -29,8 +31,9 @@ are excluded from the normal pgoutput stream.
    and slots only after the new consumer is healthy. The service never drops a
    slot automatically.
 
-The one-time bridge still reads legacy retained WAL, including server-side
-filtering work for other tables. Normal operation only receives the publication.
+The one-time bridge still reads legacy retained WAL, including unrelated table payloads
+from the old test_decoding plugin. Filtering those payloads happens in Go;
+there is no claim that this legacy catch-up has publication filtering. Normal operation only receives the publication.
 A logical slot still retains whole-database WAL while its consumer is behind;
 this design reduces work and acknowledges small successful batches. It does not
 make retention risk disappear.
