@@ -93,3 +93,19 @@ The complete repository validation entrypoint is:
 It checks the Go migration tools, Goose migrations, CSS and Flutter packages,
 and application design drift. You'll need the Go, Goose, Node, and Flutter
 toolchains installed to run everything.
+
+### Headline count estimates
+
+Migration 067 replaces only the four whole-table totals in `api_global_counts`
+(players, clans, stored wars and join/leave records) with Timescale's
+`approximate_row_count`. Results are catalog estimates, not exact counts or a
+guaranteed error bound; ordinary statistics maintenance controls their accuracy.
+The API columns and cached refresh cadence stay unchanged.
+
+Town Hall, league and CWL distributions, current-war metrics, and battle analytics
+retain their existing calculations. No historical initialization is required.
+The unused daily history-count preparation aggregates are removed, together with
+the initializer, so they do not track invalidations on history writes. Rollback
+restores the old exact-scan view and recreates the preparation aggregates empty.
+The migration is changed in place because production was verified at 066 before
+its first application; do not use this approach for an already-applied migration.

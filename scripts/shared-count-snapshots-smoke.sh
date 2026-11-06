@@ -2,6 +2,8 @@
 set -euo pipefail
 [[ ${CLASHKING_DISPOSABLE_TIMESCALE:-} == 1 ]] || exit 2
 [[ ${TEST_DATABASE_URL:-} == postgres://clashking_test:clashking_test@127.0.0.1:*/clashking_test?sslmode=disable ]] || exit 2
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" down-to 64
 psql "$TEST_DATABASE_URL" -Xq -v ON_ERROR_STOP=1 <<'SQL'
 INSERT INTO basic_player(tag,name,townhall_level,league_id,trophies) VALUES
 ('#COUNT1','One',16,105000036,5000),('#COUNT2','Two',16,NULL,0),('#COUNT3','Three',17,105000036,5100);
