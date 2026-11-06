@@ -54,4 +54,7 @@ fixture_sources=(
   058_giveaway_collection_shapes.sql
   059_server_activity_outage.sql
   060_reddit_feed_settings.sql
+  061_cwl_active_round_index.sql
+  062_search_notification_filter.sql
+  063_search_stream_publication.sql
 )
