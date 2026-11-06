@@ -58,3 +58,7 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile retained-api -- node scripts/reddit-feeds-smoke.mjs
       - name: Verify online checkpoint configuration and rollback
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/checkpoint-budget-smoke.sh
+      - name: Verify dedicated Go search sync with real Elasticsearch
+        env:
+          CLASHKING_FIXTURE_RUN_ID: searchsync${{ github.run_id }}${{ github.run_attempt }}
+        run: bash scripts/with-test-timescale.sh --profile retained-api -- python3 scripts/search-sync-smoke.py
