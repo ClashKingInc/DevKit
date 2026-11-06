@@ -14,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+type snapshotTiming struct{ Read, Write time.Duration }
+
 type snapshotState struct {
 	Cursor map[string]string
 	Done   map[string]bool
@@ -67,9 +69,12 @@ func (s *service) snapshot(ctx context.Context, st *handoffState) error {
 		if snap.Done[e.name] {
 			continue
 		}
+		lastSaved := time.Time{}
+		rowsSinceSave := int64(0)
 		for {
 			began := time.Now()
-			items, err := s.snapshotBatch(ctx, db, e, snap.Cursor[e.name])
+			timing := snapshotTiming{}
+			items, err := s.snapshotBatch(ctx, db, e, snap.Cursor[e.name], &timing)
 			if err != nil {
 				return err
 			}
@@ -84,10 +89,21 @@ func (s *service) snapshot(ctx context.Context, st *handoffState) error {
 
 			snap.Cursor[e.name] = items[len(items)-1].Tag
 			snap.Rows[e.name] += int64(len(items))
-			if err = s.save(*st); err != nil {
-				return err
+			rowsSinceSave += int64(len(items))
+			// Snapshot writes are idempotent and always older than streamed WAL.
+			// Persist progress in bounded intervals instead of forcing a filesystem
+			// journal commit for every bulk. A crash replays only the recent tail.
+			checkpointTime := time.Duration(0)
+			if time.Since(lastSaved) >= 5*time.Second || rowsSinceSave >= 100000 {
+				checkpointStart := time.Now()
+				if err = s.save(*st); err != nil {
+					return err
+				}
+				checkpointTime = time.Since(checkpointStart)
+				lastSaved = time.Now()
+				rowsSinceSave = 0
 			}
-			log.Printf("snapshot entity=%s rows=%d batch_ms=%d rate_limit=%d", e.name, snap.Rows[e.name], time.Since(began).Milliseconds(), rate)
+			log.Printf("snapshot entity=%s rows=%d batch_ms=%d read_ms=%d bulk_ms=%d checkpoint_ms=%d rate_limit=%d", e.name, snap.Rows[e.name], time.Since(began).Milliseconds(), timing.Read.Milliseconds(), timing.Write.Milliseconds(), checkpointTime.Milliseconds(), rate)
 			wait := time.Duration(float64(time.Second)*float64(len(items))/float64(rate)) - time.Since(began)
 			if wait > 0 {
 				timer := time.NewTimer(wait)
@@ -126,7 +142,7 @@ func (s *service) validateFreshIndexes(ctx context.Context) error {
 	return nil
 }
 
-func (s *service) snapshotBatch(ctx context.Context, db *pgx.Conn, e entity, cursor string) ([]item, error) {
+func (s *service) snapshotBatch(ctx context.Context, db *pgx.Conn, e entity, cursor string, timing *snapshotTiming) ([]item, error) {
 	began := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -152,10 +168,13 @@ func (s *service) snapshotBatch(ctx context.Context, db *pgx.Conn, e entity, cur
 	if time.Since(began) >= 30*time.Second {
 		return nil, errors.New("snapshot batch expired; re-read current source")
 	}
+	timing.Read = time.Since(began)
 	if len(items) > 0 {
+		writeStart := time.Now()
 		if err = s.bulk(ctx, e, items); err != nil {
 			return nil, err
 		}
+		timing.Write = time.Since(writeStart)
 	}
 	return items, nil
 }

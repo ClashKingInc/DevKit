@@ -75,7 +75,7 @@ fails closed. Neither causes an automatic reset or full snapshot.
 - `ELASTICSEARCH_URL` on the private network.
 - Existing `ELASTICSEARCH_API_KEY_ID` and raw `ELASTICSEARCH_API_KEY`; alternatively
   an encoded API key without an ID, or user/password bindings.
-- `SEARCH_BATCH_SIZE`: default 1000, range 1–5000.
+- `SEARCH_BATCH_SIZE`: default 1000, range 1–20000.
 - `SEARCH_CACHE_ENTRIES`: default 100000, range 1–1000000.
 - `SEARCH_RUN_UNTIL_IDLE=1`: disposable/operator checks only; never production.
 
@@ -111,7 +111,9 @@ overwrite a newer streamed value. Configure replacement indexes with
 snapshot batch. Never resume a suspended old process after its replacement.
 
 Snapshot cursors persist to the local state file only after successful bulk
-writes. There is no database queue or snapshot-progress table. The default
+writes, at bounded five-second or 100,000-row intervals and at completion.
+A crash replays that recent tail safely instead of requiring a journal flush
+after every bulk. There is no database queue or snapshot-progress table. The default
 snapshot ceiling is 25,000 documents/second (`SEARCH_SNAPSHOT_RATE`, 100–100,000).
 The live WAL consumer does not wait for the full snapshot. Keep Tracking running;
 reduce snapshot throughput if resource pressure requires it.

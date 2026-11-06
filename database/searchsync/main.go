@@ -89,8 +89,8 @@ func run(ctx context.Context) error {
 	batch := 1000
 	if x := os.Getenv("SEARCH_BATCH_SIZE"); x != "" {
 		batch, err = strconv.Atoi(x)
-		if err != nil || batch < 1 || batch > 5000 {
-			return errors.New("batch size must be 1..5000")
+		if err != nil || batch < 1 || batch > 20000 {
+			return errors.New("batch size must be 1..20000")
 		}
 	}
 	s := service{db: db, repl: repl, http: &http.Client{Timeout: 20 * time.Second}, endpoint: strings.TrimRight(required("ELASTICSEARCH_URL"), "/"), key: os.Getenv("ELASTICSEARCH_API_KEY"), user: os.Getenv("ELASTICSEARCH_USER"), password: os.Getenv("ELASTICSEARCH_PASSWORD"), batch: batch, slot: required("SEARCH_SLOT"), statePath: filepath.Join(required("SEARCH_STATE_DIR"), "handoff.json")}
