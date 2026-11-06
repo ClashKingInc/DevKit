@@ -98,3 +98,27 @@ when fixing a deployment; do not reset them. After retiring old slots, reverting
 to PGSync requires an explicit handoff/reconciliation plan. Dropping the
 publication does not drop slots or Elasticsearch data, but first stop Go and
 establish the replacement consumer.
+
+## Full background resync
+
+`SEARCH_MODE=full` targets freshly created, empty replacement indexes. Use a new
+`SEARCH_STATE_DIR` beneath the retained state volume so the previous handoff
+record stays intact. The service runs a keyset snapshot and the normal WAL
+consumer concurrently. Each snapshot batch uses its own current SQL statement,
+version 1, and a 30-second lifetime. WAL versions are higher, so a snapshot cannot
+overwrite a newer streamed value. Configure replacement indexes with
+`index.gc_deletes=24h` during the build to retain delete versions well beyond a
+snapshot batch. Never resume a suspended old process after its replacement.
+
+Snapshot cursors persist to the local state file only after successful bulk
+writes. There is no database queue or snapshot-progress table. The default
+snapshot ceiling is 25,000 documents/second (`SEARCH_SNAPSHOT_RATE`, 100–100,000).
+The live WAL consumer does not wait for the full snapshot. Keep Tracking running;
+reduce snapshot throughput if resource pressure requires it.
+
+Keep existing aliases on the old indexes until both source snapshots finish,
+the new stream catches up, and counts/sample documents validate. Then switch
+both aliases atomically. The service does not switch aliases or delete indexes.
+`search-full-smoke.py` exercises the actual local service with updates and deletes
+behind/ahead of the snapshot cursor, key moves, concurrent WAL acknowledgments,
+and process crash/resume using the same state volume.

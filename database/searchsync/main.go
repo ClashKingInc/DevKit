@@ -38,6 +38,8 @@ type service struct {
 type handoffState struct {
 	SystemID, Database, Slot, PlayerIndex, ClanIndex, Boundary string
 	Complete                                                   bool
+	Snapshot                                                   *snapshotState `json:",omitempty"`
+	Mode                                                       string         `json:",omitempty"`
 }
 
 func required(k string) string {
@@ -150,14 +152,18 @@ func run(ctx context.Context) error {
 			}
 		}
 	}
-	st := handoffState{SystemID: system, Database: dbname, Slot: s.slot, PlayerIndex: s.entities[0].index, ClanIndex: s.entities[1].index}
+	mode := os.Getenv("SEARCH_MODE")
+	if mode != "" && mode != "full" {
+		return errors.New("unsupported search mode")
+	}
+	st := handoffState{Mode: mode, SystemID: system, Database: dbname, Slot: s.slot, PlayerIndex: s.entities[0].index, ClanIndex: s.entities[1].index}
 	data, readErr := os.ReadFile(s.statePath)
 	if readErr == nil {
 		var saved handoffState
 		if json.Unmarshal(data, &saved) != nil {
 			return errors.New("invalid handoff file")
 		}
-		if saved.SystemID != system || saved.Database != dbname || saved.Slot != s.slot || saved.PlayerIndex != st.PlayerIndex || saved.ClanIndex != st.ClanIndex {
+		if saved.SystemID != system || saved.Database != dbname || saved.Slot != s.slot || saved.PlayerIndex != st.PlayerIndex || saved.ClanIndex != st.ClanIndex || saved.Mode != st.Mode {
 			return errors.New("handoff identity mismatch")
 		}
 		st = saved
@@ -166,7 +172,8 @@ func run(ctx context.Context) error {
 	}
 	var plugin, slotDB, confirmed string
 	var active bool
-	err = db.QueryRow(ctx, "SELECT plugin,database,confirmed_flush_lsn::text,active FROM pg_replication_slots WHERE slot_name=$1", s.slot).Scan(&plugin, &slotDB, &confirmed, &active)
+	var invalidation *string
+	err = db.QueryRow(ctx, "SELECT plugin,database,confirmed_flush_lsn::text,active,invalidation_reason FROM pg_replication_slots WHERE slot_name=$1", s.slot).Scan(&plugin, &slotDB, &confirmed, &active, &invalidation)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if readErr == nil {
 			return errors.New("recorded stream slot is missing; refusing to skip changes")
@@ -180,7 +187,7 @@ func run(ctx context.Context) error {
 	} else if err != nil {
 		return err
 	} else {
-		if plugin != "pgoutput" || slotDB != dbname || active {
+		if plugin != "pgoutput" || slotDB != dbname || active || invalidation != nil {
 			return errors.New("stream slot mismatch or already active")
 		}
 		if st.Boundary == "" {
@@ -188,9 +195,21 @@ func run(ctx context.Context) error {
 		}
 	}
 	if readErr != nil {
+		if mode == "full" {
+			if err = s.validateFreshIndexes(ctx); err != nil {
+				return err
+			}
+		}
 		if err = s.save(st); err != nil {
 			return err
 		}
+	}
+	if mode == "full" {
+		start, err := pglogrepl.ParseLSN(confirmed)
+		if err != nil {
+			return err
+		}
+		return s.fullResync(ctx, &st, start)
 	}
 	if !st.Complete {
 		if err = s.bridge(ctx, st.Boundary); err != nil {
