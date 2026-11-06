@@ -17,14 +17,15 @@ def es(path,method='GET',body=None):
  if body is not None:cmd+=['-H','Content-Type: application/json','-d',json.dumps(body)]
  return json.loads(run(cmd))
 def readstate():
- try:return json.loads(pathlib.Path(state,'handoff.json').read_text())
- except (OSError,json.JSONDecodeError):return {}
+ try:return json.loads(run(['docker','exec',daemon,'cat','/state/handoff.json']))
+ except (RuntimeError,json.JSONDecodeError):return {}
 def wait(fn,label,seconds=60):
  end=time.monotonic()+seconds
  while time.monotonic()<end:
   if fn():return
   time.sleep(.1)
- logs=run(['docker','logs','--tail','15',daemon]) if daemon else ''
+ captured=subprocess.run(['docker','logs','--tail','15',daemon],capture_output=True,text=True) if daemon else None
+ logs=(captured.stdout+captured.stderr) if captured else ''
  raise AssertionError(label+' timed out '+logs)
 def start(env):
  cmd=['docker','run','-d','--cpus','2','--memory','1g','--network',network,*label,'-v',state+':/state']
