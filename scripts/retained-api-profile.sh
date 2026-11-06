@@ -59,5 +59,6 @@ fixture_sources=(
   063_search_stream_publication.sql
   064_shared_count_snapshots.sql
   065_capped_clan_rankings.sql
-  066_shared_count_publication.sql
+  066_manual_refresh_requests.sql
+  067_shared_count_publication.sql
 )

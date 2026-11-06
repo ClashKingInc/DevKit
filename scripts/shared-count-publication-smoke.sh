@@ -10,11 +10,11 @@ INSERT INTO basic_clan(tag,name,public_war_log,war_wins,member_count,badge_token
 INSERT INTO join_leave_history(time,type,clan_tag,player_tag,townhall_level) VALUES('2020-01-01 12:00Z','join','#COUNTC','#COUNTP',16);
 INSERT INTO wars(war_id,clan_tag,opponent_tag,prep_time,start_time,end_time,size,war_type,state) VALUES(1,'#COUNTC','#OTHER','2020-01-01 01:00Z','2020-01-02 01:00Z','2020-01-03 01:00Z',15,'random','warEnded');
 SQL
-if goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up-to 66; then
+if goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up-to 67; then
  echo 'Unsafe publication was not rejected' >&2; exit 1
 fi
 psql "$TEST_DATABASE_URL" -Xq -v ON_ERROR_STOP=1 -c "INSERT INTO tracking_scheduled_jobs(job,period,last_tag,completed_at) VALUES('count_history_bootstrap_join_leave_history','2000-01-01','2000-01-01',now()),('count_history_bootstrap_wars','2000-01-01','2000-01-01',now())"
-if goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up-to 66; then
+if goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up-to 67; then
  echo 'Stale partial history marker was accepted' >&2; exit 1
 fi
 psql "$TEST_DATABASE_URL" -Xq -v ON_ERROR_STOP=1 -c "DELETE FROM tracking_scheduled_jobs WHERE job LIKE 'count_history_bootstrap_%'"
@@ -27,7 +27,7 @@ DATABASE_URL="$TEST_DATABASE_URL" go run ./historycounts --expected-database cla
 [[ $(psql "$TEST_DATABASE_URL" -XAtc "SELECT count(*) FROM tracking_scheduled_jobs WHERE job LIKE 'count_history_bootstrap_%' AND completed_at IS NOT NULL") == 0 ]]
 DATABASE_URL="$TEST_DATABASE_URL" go run ./historycounts --expected-database clashking_test --expected-system "$system" --through "$through" --max-batches 100 --apply
 DATABASE_URL="$TEST_DATABASE_URL" go run ./historycounts --expected-database clashking_test --expected-system "$system" --through "$through" --max-batches 100 --apply
-goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up-to 66
+goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up-to 67
 psql "$TEST_DATABASE_URL" -Xq -v ON_ERROR_STOP=1 <<'SQL'
 DO $$ BEGIN
  IF NOT EXISTS(SELECT 1 FROM api_global_counts WHERE player_count=1 AND clan_count=1 AND wars_stored=1 AND total_join_leaves=1) THEN RAISE EXCEPTION 'Published totals differ'; END IF;
