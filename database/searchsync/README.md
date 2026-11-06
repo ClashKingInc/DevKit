@@ -124,3 +124,5 @@ both aliases atomically. The service does not switch aliases or delete indexes.
 `search-full-smoke.py` exercises the actual local service with updates and deletes
 behind/ahead of the snapshot cursor, key moves, concurrent WAL acknowledgments,
 and process crash/resume using the same state volume.
+
+A snapshot batch that exceeds its 30-second deadline is re-read after a two-second delay using a new SQL connection. The concurrent WAL stream remains active and retains its cache and commit acknowledgments. This retry does not advance the failed batch cursor or weaken the stale-batch guard. Non-timeout failures still stop the service for explicit diagnosis.

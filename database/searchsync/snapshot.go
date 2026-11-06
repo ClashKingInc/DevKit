@@ -14,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+var errSnapshotExpired = errors.New("snapshot batch expired; re-read current source")
+
 type snapshotTiming struct{ Read, Write time.Duration }
 
 type snapshotState struct {
@@ -36,7 +38,7 @@ func (s *service) fullResync(ctx context.Context, st *handoffState, start pglogr
 	}
 	result := make(chan error, 2)
 	go func() {
-		err := s.snapshot(ctx, st)
+		err := s.snapshotWithRetry(ctx, st)
 		result <- err
 		if err != nil {
 			cancel()
@@ -51,6 +53,30 @@ func (s *service) fullResync(ctx context.Context, st *handoffState, start pglogr
 	}
 	return failure
 }
+
+// A bounded snapshot read may time out under foreground database load. Retry
+// from the last successful in-memory cursor with a new SQL connection; the live
+// WAL consumer must keep acknowledging instead of losing its cache and session.
+func (s *service) snapshotWithRetry(ctx context.Context, st *handoffState) error {
+	for {
+		err := s.snapshot(ctx, st)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, errSnapshotExpired) {
+			return err
+		}
+		log.Print("snapshot batch timed out; retrying current cursor while WAL stream continues")
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 func (s *service) snapshot(ctx context.Context, st *handoffState) error {
 	db, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
 	if err != nil {
@@ -166,7 +192,7 @@ func (s *service) snapshotBatch(ctx context.Context, db *pgx.Conn, e entity, cur
 	// Never resume an old row batch after an unbounded process suspension. Delete
 	// tombstones have finite retention; the next process must re-read current SQL.
 	if time.Since(began) >= 30*time.Second {
-		return nil, errors.New("snapshot batch expired; re-read current source")
+		return nil, errSnapshotExpired
 	}
 	timing.Read = time.Since(began)
 	if len(items) > 0 {
