@@ -22,3 +22,7 @@ jobs:
         env:
           CLASHKING_FIXTURE_LOGICAL_WAL: "1"
         run: bash scripts/with-test-integration.sh --profile retained-api -- python3 scripts/search-stream-smoke.py
+      - name: Verify full snapshot with concurrent WAL and crash resume
+        env:
+          CLASHKING_FIXTURE_LOGICAL_WAL: "1"
+        run: bash scripts/with-test-integration.sh --profile retained-api -- python3 scripts/search-full-smoke.py
