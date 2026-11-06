@@ -42,28 +42,28 @@ try:
  else:raise RuntimeError('ES startup failed')
  for spec in json.loads((root/'database/pgsync/schema.json').read_text()):
   spec['setting']['gc_deletes']='24h';es('/'+spec['index'],'PUT',{'settings':spec['setting'],'mappings':spec['mapping']})
- sql("INSERT INTO basic_player(tag,name,townhall_level) SELECT '#P'||lpad(i::text,6,'0'),'Base '||i,16 FROM generate_series(1,20000)i; INSERT INTO basic_clan(tag,name,public_war_log,war_wins,member_count,badge_token,troops_donated,troops_received) VALUES('#CLAN','Clan',true,0,1,'badge',0,0);")
- env={'DATABASE_URL':'postgres://clashking_test:clashking_test@db:5432/clashking_test?sslmode=disable','SEARCH_EXPECT_DATABASE':'clashking_test','SEARCH_EXPECT_SYSTEM_ID':sql('SELECT system_identifier FROM pg_control_system()'),'ELASTICSEARCH_URL':'http://search:9200','SEARCH_PLAYER_INDEX':'clashking_players_v2','SEARCH_CLAN_INDEX':'clashking_clans_v2','SEARCH_SLOT':'clashking_full_test','SEARCH_STATE_DIR':'/state','SEARCH_MODE':'full','SEARCH_SNAPSHOT_RATE':'2000'}
+ sql("INSERT INTO basic_player(tag,name,townhall_level) SELECT '#P'||lpad(i::text,6,'0'),'Base '||i,16 FROM generate_series(1,100000)i; INSERT INTO basic_clan(tag,name,public_war_log,war_wins,member_count,badge_token,troops_donated,troops_received) VALUES('#CLAN','Clan',true,0,1,'badge',0,0);")
+ env={'DATABASE_URL':'postgres://clashking_test:clashking_test@db:5432/clashking_test?sslmode=disable','SEARCH_EXPECT_DATABASE':'clashking_test','SEARCH_EXPECT_SYSTEM_ID':sql('SELECT system_identifier FROM pg_control_system()'),'ELASTICSEARCH_URL':'http://search:9200','SEARCH_PLAYER_INDEX':'clashking_players_v2','SEARCH_CLAN_INDEX':'clashking_clans_v2','SEARCH_SLOT':'clashking_full_test','SEARCH_STATE_DIR':'/state','SEARCH_MODE':'full','SEARCH_BATCH_SIZE':'20000','SEARCH_SNAPSHOT_RATE':'2000'}
  daemon=start(env)
  wait(lambda:readstate().get('Snapshot',{}).get('Rows',{}).get('player',0)>=1000,'snapshot start')
- target=sql("BEGIN; UPDATE basic_player SET name='Changed behind' WHERE tag='#P000001'; UPDATE basic_player SET name='Changed ahead' WHERE tag='#P019999'; DELETE FROM basic_player WHERE tag IN('#P000002','#P018888'); UPDATE basic_player SET tag='#RENAMED' WHERE tag='#P000003'; UPDATE basic_clan SET member_count=42; COMMIT; SELECT pg_current_wal_lsn();").splitlines()[-1]
+ target=sql("BEGIN; UPDATE basic_player SET name='Changed behind' WHERE tag='#P000001'; UPDATE basic_player SET name='Changed ahead' WHERE tag='#P099999'; DELETE FROM basic_player WHERE tag IN('#P000002','#P098888'); UPDATE basic_player SET tag='#RENAMED' WHERE tag='#P000003'; UPDATE basic_clan SET member_count=42; COMMIT; SELECT pg_current_wal_lsn();").splitlines()[-1]
  wait(lambda:sql("SELECT confirmed_flush_lsn>='"+target+"'::pg_lsn FROM pg_replication_slots WHERE slot_name='clashking_full_test'")=='t','WAL advances while snapshot incomplete')
- before=readstate()['Snapshot']['Rows']['player'];assert before<20000,'fixture did not overlap snapshot and WAL'
+ before=readstate()['Snapshot']['Rows']['player'];assert before<100000,'fixture did not overlap snapshot and WAL'
  run(['docker','rm','-f',daemon]);daemon=None
  sql("INSERT INTO basic_player(tag,name,townhall_level) VALUES('#P000002','Recreated while stopped',18); UPDATE basic_player SET clan_tag=NULL,name='After restart' WHERE tag='#P000010';")
  env['SEARCH_SNAPSHOT_RATE']='20000';daemon=start(env)
  wait(lambda:all(readstate().get('Snapshot',{}).get('Done',{}).get(k,False) for k in ['player','clan']),'snapshot resume completion')
  target=sql('SELECT pg_current_wal_lsn()')
  wait(lambda:sql("SELECT confirmed_flush_lsn>='"+target+"'::pg_lsn FROM pg_replication_slots WHERE slot_name='clashking_full_test'")=='t','final WAL checkpoint')
- es('/_refresh','POST');assert es('/clashking_players_v2/_count')['count']==19999
+ es('/_refresh','POST');assert es('/clashking_players_v2/_count')['count']==99999
  assert es('/clashking_players_v2/_doc/%23P000001')['_source']['name']=='Changed behind'
- assert es('/clashking_players_v2/_doc/%23P019999')['_source']['name']=='Changed ahead'
+ assert es('/clashking_players_v2/_doc/%23P099999')['_source']['name']=='Changed ahead'
  assert es('/clashking_players_v2/_doc/%23P000002')['_source']['name']=='Recreated while stopped'
  assert es('/clashking_players_v2/_doc/%23P000010')['_source']['name']=='After restart'
  assert es('/clashking_players_v2/_doc/%23RENAMED')['_source']['name']=='Base 3'
  assert es('/clashking_clans_v2/_doc/%23CLAN')['_source']['member_count']==42
  assert sql("SELECT to_regclass('search_sync_pending') IS NULL")=='t'
- print(json.dumps({'result':'PASS','mode':'full snapshot plus concurrent WAL','rows':19999,'snapshot_rows_before_restart':before,'coverage':'checkpoint advances during snapshot; changes behind/ahead; deletes; key move; crash/resume; recreate while stopped; unchanged existing schema; no DB queue'}))
+ print(json.dumps({'result':'PASS','mode':'full snapshot plus concurrent WAL','rows':99999,'snapshot_rows_before_restart':before,'coverage':'checkpoint advances during snapshot; changes behind/ahead; deletes; key move; crash/resume; recreate while stopped; unchanged existing schema; no DB queue'}))
 finally:
  ids=run(['docker','ps','-aq','--filter',f'label=io.clashking.fixture.run={rid}','--filter','label=io.clashking.fixture.owner=search-full']).split()
  if ids:run(['docker','rm','-f','-v',*ids])
