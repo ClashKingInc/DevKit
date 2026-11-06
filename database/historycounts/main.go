@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"github.com/jackc/pgx/v5"
 	"os"
-	"strconv"
 	"time"
 )
 
@@ -104,7 +103,7 @@ func run() error {
 				return err
 			}
 			if unsafe > 0 {
-				return fmt.Errorf("WAL headroom below " + strconv.FormatInt(*minSafe, 10) + " GiB; no new batch started")
+				return fmt.Errorf("WAL headroom below %d GiB; no new batch started", *minSafe)
 			}
 			// These histories have large chunks and no standalone time index.
 			// Refresh each physical chunk once; slicing it into small day ranges
