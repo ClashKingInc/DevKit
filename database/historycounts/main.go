@@ -24,7 +24,7 @@ func run() error {
 	expectedDB := flag.String("expected-database", "", "required database identity")
 	expectedSystem := flag.String("expected-system", "", "required PostgreSQL system identifier")
 	throughArg := flag.String("through", "", "exclusive UTC day boundary YYYY-MM-DD")
-	batches := flag.Int("max-batches", 1, "maximum seven-day batches in this invocation")
+	batches := flag.Int("max-batches", 1, "maximum physical-chunk batches in this invocation")
 	minSafe := flag.Int64("minimum-safe-wal-gib", 32, "minimum remaining safe WAL space for each valid logical slot")
 	flag.Parse()
 	through, err := time.Parse("2006-01-02", *throughArg)
@@ -106,9 +106,22 @@ func run() error {
 			if unsafe > 0 {
 				return fmt.Errorf("WAL headroom below " + strconv.FormatInt(*minSafe, 10) + " GiB; no new batch started")
 			}
-			end := cursor.AddDate(0, 0, 7)
-			if end.After(through) {
-				end = through
+			// These histories have large chunks and no standalone time index.
+			// Refresh each physical chunk once; slicing it into small day ranges
+			// would repeatedly scan the same source pages. Output stays daily.
+			var chunkEnd *time.Time
+			if err = db.QueryRow(ctx, "SELECT min(range_end) FROM timescaledb_information.chunks WHERE hypertable_schema='public' AND hypertable_name=$1 AND range_end>$2 AND range_start<$3", spec[0], cursor, through).Scan(&chunkEnd); err != nil {
+				return err
+			}
+			end := through
+			if chunkEnd != nil && chunkEnd.Before(end) {
+				end = chunkEnd.UTC()
+			}
+			if !end.Equal(end.Truncate(24 * time.Hour)) {
+				return fmt.Errorf("history chunk boundary is not a UTC day")
+			}
+			if !end.After(cursor) {
+				return fmt.Errorf("history chunk did not advance")
 			}
 			started := time.Now()
 			// CALL commits before the cursor. A crash between these operations repeats

@@ -18,7 +18,7 @@ cd "$root/database"
 DATABASE_URL="$TEST_DATABASE_URL" go run ./historycounts --expected-database clashking_test --expected-system "$system" --through 2020-01-15
 [[ $(psql "$TEST_DATABASE_URL" -XAtc "SELECT count(*) FROM tracking_scheduled_jobs WHERE job LIKE 'count_history_bootstrap_%'") == 0 ]]
 DATABASE_URL="$TEST_DATABASE_URL" go run ./historycounts --expected-database clashking_test --expected-system "$system" --through 2020-01-15 --max-batches 1 --apply
-[[ $(psql "$TEST_DATABASE_URL" -XAtc "SELECT count(*) FROM tracking_scheduled_jobs WHERE job LIKE 'count_history_bootstrap_%' AND completed_at IS NOT NULL") == 0 ]]
+[[ $(psql "$TEST_DATABASE_URL" -XAtc "SELECT count(*) FROM tracking_scheduled_jobs WHERE job LIKE 'count_history_bootstrap_%' AND completed_at IS NOT NULL") == 1 ]]
 DATABASE_URL="$TEST_DATABASE_URL" go run ./historycounts --expected-database clashking_test --expected-system "$system" --through 2020-01-15 --max-batches 100 --apply
 DATABASE_URL="$TEST_DATABASE_URL" go run ./historycounts --expected-database clashking_test --expected-system "$system" --through 2020-01-15 --max-batches 100 --apply
 goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up-to 66
