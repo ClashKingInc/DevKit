@@ -67,3 +67,6 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/shared-count-publication-smoke.sh
       - name: Verify durable manual refresh schema rollback safety
         run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/manual-refresh-requests-smoke.sh
+
+      - name: Verify ten-cent AI allowance migration
+        run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/ai-allowance-smoke.sh
