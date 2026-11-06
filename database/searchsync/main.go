@@ -238,117 +238,119 @@ func (s *service) save(st handoffState) error {
 	return dir.Sync()
 }
 func (s *service) bridge(ctx context.Context, boundary string) error {
-	// Legacy slots retain the pre-handoff gap. Successful ES batches precede each
-	// slot consume; no database queue or extra source write is introduced.
-	for _, e := range []entity{s.entities[1], s.entities[0]} {
-		slot := os.Getenv("SEARCH_" + strings.ToUpper(e.name) + "_OLD_SLOT")
-		if slot == "" {
-			return errors.New("both legacy slots are required for initial handoff")
-		}
-		if !validIndex(slot) {
-			return errors.New("invalid legacy slot")
-		}
-		reader, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
-		if err != nil {
-			return err
-		}
-		err = s.bridgeEntity(ctx, reader, e, slot, boundary)
-		reader.Close(context.Background())
-		if err != nil {
-			return err
+	// Both old slots retain the database WAL. Alternate bounded committed batches
+	// so a busy clan backlog cannot starve the player checkpoint (or vice versa).
+	done := map[string]bool{}
+	for len(done) < len(s.entities) {
+		for _, e := range []entity{s.entities[1], s.entities[0]} {
+			if done[e.name] {
+				continue
+			}
+			slot := os.Getenv("SEARCH_" + strings.ToUpper(e.name) + "_OLD_SLOT")
+			if slot == "" || !validIndex(slot) {
+				return errors.New("both valid legacy slots are required for initial handoff")
+			}
+			reader, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+			if err != nil {
+				return err
+			}
+			complete, err := s.bridgeEntity(ctx, reader, e, slot, boundary)
+			reader.Close(context.Background())
+			if err != nil {
+				return err
+			}
+			if complete {
+				done[e.name] = true
+			}
 		}
 	}
 	return nil
 }
-func (s *service) bridgeEntity(ctx context.Context, reader *pgx.Conn, e entity, slot, boundary string) error {
-	for {
-		begin := time.Now()
-		rows, err := reader.Query(ctx, "SELECT lsn::text,CASE WHEN data LIKE $3 THEN data END FROM pg_logical_slot_peek_changes($1,$2::pg_lsn,5000,'skip-empty-xacts','1')", slot, boundary, "table public."+e.table+": %")
+func (s *service) bridgeEntity(ctx context.Context, reader *pgx.Conn, e entity, slot, boundary string) (bool, error) {
+	begin := time.Now()
+	rows, err := reader.Query(ctx, "SELECT lsn::text,CASE WHEN data LIKE $3 THEN data END FROM pg_logical_slot_peek_changes($1,$2::pg_lsn,5000,'skip-empty-xacts','1')", slot, boundary, "table public."+e.table+": %")
+	if err != nil {
+		return false, err
+	}
+	keys := map[string]struct{}{}
+	last := ""
+	records, ops := 0, 0
+	flush := func() error {
+		if len(keys) == 0 {
+			return nil
+		}
+		tags := make([]string, 0, len(keys))
+		for k := range keys {
+			tags = append(tags, k)
+		}
+		rs, err := s.db.Query(ctx, "SELECT k.tag,CASE WHEN src.tag IS NULL THEN NULL ELSE "+e.projection+" END FROM unnest($1::text[]) k(tag) LEFT JOIN "+e.table+" src ON src.tag=k.tag", tags)
 		if err != nil {
 			return err
 		}
-		keys := map[string]struct{}{}
-		last := ""
-		records, ops := 0, 0
-		flush := func() error {
-			if len(keys) == 0 {
-				return nil
-			}
-			tags := make([]string, 0, len(keys))
-			for k := range keys {
-				tags = append(tags, k)
-			}
-			rs, err := s.db.Query(ctx, "SELECT k.tag,CASE WHEN src.tag IS NULL THEN NULL ELSE "+e.projection+" END FROM unnest($1::text[]) k(tag) LEFT JOIN "+e.table+" src ON src.tag=k.tag", tags)
-			if err != nil {
-				return err
-			}
-			lsn, err := pglogrepl.ParseLSN(last)
-			if err != nil {
+		lsn, err := pglogrepl.ParseLSN(last)
+		if err != nil {
+			rs.Close()
+			return err
+		}
+		items := make([]item, 0, len(tags))
+		for rs.Next() {
+			v := item{Generation: 1000000000000000000 + int64(lsn)}
+			if err = rs.Scan(&v.Tag, &v.Document); err != nil {
 				rs.Close()
 				return err
 			}
-			items := make([]item, 0, len(tags))
-			for rs.Next() {
-				v := item{Generation: 1000000000000000000 + int64(lsn)}
-				if err = rs.Scan(&v.Tag, &v.Document); err != nil {
-					rs.Close()
-					return err
-				}
-				items = append(items, v)
-			}
-			rs.Close()
-			if err = rs.Err(); err != nil {
-				return err
-			}
-			if err = s.bulk(ctx, e, items); err != nil {
-				return err
-			}
-			ops += len(items)
-			clear(keys)
-			return nil
+			items = append(items, v)
 		}
-		for rows.Next() {
-			var data *string
-			if err = rows.Scan(&last, &data); err != nil {
-				rows.Close()
-				return err
-			}
-			records++
-			if data == nil {
-				continue
-			}
-			tags, err := legacyTags(*data, e.table)
-			if err != nil {
-				rows.Close()
-				return err
-			}
-			for _, tag := range tags {
-				keys[tag] = struct{}{}
-				if len(keys) >= s.batch {
-					if err = flush(); err != nil {
-						rows.Close()
-						return err
-					}
+		rs.Close()
+		if err = rs.Err(); err != nil {
+			return err
+		}
+		if err = s.bulk(ctx, e, items); err != nil {
+			return err
+		}
+		ops += len(items)
+		clear(keys)
+		return nil
+	}
+	for rows.Next() {
+		var data *string
+		if err = rows.Scan(&last, &data); err != nil {
+			rows.Close()
+			return false, err
+		}
+		records++
+		if data == nil {
+			continue
+		}
+		tags, err := legacyTags(*data, e.table)
+		if err != nil {
+			rows.Close()
+			return false, err
+		}
+		for _, tag := range tags {
+			keys[tag] = struct{}{}
+			if len(keys) >= s.batch {
+				if err = flush(); err != nil {
+					rows.Close()
+					return false, err
 				}
 			}
-		}
-		rows.Close()
-		if err = rows.Err(); err != nil {
-			return err
-		}
-		if err = flush(); err != nil {
-			return err
-		}
-		if last == "" {
-			last = boundary
-		}
-		var consumed int64
-		if err = s.db.QueryRow(ctx, "SELECT count(*) FROM pg_logical_slot_get_changes($1,$2::pg_lsn,NULL,'skip-empty-xacts','1')", slot, last).Scan(&consumed); err != nil {
-			return err
-		}
-		log.Printf("bridge entity=%s records=%d indexed=%d consumed=%d elapsed_ms=%d", e.name, records, ops, consumed, time.Since(begin).Milliseconds())
-		if records == 0 {
-			return nil
 		}
 	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return false, err
+	}
+	if err = flush(); err != nil {
+		return false, err
+	}
+	if last == "" {
+		last = boundary
+	}
+	var consumed int64
+	if err = s.db.QueryRow(ctx, "SELECT count(*) FROM pg_logical_slot_get_changes($1,$2::pg_lsn,NULL,'skip-empty-xacts','1')", slot, last).Scan(&consumed); err != nil {
+		return false, err
+	}
+	log.Printf("bridge entity=%s records=%d indexed=%d consumed=%d elapsed_ms=%d", e.name, records, ops, consumed, time.Since(begin).Milliseconds())
+	return records == 0, nil
 }
