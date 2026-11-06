@@ -1,57 +1,18 @@
 -- +goose Up
--- The bounded initializer covers the entire historical range before switching
--- readers. Never initialize only recent buckets: the CAGG watermark would hide
--- older source rows from its real-time tail.
+-- Revised before its first production application (verified at schema 066). Headline
+-- history/population totals intentionally use catalog estimates: no historical
+-- bootstrap or per-row counters. Grouped distribution views are deliberately untouched.
 SET LOCAL lock_timeout='5s';
--- Serialize the name swap with the deployed maintenance service and initializer.
 SELECT pg_advisory_xact_lock(73194201);
--- +goose StatementBegin
-DO $$ BEGIN
- IF EXISTS(SELECT 1 FROM join_leave_history LIMIT 1)
- AND NOT EXISTS(SELECT 1 FROM tracking_scheduled_jobs WHERE job='count_history_bootstrap_join_leave_history' AND completed_at IS NOT NULL AND period >= (now() AT TIME ZONE 'UTC')::date - 1) THEN
-  RAISE EXCEPTION 'Complete bounded join/leave count bootstrap before migration 066';
- END IF;
- IF EXISTS(SELECT 1 FROM wars LIMIT 1)
- AND NOT EXISTS(SELECT 1 FROM tracking_scheduled_jobs WHERE job='count_history_bootstrap_wars' AND completed_at IS NOT NULL AND period >= (now() AT TIME ZONE 'UTC')::date - 1) THEN
-  RAISE EXCEPTION 'Complete bounded war count bootstrap before migration 066';
- END IF;
-END $$;
--- +goose StatementEnd
-
-REFRESH MATERIALIZED VIEW stats_player_count_snapshot;
-REFRESH MATERIALIZED VIEW stats_clan_count_snapshot;
-
-CREATE MATERIALIZED VIEW public.war_league_counts_replacement AS
-SELECT dimension_id AS cwl_league_id, row_count AS clan_count FROM stats_clan_count_snapshot WHERE scope='cwl'
-WITH NO DATA;
-
-REFRESH MATERIALIZED VIEW public.war_league_counts_replacement;
-
-CREATE MATERIALIZED VIEW public.townhall_counts_replacement AS
-SELECT dimension_id AS level, row_count AS total_count FROM stats_player_count_snapshot WHERE scope='townhall'
-WITH NO DATA;
-
-REFRESH MATERIALIZED VIEW public.townhall_counts_replacement;
-
-CREATE UNIQUE INDEX townhall_counts_level_replacement_idx ON public.townhall_counts_replacement (level);
-
-CREATE MATERIALIZED VIEW public.api_league_tier_counts_replacement AS
-SELECT dimension_id AS league_tier_id, row_count AS player_count, refreshed_at FROM stats_player_count_snapshot WHERE scope='league'
-WITH NO DATA;
-
-REFRESH MATERIALIZED VIEW public.api_league_tier_counts_replacement;
-
-CREATE UNIQUE INDEX api_league_tier_counts_id_replacement_idx ON public.api_league_tier_counts_replacement (league_tier_id);
-
 CREATE MATERIALIZED VIEW public.api_global_counts_replacement AS
 SELECT 1::smallint AS id,
     (SELECT count(DISTINCT player_tag) FROM player_timers WHERE event_type='war' AND expires_at>=now()) AS players_in_war,
     (SELECT count(DISTINCT clan_tag) FROM wars WHERE end_time>=now()) AS clans_in_war,
-    (SELECT COALESCE(sum(row_count),0)::bigint FROM stats_join_leave_daily_counts) AS total_join_leaves,
+    (SELECT approximate_row_count('public.join_leave_history'::regclass)) AS total_join_leaves,
     (SELECT count(*) FROM legend_rankings_current) AS players_in_legends,
-    (SELECT row_count FROM stats_player_count_snapshot WHERE scope='total') AS player_count,
-    (SELECT row_count FROM stats_clan_count_snapshot WHERE scope='total') AS clan_count,
-    (SELECT COALESCE(sum(row_count),0)::bigint FROM stats_war_daily_counts) AS wars_stored,
+    (SELECT approximate_row_count('public.basic_player'::regclass)) AS player_count,
+    (SELECT approximate_row_count('public.basic_clan'::regclass)) AS clan_count,
+    (SELECT approximate_row_count('public.wars'::regclass)) AS wars_stored,
     now() AS refreshed_at
 WITH NO DATA;
 
@@ -59,65 +20,24 @@ REFRESH MATERIALIZED VIEW public.api_global_counts_replacement;
 
 CREATE UNIQUE INDEX api_global_counts_id_replacement_idx ON public.api_global_counts_replacement (id);
 
-DROP MATERIALIZED VIEW public.war_league_counts;
-
-ALTER MATERIALIZED VIEW public.war_league_counts_replacement RENAME TO war_league_counts;
-
-DROP MATERIALIZED VIEW public.townhall_counts;
-
-ALTER MATERIALIZED VIEW public.townhall_counts_replacement RENAME TO townhall_counts;
-
-ALTER INDEX townhall_counts_level_replacement_idx RENAME TO townhall_counts_level_idx;
-
-DROP MATERIALIZED VIEW public.api_league_tier_counts;
-
-ALTER MATERIALIZED VIEW public.api_league_tier_counts_replacement RENAME TO api_league_tier_counts;
-
-ALTER INDEX api_league_tier_counts_id_replacement_idx RENAME TO api_league_tier_counts_id_idx;
-
 DROP MATERIALIZED VIEW public.api_global_counts;
 
 ALTER MATERIALIZED VIEW public.api_global_counts_replacement RENAME TO api_global_counts;
 
 ALTER INDEX api_global_counts_id_replacement_idx RENAME TO api_global_counts_id_idx;
 
+COMMENT ON MATERIALIZED VIEW api_global_counts IS 'Headline player/clan/history totals are Timescale catalog estimates; grouped distributions and current-war metrics remain exact.';
+-- Empty preparation aggregates are no longer used. Removing them also removes
+-- their invalidation tracking from append-heavy history writes.
+DROP MATERIALIZED VIEW stats_join_leave_daily_counts;
+DROP MATERIALIZED VIEW stats_war_daily_counts;
+
 -- +goose Down
--- Restore the original exact source scans; raw rows and aggregate buckets stay.
+-- Restore the original exact source scans. Source rows remain untouched;
+-- retired preparation aggregates are recreated empty below.
 SET LOCAL lock_timeout='5s';
--- Serialize the name swap with the deployed maintenance service and initializer.
+-- Serialize the name swap with the deployed maintenance service.
 SELECT pg_advisory_xact_lock(73194201);
-CREATE MATERIALIZED VIEW public.war_league_counts_replacement AS
-SELECT cwl_league_id,
-    count(*) AS clan_count
-   FROM public.basic_clan c
-  GROUP BY cwl_league_id
-WITH NO DATA;
-
-REFRESH MATERIALIZED VIEW public.war_league_counts_replacement;
-
-CREATE MATERIALIZED VIEW public.townhall_counts_replacement AS
-SELECT townhall_level AS level,
-    count(*) AS total_count
-   FROM public.basic_player
-  GROUP BY townhall_level
-WITH NO DATA;
-
-REFRESH MATERIALIZED VIEW public.townhall_counts_replacement;
-
-CREATE UNIQUE INDEX townhall_counts_level_replacement_idx ON public.townhall_counts_replacement (level);
-
-CREATE MATERIALIZED VIEW public.api_league_tier_counts_replacement AS
-SELECT COALESCE(league_id, 0) AS league_tier_id,
-    count(*) AS player_count,
-    now() AS refreshed_at
-   FROM public.basic_player
-  GROUP BY COALESCE(league_id, 0)
-WITH NO DATA;
-
-REFRESH MATERIALIZED VIEW public.api_league_tier_counts_replacement;
-
-CREATE UNIQUE INDEX api_league_tier_counts_id_replacement_idx ON public.api_league_tier_counts_replacement (league_tier_id);
-
 CREATE MATERIALIZED VIEW public.api_global_counts_replacement AS
 SELECT (1)::smallint AS id,
     ( SELECT count(DISTINCT player_timers.player_tag) AS count
@@ -143,24 +63,18 @@ REFRESH MATERIALIZED VIEW public.api_global_counts_replacement;
 
 CREATE UNIQUE INDEX api_global_counts_id_replacement_idx ON public.api_global_counts_replacement (id);
 
-DROP MATERIALIZED VIEW public.war_league_counts;
-
-ALTER MATERIALIZED VIEW public.war_league_counts_replacement RENAME TO war_league_counts;
-
-DROP MATERIALIZED VIEW public.townhall_counts;
-
-ALTER MATERIALIZED VIEW public.townhall_counts_replacement RENAME TO townhall_counts;
-
-ALTER INDEX townhall_counts_level_replacement_idx RENAME TO townhall_counts_level_idx;
-
-DROP MATERIALIZED VIEW public.api_league_tier_counts;
-
-ALTER MATERIALIZED VIEW public.api_league_tier_counts_replacement RENAME TO api_league_tier_counts;
-
-ALTER INDEX api_league_tier_counts_id_replacement_idx RENAME TO api_league_tier_counts_id_idx;
-
 DROP MATERIALIZED VIEW public.api_global_counts;
 
 ALTER MATERIALIZED VIEW public.api_global_counts_replacement RENAME TO api_global_counts;
 
 ALTER INDEX api_global_counts_id_replacement_idx RENAME TO api_global_counts_id_idx;
+
+-- Restore the additive 064 objects without scanning source history.
+CREATE MATERIALIZED VIEW stats_join_leave_daily_counts
+WITH (timescaledb.continuous, timescaledb.materialized_only=false) AS
+SELECT time_bucket(INTERVAL '1 day', time) AS day_start, count(*) AS row_count
+FROM join_leave_history GROUP BY day_start WITH NO DATA;
+CREATE MATERIALIZED VIEW stats_war_daily_counts
+WITH (timescaledb.continuous, timescaledb.materialized_only=false) AS
+SELECT time_bucket(INTERVAL '1 day', end_time) AS day_start, count(*) AS row_count
+FROM wars GROUP BY day_start WITH NO DATA;
