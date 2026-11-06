@@ -350,3 +350,19 @@ Discord origin; non-loopback overrides are rejected. The old token column is
 retained for compatibility but cleared by migrated/saved rows and ignored by new
 delivery. Stop the new consumers before Down. Shared Discord webhooks survive
 rollback and must not be blindly deleted.
+
+### Migration 061: indexed active CWL war lookup
+
+Adds a partial GIN index on `cwl_groups.rounds` for `state <> 'ended'`.
+Both retained round formats (nested tag arrays and objects with `warTags`)
+remain queryable without scanning the historical group table. No rows or
+completion rules change. Existing Tracking queries benefit immediately.
+
+Goose runs this migration outside a transaction so `CREATE INDEX CONCURRENTLY`
+keeps normal readers and writers available. Use a bounded lock/statement timeout
+and monitor `pg_stat_progress_create_index`; a concurrent build can wait for old
+transactions. Deploy this migration before the Tracking lookup deduplication.
+If a build fails, inspect `pg_index.indisvalid` for this exact index. Drop only
+an invalid `public.idx_cwl_groups_active_rounds` with `DROP INDEX CONCURRENTLY`
+before rerunning Goose; do not mark a failed build applied or accept an invalid
+index with `IF NOT EXISTS`. Down drops only the index, also concurrently.

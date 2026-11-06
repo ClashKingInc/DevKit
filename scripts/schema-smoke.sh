@@ -16,6 +16,9 @@ actual_head=$(psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -Atc 'SELECT max(vers
 psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
 DO $$
 BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_index WHERE indexrelid='public.idx_cwl_groups_active_rounds'::regclass AND indisvalid AND indisready) THEN
+   RAISE EXCEPTION 'CWL round index is not ready and valid';
+ END IF;
  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='basic_player' AND column_name='last_active' AND data_type='timestamp with time zone' AND is_nullable='YES') THEN
    RAISE EXCEPTION 'Missing nullable activity column';
  END IF;
