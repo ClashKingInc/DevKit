@@ -3,6 +3,8 @@
 -- readers. Never initialize only recent buckets: the CAGG watermark would hide
 -- older source rows from its real-time tail.
 SET LOCAL lock_timeout='5s';
+-- Serialize the name swap with the deployed maintenance service and initializer.
+SELECT pg_advisory_xact_lock(73194201);
 -- +goose StatementBegin
 DO $$ BEGIN
  IF EXISTS(SELECT 1 FROM join_leave_history LIMIT 1)
@@ -82,6 +84,8 @@ ALTER INDEX api_global_counts_id_replacement_idx RENAME TO api_global_counts_id_
 -- +goose Down
 -- Restore the original exact source scans; raw rows and aggregate buckets stay.
 SET LOCAL lock_timeout='5s';
+-- Serialize the name swap with the deployed maintenance service and initializer.
+SELECT pg_advisory_xact_lock(73194201);
 CREATE MATERIALIZED VIEW public.war_league_counts_replacement AS
 SELECT cwl_league_id,
     count(*) AS clan_count
