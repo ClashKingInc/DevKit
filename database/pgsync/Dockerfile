@@ -15,11 +15,12 @@ RUN apt-get update \
     && python -c "from importlib.metadata import version; assert version('pgsync') == '${PGSYNC_VERSION}'" \
     && useradd --no-create-home --shell /usr/sbin/nologin --uid 10001 pgsync
 
-COPY patch_logical_slot.py patch_bulk_deletes.py resume_initial.py /opt/clashking/
+COPY patch_logical_slot.py patch_bulk_deletes.py patch_notification_filter.py resume_initial.py /opt/clashking/
 RUN python /opt/clashking/patch_logical_slot.py \
-    && python /opt/clashking/patch_bulk_deletes.py
+    && python /opt/clashking/patch_bulk_deletes.py \
+    && python /opt/clashking/patch_notification_filter.py
 
-LABEL ing.clashking.pgsync-patch="complete-wal-range-and-idempotent-delete-v3"
+LABEL ing.clashking.pgsync-patch="complete-wal-range-and-column-filter-v4"
 
 COPY --chown=10001:10001 schema.json /config/schema.json
 

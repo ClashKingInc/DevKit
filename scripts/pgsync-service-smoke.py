@@ -93,6 +93,17 @@ def main():
             raise RuntimeError('Elasticsearch did not become ready')
         sql("INSERT INTO basic_clan(tag,name,public_war_log,war_wins,member_count,badge_token,troops_donated,troops_received) VALUES('#CLAN','Fixture',true,0,1,'',0,0); INSERT INTO basic_player(tag,name,townhall_level) VALUES('#BASE','Base',16);")
         pgsync(['--config', '/config/schema.json'], entrypoint='bootstrap')
+        # Exercise the installed trigger and Goose replacement with real LISTEN/
+        # NOTIFY before the normal search recovery and restart checks below.
+        migration = ['goose', '-env', '/dev/null', '-dir', str(root / 'database/timescale'), 'postgres', os.environ['TEST_DATABASE_URL']]
+        run(migration + ['up-to', '62'])
+        notification_check = (root / 'scripts/pgsync-notifications-smoke.py').read_text()
+        pgsync(['-c', notification_check], entrypoint='python')
+        run(migration + ['down-to', '61'])
+        pgsync(['-c', notification_check], entrypoint='python')
+        run(migration + ['up-to', '62'])
+        pgsync(['-c', notification_check], entrypoint='python')
+
         sql("INSERT INTO basic_player(tag,name,townhall_level) SELECT '#P'||i,'Player '||i,16 FROM generate_series(1,6001) i;")
         # A deletion committed before the first forward scan is already absent
         # from the new index. Replaying its WAL delete must remain successful.
@@ -135,7 +146,7 @@ def main():
         check(es('/clashking_players_v2/_count')['count'] == 6000, 'Restart did not preserve deletion')
         check(es('/clashking_players_v2/_doc/%23P1')['_source']['name'] == 'Changed', 'Restart missed update')
         check(es('/clashking_clans_v2/_count')['count'] == 1, 'Other index did not initialize')
-        print('PASS real PGSync: canonical schema, >5000 changes, one peek/consume, failed bulk leaves slot/checkpoint, preview/retry, pre/during-snapshot deletions, restart update/delete and both indexes')
+        print('PASS real PGSync: migration/rollback notification parity, canonical schema, >5000 changes, one peek/consume, failed bulk leaves slot/checkpoint, preview/retry, pre/during-snapshot deletions, restart update/delete and both indexes')
     finally:
         owned = run(['docker', 'ps', '-aq', '--filter', f'label=io.clashking.fixture.run={run_id}', '--filter', 'label=io.clashking.fixture.owner=pgsync-smoke'], check=False).stdout.split()
         if owned:
