@@ -46,7 +46,10 @@ func run() error {
 	if name != *expectedDB || system != *expectedSystem {
 		return fmt.Errorf("database identity mismatch; provide exact expected database and system identifier")
 	}
-	if _, err = db.Exec(ctx, "SET statement_timeout='20min'; SET lock_timeout='5s'; SET max_parallel_workers_per_gather=1; SET work_mem='64MB'"); err != nil {
+	// Parallel ordered aggregation sorted tens of millions of raw history rows
+	// before counting a few daily buckets. A serial hash aggregate keeps those
+	// small counts in memory; any required final ordering sorts only the buckets.
+	if _, err = db.Exec(ctx, "SET statement_timeout='20min'; SET lock_timeout='5s'; SET max_parallel_workers_per_gather=0; SET work_mem='64MB'; SET enable_sort=off"); err != nil {
 		return err
 	}
 	var locked bool
@@ -123,9 +126,12 @@ func run() error {
 				return fmt.Errorf("history chunk did not advance")
 			}
 			started := time.Now()
+			// The caller already bounds each pass to one physical chunk. Disable
+			// Timescale's default ten-bucket subdivision, which would rescan the
+			// same time-unindexed chunk for every ten days.
 			// CALL commits before the cursor. A crash between these operations repeats
 			// a safe refresh; it never skips an unmaterialized history interval.
-			_, err = db.Exec(ctx, "CALL refresh_continuous_aggregate($1::regclass,$2::timestamptz,$3::timestamptz)", spec[1], cursor, end)
+			_, err = db.Exec(ctx, "CALL refresh_continuous_aggregate($1::regclass,$2::timestamptz,$3::timestamptz,options=>'{\"buckets_per_batch\":0}'::jsonb)", spec[1], cursor, end)
 			if err != nil {
 				return err
 			}
