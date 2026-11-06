@@ -366,3 +366,15 @@ If a build fails, inspect `pg_index.indisvalid` for this exact index. Drop only
 an invalid `public.idx_cwl_groups_active_rounds` with `DROP INDEX CONCURRENTLY`
 before rerunning Goose; do not mark a failed build applied or accept an invalid
 index with `IF NOT EXISTS`. Down drops only the index, also concurrently.
+
+
+### Migration 062: lower-cost search notification filtering
+
+Replaces an already-installed PGSync `table_notify()` function with the equivalent
+configured-column loop shipped in the ck.4 image. Apply through Goose, then
+deploy that normal daemon image. No bootstrap, slot reset, data rewrite or index
+rebuild is required. The function definition changes transactionally; current
+row writes retain their normal transaction guarantees. Fresh databases leave function
+creation and ownership to the patched PGSync bootstrap. Down restores the prior
+comparison. See [the PGSync runbook](../pgsync/RUNBOOK.md#configured-column-notification-filtering-ck4--migration-062)
+for verification and image coordination.

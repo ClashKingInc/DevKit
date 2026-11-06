@@ -512,3 +512,28 @@ horizon before consuming that exact horizon. Its saved XID checkpoint remains
 conservative; a later forward pass may safely repeat newer rows. The real service
 check deletes a row after the forward bulk finishes but before the LSN horizon
 is captured, and verifies the deletion survives recovery and a normal restart.
+
+
+## Configured-column notification filtering (ck.4 / migration 062)
+
+The daemon image `clashking/pgsync:7.2.0-ck.4` keeps the reviewed WAL replay and
+absent-delete patches. Its trigger generator compares the configured search
+columns in a PL/pgSQL loop instead of expanding and joining both JSON objects
+for every updated row. It still reads the configured column list from `_view`;
+there is no hard-coded player-field allowlist. Null transitions, insert/delete
+payloads, transaction IDs, table/schema names, channels and index routing stay
+unchanged. Player observation timestamps remain durable even when no indexed
+field changed.
+
+Apply Goose 062 to update an already-bootstrapped database, then deploy the new
+normal daemon image. On fresh databases, 062 leaves creation and ownership to
+the patched bootstrap. Do not rerun bootstrap or rebuild search indexes. The image
+patch keeps any future explicit bootstrap consistent with the migration. A
+failed trigger-generator source hash stops the image build for review.
+Migration Down restores the previous generic comparison without changing rows,
+slots or indexes; coordinate an image rollback if future bootstrap is required.
+
+The canonical service E2E verifies real LISTEN/NOTIFY behavior before and after
+Down/reapply: unchanged observations stay silent, configured changes and null
+transitions notify, and insert/delete identities remain intact. It also retains
+the real Elasticsearch recovery, failure, checkpoint and restart checks.
