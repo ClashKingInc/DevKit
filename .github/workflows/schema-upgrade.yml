@@ -70,3 +70,6 @@ jobs:
 
       - name: Verify ten-cent AI allowance migration
         run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/ai-allowance-smoke.sh
+
+      - name: Preserve and split Reddit subscriptions
+        run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/reddit-split-smoke.sh
