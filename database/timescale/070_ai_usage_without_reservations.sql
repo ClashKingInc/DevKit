@@ -17,10 +17,23 @@ SET outcome = CASE WHEN settled_at IS NOT NULL THEN 'completed' ELSE 'unknown' E
 COMMENT ON TABLE public.roster_ai_step_budgets IS 'Provider-call usage audit. Legacy estimates are retained for diagnosis only; no reservations affect admission. Unknown usage is not a zero-cost settlement.';
 COMMENT ON COLUMN public.roster_ai_step_budgets.reserved_usd IS 'Legacy estimate only. New calls store zero. Excluded from all spending limits.';
 -- +goose Down
--- Forward-only: restoring hard caps could lock out users or discard above-cap
--- usage. Roll back application code only to a soft-limit-compatible version.
+-- Empty disposable databases can roll back for upgrade tests. Production call
+-- records must never lose their diagnostics or regain unsafe hard-cap rules.
 -- +goose StatementBegin
 DO $$ BEGIN
-    RAISE EXCEPTION 'AI accounting migration is forward-only; preserve usage records';
+    IF EXISTS (SELECT 1 FROM public.roster_ai_step_budgets) THEN
+        RAISE EXCEPTION 'Preserve AI usage records; rollback requires an empty call audit';
+    END IF;
 END $$;
 -- +goose StatementEnd
+ALTER TABLE public.roster_ai_step_budgets
+    DROP CONSTRAINT roster_ai_step_budgets_reserved_usd_check,
+    DROP CONSTRAINT roster_ai_step_budgets_actual_usd_check,
+    DROP COLUMN outcome,
+    DROP COLUMN provider_response_id,
+    DROP COLUMN failure_code,
+    DROP COLUMN updated_at,
+    ADD CONSTRAINT roster_ai_step_budgets_reserved_usd_check CHECK (reserved_usd > 0),
+    ADD CONSTRAINT roster_ai_step_budgets_check CHECK (actual_usd >= 0 AND actual_usd <= reserved_usd);
+COMMENT ON TABLE public.roster_ai_step_budgets IS 'Per-provider-call hard spend reservations. Unknown/aborted calls retain their reservation; no timeout may release potentially spent budget.';
+COMMENT ON COLUMN public.roster_ai_step_budgets.reserved_usd IS NULL;
