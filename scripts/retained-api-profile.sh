@@ -62,4 +62,5 @@ fixture_sources=(
   066_manual_refresh_requests.sql
   067_shared_count_publication.sql
   068_ten_cent_ai_allowance.sql
+  "069_reddit_user_feed.sql"
 )
