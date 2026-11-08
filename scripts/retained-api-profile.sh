@@ -66,4 +66,5 @@ fixture_sources=(
   "070_ai_usage_without_reservations.sql"
   "071_roster_view_sharing.sql"
   "072_war_triple_credits.sql"
+  "073_clan_distribution_counts.sql"
 )
