@@ -16,8 +16,9 @@ const parent = "999999999999993903", thread = "999999999999993904", other = "999
 const ids = [1,2,3,4,5].map(i => `00000000-0000-4000-8000-00000000390${i}`);
 const hook = (channel, id) => ({ id, type: 1, guild_id: guild, channel_id: channel, user: { id: app }, token: "fixture" });
 const hooks = new Map([[parent, [hook(parent, "999999999999993911")]]]);
-let parentReads = 0, creates = 0, rejectedPosts = 0, failPost = true;
+let parentReads = 0, creates = 0, rejectedPosts = 0, failPost = true, providerRequests = 0;
 const provider = createServer((req, res) => {
+  providerRequests++;
   res.setHeader("content-type", "application/json");
   const send = (value, status = 200) => { res.statusCode = status; res.end(JSON.stringify(value)); };
   if (req.url === "/users/@me") return send({ id: app });
@@ -52,12 +53,33 @@ try {
   await mkdir(join(working, "timescale"), { recursive: true })
   await writeFile(join(temporary, "workspace", ".env"), "")
   await writeFile(join(working, "timescale", "001_initial_stats.sql"), "")
-  const env = { ...process.env, TIMESCALE_URL: dsn, BOT_TOKEN: "fixture", REMINDER_DISCORD_API_URL: `http://127.0.0.1:${provider.address().port}`, REMINDER_WEBHOOKS_APPLY: "0", REMINDER_WEBHOOKS_START_AT: "" };
+  const env = { ...process.env, TIMESCALE_URL: dsn, BOT_TOKEN: "fixture", REMINDER_DISCORD_API_URL: `http://127.0.0.1:${provider.address().port}`, REMINDER_WEBHOOKS_APPLY: "0", REMINDER_WEBHOOKS_START_AT: "", REMINDER_WEBHOOKS_IDS: "", REMINDER_WEBHOOKS_ONLY_MISSING: "0", REMINDER_WEBHOOKS_ACTIVE_ONLY: "0" };
   const run = (extra = {}) => exec(binary, [], { cwd: working, env: { ...env, ...extra } });
   const preview = await run();
   assert.match(preview.stdout, /apply=false scanned=4 total=4/u);
   assert(parentReads >= 2); assert.equal(creates, 0);
   assert.equal(await sql("SELECT count(*) FROM reminders WHERE webhook_id IS NOT NULL"), "0");
+  const requestCount = providerRequests;
+  for (const invalid of ['not-a-uuid', `${ids[0]},${ids[0].toUpperCase()}`, ', ,']) {
+    await assert.rejects(run({ REMINDER_WEBHOOKS_IDS: invalid }));
+  }
+  assert.equal(providerRequests, requestCount, 'Invalid allowlists must fail before provider access');
+  const selected = { REMINDER_WEBHOOKS_IDS: ids[0], REMINDER_WEBHOOKS_ONLY_MISSING: '1', REMINDER_WEBHOOKS_ACTIVE_ONLY: '1' };
+  const selectedPreview = await run({ ...selected, TIMESCALE_URL: dsn + '&options=-c%20default_transaction_read_only%3Don' });
+  assert.match(selectedPreview.stdout, /scanned=1 total=1 reused=1/u);
+  assert.match(selectedPreview.stdout, /allowlisted=1/u);
+  assert.equal(creates, 0);
+  assert.match((await run({ ...selected, REMINDER_WEBHOOKS_APPLY: '1' })).stdout, /scanned=1 total=1 reused=1 created=0 updated=1/u);
+  assert.equal(await sql(`SELECT count(*) FROM reminders WHERE id<>'${ids[0]}' AND webhook_id IS NOT NULL`), '0', 'Unlisted reminders must remain untouched');
+  assert.match((await run(selected)).stdout, /scanned=0 total=0/u);
+  await sql(`UPDATE reminders SET webhook_id=NULL,webhook_token='fixture' WHERE id='${ids[0]}'`);
+  await sql(`UPDATE reminders SET disabled=true WHERE id='${ids[0]}'`);
+  assert.match((await run(selected)).stdout, /scanned=0 total=0/u, 'Allowlist must not bypass active-only filtering');
+  const scopedPreview = await run({ TIMESCALE_URL: dsn + '&options=-c%20default_transaction_read_only%3Don', REMINDER_WEBHOOKS_ONLY_MISSING: '1', REMINDER_WEBHOOKS_ACTIVE_ONLY: '1' });
+  assert.match(scopedPreview.stdout, /apply=false scanned=3 total=3/u);
+  assert.match(scopedPreview.stdout, /only_missing=true active_only=true/u);
+  assert.equal(creates, 0);
+  await sql(`UPDATE reminders SET disabled=false WHERE id='${ids[0]}'`);
   await assert.rejects(run({ REMINDER_WEBHOOKS_START_AT: "00000000-0000-4000-8000-000000000001" }));
   const resumed = await run({ REMINDER_WEBHOOKS_APPLY: "1", REMINDER_WEBHOOKS_START_AT: ids[2] });
   assert.match(resumed.stdout, /scanned=2 total=2/u); assert.equal(creates, 1);
@@ -65,6 +87,7 @@ try {
   await run({ REMINDER_WEBHOOKS_APPLY: "1" });
   assert.equal(creates, 1);
   assert.equal(await sql("SELECT count(*) FROM reminders WHERE webhook_id IS NOT NULL AND webhook_token=''"), "4");
+  assert.match((await run({ REMINDER_WEBHOOKS_ONLY_MISSING: '1', REMINDER_WEBHOOKS_ACTIVE_ONLY: '1' })).stdout, /scanned=0 total=0/u);
   assert.equal(await sql(`SELECT channel_id||':'||thread_id FROM reminders WHERE id='${ids[1]}'`), `${parent}:${thread}`);
   await sql(`INSERT INTO reminders(id,server_id,type,type_name,clan_tag,webhook_token,channel_id,minutes_remaining) VALUES('${ids[4]}','${guild}',1,'War','#PYLQ','fixture','${failing}',300)`);
   await assert.rejects(run({ REMINDER_WEBHOOKS_APPLY: "1", REMINDER_WEBHOOKS_START_AT: ids[4] }));
@@ -74,7 +97,7 @@ try {
   await run({ REMINDER_WEBHOOKS_APPLY: "1", REMINDER_WEBHOOKS_START_AT: ids[4] });
   await run({ REMINDER_WEBHOOKS_APPLY: "1" });
   assert.equal(creates, 2);
-  console.log("PASS actual reminder repair: safe GET retry, inclusive resume, shared/thread reuse, no ambiguous POST retry, repeat apply creates none");
+  console.log("PASS actual reminder repair: validated allowlist excludes unlisted/disabled/already-repaired rows, read-only scoped preview, safe GET retry, inclusive resume, shared/thread reuse, no ambiguous POST retry, repeat apply creates none");
 } finally {
   await new Promise(resolve => provider.close(resolve));
   await rm(temporary, { recursive: true, force: true });

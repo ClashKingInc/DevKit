@@ -375,8 +375,13 @@ func canonicalArchiveWar(doc clanWarDoc) (archiveWar, bool) {
 		}
 	}
 	attacksPerMember := doc.Data.AttacksPerMember
-	if attacksPerMember <= 0 {
+	if warType == "cwl" {
 		attacksPerMember = 1
+	} else if attacksPerMember <= 0 {
+		// Legacy non-CWL rows without the original allowance cannot tell us
+		// which friendly-war rules applied. Retain their history with an unknown
+		// allowance instead of fabricating misses or discarding the entire war.
+		attacksPerMember = 0
 	}
 	clan, opponent := doc.Data.Clan, doc.Data.Opponent
 	if clan.Tag > opponent.Tag {

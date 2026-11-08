@@ -15,8 +15,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type discordStatusError struct{ code int }
@@ -29,12 +33,28 @@ func str(m object, k string) string { s, _ := m[k].(string); return s }
 func number(m object, k string) int { n, _ := m[k].(float64); return int(n) }
 
 type discordReader struct {
-	base, token string
-	client      *http.Client
+	base, token  string
+	client       *http.Client
+	previewCache map[string]previewRead
+}
+type previewRead struct {
+	body json.RawMessage
+	err  error
 }
 
 func (d discordReader) request(ctx context.Context, method, path string, body any) (json.RawMessage, error) {
-	return d.requestAttempt(ctx, method, path, body, 0)
+	if method != "GET" || d.previewCache == nil {
+		return d.requestAttempt(ctx, method, path, body, 0)
+	}
+	if cached, ok := d.previewCache[path]; ok {
+		return cached.body, cached.err
+	}
+	value, err := d.requestAttempt(ctx, method, path, body, 0)
+	var status *discordStatusError
+	if err == nil || errors.As(err, &status) && (status.code == 403 || status.code == 404) {
+		d.previewCache[path] = previewRead{value, err}
+	}
+	return value, err
 }
 func (d discordReader) requestAttempt(ctx context.Context, method, path string, body any, attempt int) (json.RawMessage, error) {
 	var payload io.Reader
@@ -120,8 +140,37 @@ func owned(h object, app, server, channel string) bool {
 	return number(h, "type") == 1 && str(h, "guild_id") == server && str(h, "channel_id") == channel && str(h, "id") != "" && (str(h, "application_id") == app || str(u, "id") == app)
 }
 func main() { migrateutil.Main("reminder_webhooks", run) }
+
+var reminderUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+func reminderAllowlist(raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	values := strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\r' || r == '\t' })
+	if len(values) == 0 || len(values) > 1000 {
+		return nil, fmt.Errorf("REMINDER_WEBHOOKS_IDS must contain between 1 and 1000 UUIDs")
+	}
+	seen := map[string]bool{}
+	for i, value := range values {
+		value = strings.ToLower(value)
+		if !reminderUUID.MatchString(value) || seen[value] {
+			return nil, fmt.Errorf("REMINDER_WEBHOOKS_IDS contains an invalid or duplicate UUID")
+		}
+		seen[value] = true
+		values[i] = value
+	}
+	return values, nil
+}
+
 func run(ctx context.Context, cfg migrateutil.Config) error {
 	apply := os.Getenv("REMINDER_WEBHOOKS_APPLY") == "1"
+	onlyMissing := os.Getenv("REMINDER_WEBHOOKS_ONLY_MISSING") == "1"
+	activeOnly := os.Getenv("REMINDER_WEBHOOKS_ACTIVE_ONLY") == "1"
+	allowlist, e := reminderAllowlist(os.Getenv("REMINDER_WEBHOOKS_IDS"))
+	if e != nil {
+		return e
+	}
 	base := strings.TrimSuffix(os.Getenv("REMINDER_DISCORD_API_URL"), "/")
 	if base == "" {
 		base = "https://discord.com/api/v10"
@@ -136,6 +185,11 @@ func run(ctx context.Context, cfg migrateutil.Config) error {
 		return fmt.Errorf("BOT_TOKEN required")
 	}
 	d := discordReader{base: base, token: token, client: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	// Preview shares read-only observations across reminders in the same channel.
+	// Apply always re-reads Discord under the server lock before reusing a hook.
+	if !apply {
+		d.previewCache = map[string]previewRead{}
+	}
 	me, e := d.get(ctx, "/users/@me")
 	if e != nil {
 		return e
@@ -144,12 +198,23 @@ func run(ctx context.Context, cfg migrateutil.Config) error {
 	if app == "" {
 		return fmt.Errorf("Discord user has no ID")
 	}
-	pool, e := migrateutil.TimescalePool(ctx, cfg)
+	poolConfig, e := pgxpool.ParseConfig(cfg.TimescaleURL)
+	if e != nil {
+		return e
+	}
+	// This repair is serial and holds one destination transaction at a time.
+	// Bound the actual pool so diagnosis cannot consume spare service capacity.
+	poolConfig.MaxConns, poolConfig.MinConns = 1, 0
+	pool, e := pgxpool.NewWithConfig(ctx, poolConfig)
 	if e != nil {
 		return e
 	}
 	defer pool.Close()
-	rows, e := pool.Query(ctx, `SELECT id::text FROM reminders ORDER BY server_id,channel_id,id`)
+	rows, e := pool.Query(ctx, `SELECT r.id::text FROM reminders r
+ WHERE (NOT $1 OR COALESCE(r.webhook_id,'')='')
+ AND (NOT $2 OR (NOT r.disabled AND EXISTS(SELECT 1 FROM servers s WHERE s.id=r.server_id AND s.left_at IS NULL)))
+ AND (NOT $3 OR r.id=ANY($4::uuid[]))
+ ORDER BY r.server_id,r.channel_id,r.id`, onlyMissing, activeOnly, len(allowlist) > 0, allowlist)
 	if e != nil {
 		return e
 	}
@@ -184,8 +249,9 @@ func run(ctx context.Context, cfg migrateutil.Config) error {
 		ids = ids[found:]
 	}
 	reused, created, updated, unavailable, scanned := 0, 0, 0, 0, 0
+	needsCreation := map[string]struct{}{}
 	defer func() {
-		fmt.Printf("reminder webhook migration: apply=%t scanned=%d total=%d reused=%d created=%d updated=%d unavailable=%d\n", apply, scanned, len(ids), reused, created, updated, unavailable)
+		fmt.Printf("reminder webhook migration: apply=%t scanned=%d total=%d reused=%d created=%d updated=%d unavailable=%d only_missing=%t active_only=%t needs_creation_destinations=%d application_id=%s allowlisted=%d\n", apply, scanned, len(ids), reused, created, updated, unavailable, onlyMissing, activeOnly, len(needsCreation), app, len(allowlist))
 	}()
 	process := func(id string) error {
 		tx, e := pool.Begin(ctx)
@@ -193,18 +259,35 @@ func run(ctx context.Context, cfg migrateutil.Config) error {
 			return e
 		}
 		fail := func(e error) error { _ = tx.Rollback(ctx); return fmt.Errorf("reminder %s: %w", id, e) }
+		if !apply {
+			if _, e = tx.Exec(ctx, "SET TRANSACTION READ ONLY"); e != nil {
+				return fail(e)
+			}
+		}
 		var server, channel, thread string
 		e = tx.QueryRow(ctx, `SELECT server_id,COALESCE(channel_id,''),COALESCE(thread_id,'') FROM reminders WHERE id=$1::uuid`, id).Scan(&server, &channel, &thread)
 		if e != nil {
 			return fail(e)
 		}
-		// Match API's server lock before inspecting/creating shared channel hooks.
+		// Apply matches API's server lock. Preview must remain usable on a
+		// read-only connection and must not hold configuration write locks.
 		var locked string
-		e = tx.QueryRow(ctx, `SELECT id FROM servers WHERE id=$1 FOR UPDATE`, server).Scan(&locked)
+		lock := ""
+		if apply {
+			lock = " FOR UPDATE"
+		}
+		e = tx.QueryRow(ctx, `SELECT id FROM servers WHERE id=$1`+lock, server).Scan(&locked)
 		if e != nil {
 			return fail(e)
 		}
-		e = tx.QueryRow(ctx, `SELECT COALESCE(channel_id,''),COALESCE(thread_id,'') FROM reminders WHERE id=$1::uuid AND server_id=$2 FOR UPDATE`, id, server).Scan(&channel, &thread)
+		e = tx.QueryRow(ctx, `SELECT COALESCE(channel_id,''),COALESCE(thread_id,'') FROM reminders r
+ WHERE id=$1::uuid AND server_id=$2 AND (NOT $3 OR COALESCE(webhook_id,'')='')
+ AND (NOT $4 OR (NOT disabled AND EXISTS(SELECT 1 FROM servers s WHERE s.id=r.server_id AND s.left_at IS NULL)))`+lock,
+			id, server, onlyMissing, activeOnly).Scan(&channel, &thread)
+		if errors.Is(e, pgx.ErrNoRows) {
+			_ = tx.Rollback(ctx)
+			return nil
+		}
 		if e != nil {
 			return fail(e)
 		}
@@ -270,7 +353,17 @@ func run(ctx context.Context, cfg migrateutil.Config) error {
 			hookID = str(h, "id")
 			created++
 		} else {
+			needsCreation[server+":"+channel] = struct{}{}
 			fmt.Printf("reminder %s: needs a shared channel webhook\n", id)
+		}
+		if !apply && len(allowlist) > 0 {
+			action := "reuse"
+			if hookID == "" {
+				action = "create_shared_webhook"
+			}
+			proposal, _ := json.Marshal(object{"reminder_id": id, "server_id": server, "channel_id": channel,
+				"thread_id": thread, "action": action, "webhook_id": hookID})
+			fmt.Printf("reminder webhook preview: %s\n", proposal)
 		}
 		if apply {
 			_, e = tx.Exec(ctx, `UPDATE reminders SET webhook_id=$2,webhook_token='',channel_id=$3,thread_id=NULLIF($4,''),updated_at=now() WHERE id=$1::uuid`, id, hookID, channel, thread)
