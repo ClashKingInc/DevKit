@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/ClashKingInc/DevKit/database/migrations/migrateutil"
@@ -25,8 +24,6 @@ type legendHistoryRow struct {
 	clanName       any
 	clanBadgeToken any
 	leagueTierID   any
-	leagueID       any
-	leagueSnapshot any
 }
 
 func main() {
@@ -147,23 +144,6 @@ func legendRowFromDocument(doc bson.M) (legendHistoryRow, bool) {
 		clanBadgeToken = badgeToken
 	}
 	leagueTierID := migrateutil.OptionalInt(migrateutil.Map(doc["leagueTier"])["id"])
-	leagueID := migrateutil.OptionalInt(migrateutil.Map(doc["league"])["id"])
-	// Retain the source namespaces and their original names/icons. A historical
-	// endpoint category is never substituted for an absent per-player league.
-	snapshot := make(map[string]any)
-	for _, field := range []string{"league", "leagueTier"} {
-		if value := migrateutil.Map(doc[field]); value != nil {
-			snapshot[field] = value
-		}
-	}
-	var leagueSnapshot any
-	if len(snapshot) > 0 {
-		encoded, err := json.Marshal(snapshot)
-		if err != nil {
-			return legendHistoryRow{}, false
-		}
-		leagueSnapshot = encoded
-	}
 	return legendHistoryRow{
 		season:         season,
 		playerTag:      playerTag,
@@ -177,8 +157,6 @@ func legendRowFromDocument(doc bson.M) (legendHistoryRow, bool) {
 		clanName:       clanName,
 		clanBadgeToken: clanBadgeToken,
 		leagueTierID:   leagueTierID,
-		leagueID:       leagueID,
-		leagueSnapshot: leagueSnapshot,
 	}, true
 }
 
@@ -207,9 +185,7 @@ func flushLegendHistoryRows(ctx context.Context, pool interface {
 			clan_tag text,
 			clan_name text,
 			clan_badge_token text,
-			league_tier_id integer,
-			league_id integer,
-			league_snapshot jsonb
+			league_tier_id integer
 		) ON COMMIT DROP
 	`); err != nil {
 		return 0, err
@@ -229,8 +205,6 @@ func flushLegendHistoryRows(ctx context.Context, pool interface {
 			row.clanName,
 			row.clanBadgeToken,
 			row.leagueTierID,
-			row.leagueID,
-			row.leagueSnapshot,
 		})
 	}
 	if _, err := tx.CopyFrom(
@@ -249,8 +223,6 @@ func flushLegendHistoryRows(ctx context.Context, pool interface {
 			"clan_name",
 			"clan_badge_token",
 			"league_tier_id",
-			"league_id",
-			"league_snapshot",
 		},
 		pgx.CopyFromRows(copyRows),
 	); err != nil {
@@ -260,11 +232,11 @@ func flushLegendHistoryRows(ctx context.Context, pool interface {
 		INSERT INTO public.legend_history (
 			season, player_tag, player_name, exp_level, trophies,
 			attack_wins, defense_wins, rank, clan_tag, clan_name,
-			clan_badge_token, league_tier_id, league_id, league_snapshot
+			clan_badge_token, league_tier_id
 		)
 		SELECT season, player_tag, player_name, exp_level, trophies,
 			attack_wins, defense_wins, rank, clan_tag, clan_name,
-			clan_badge_token, league_tier_id, league_id, league_snapshot
+			clan_badge_token, league_tier_id
 		FROM _ck_legend_history
 		ON CONFLICT (player_tag, season) DO UPDATE SET
 			player_name = EXCLUDED.player_name,
@@ -276,9 +248,7 @@ func flushLegendHistoryRows(ctx context.Context, pool interface {
 			clan_tag = EXCLUDED.clan_tag,
 			clan_name = EXCLUDED.clan_name,
 			clan_badge_token = EXCLUDED.clan_badge_token,
-			league_tier_id = COALESCE(EXCLUDED.league_tier_id, legend_history.league_tier_id),
-			league_id = COALESCE(EXCLUDED.league_id, legend_history.league_id),
-			league_snapshot = NULLIF(COALESCE(legend_history.league_snapshot, '{}'::jsonb) || COALESCE(EXCLUDED.league_snapshot, '{}'::jsonb), '{}'::jsonb)
+			league_tier_id = EXCLUDED.league_tier_id
 	`); err != nil {
 		return 0, err
 	}

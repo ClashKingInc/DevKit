@@ -65,5 +65,4 @@ fixture_sources=(
   "069_reddit_user_feed.sql"
   "070_ai_usage_without_reservations.sql"
   "071_roster_view_sharing.sql"
-  "072_legend_history_source.sql"
 )
