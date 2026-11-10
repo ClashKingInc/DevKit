@@ -68,4 +68,5 @@ fixture_sources=(
   "072_war_triple_credits.sql"
   "073_clan_distribution_counts.sql"
   "074_countdown_disable.sql"
+  "075_remove_server_clan_limit.sql"
 )

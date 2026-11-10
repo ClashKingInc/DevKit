@@ -434,3 +434,10 @@ The initializer shares maintenance advisory lock 73194201 and refuses a new batc
 Migration 066 refuses publication when existing history lacks a completed bootstrap through at least yesterday’s UTC boundary. Use today’s UTC date for the initial production run; an old partial-period bootstrap cannot satisfy the publication guard. It initializes the two population snapshots, builds replacement public count views, then swaps their names transactionally. Public column names and integer types remain unchanged. Existing operator/API consumers continue to read `api_global_counts`, `api_league_tier_counts`, `townhall_counts`, and `war_league_counts`. Rollback reconstructs their prior raw-table queries without changing raw data.
 
 Deploy the companion Tracking refresh implementation after 066. It must refresh historical invalidations before the grouped population snapshots and publish all related count views in one transaction. New or future rows remain visible in the real-time aggregate tail; late changes to older buckets require the invalidation refresh. Do not substitute a fixed recent-only history lookback.
+
+### Migration 075: unlimited server clans
+
+Drops servers.clan_limit after the updated API and clients are deployed. Leaves
+clan membership, AutoBoard limits, AI allowances/accounting and customization
+grants unchanged. Down restores default 10 without deleting clans; recover
+old per-server overrides from the release backup before reverting the API.
