@@ -32,6 +32,9 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
+          # Keep repository validation on the compatible SDK used locally.
+          # Floating stable can turn unrelated SDK deprecations into failures.
+          flutter-version: '3.44.0'
           channel: stable
           cache: true
 

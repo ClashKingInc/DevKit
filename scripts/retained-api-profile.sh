@@ -70,4 +70,7 @@ fixture_sources=(
   "074_countdown_disable.sql"
   "075_remove_server_clan_limit.sql"
   "076_giveaway_withdrawal_receipts.sql"
+  "077_reusable_setup_grants.sql"
+  "078_server_clan_order.sql"
+  "079_restore_donation_logs.sql"
 )
