@@ -30,6 +30,10 @@ jobs:
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/ticket-duplicate-upgrade-smoke.sh
       - name: Retire legacy donation-log records
         run: bash scripts/with-test-timescale.sh --profile baseline-021 -- bash scripts/donation-log-migration-smoke.sh
+      - name: Restore optional donation destinations and preserve rollback data
+        run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/donation-log-smoke.sh
+      - name: Verify reusable setup grants and clan order rollback
+        run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/dashboard-order-and-grants-smoke.sh
       - name: Skip retired donation destinations during import
         run: bash scripts/with-test-timescale.sh --profile retained-api -- bash scripts/donation-log-import-smoke.sh
       - name: Backfill recorded Legend streaks

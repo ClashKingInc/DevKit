@@ -14,7 +14,7 @@ INSERT INTO server_logs(server_id,clan_tag,type,webhook_id,thread_id,message_id,
 ('99990001',NULL,'donation_log','999903',NULL,NULL,false),
 ('99990001','#PYLQ','join_log','999904',NULL,NULL,false);
 SQL
-goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up
+goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up-to 28
 psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
 DO $$ BEGIN
  IF EXISTS(SELECT 1 FROM server_logs WHERE type='donation_log') THEN RAISE EXCEPTION 'Old donation log remains'; END IF;
@@ -28,4 +28,4 @@ DO $$ BEGIN
 END $$;
 SQL
 goose -env /dev/null -dir "$root/database/timescale" postgres "$TEST_DATABASE_URL" up
-printf 'Donation-log migration E2E passed: retired settings removed; no replacement boards created; unrelated logs retained; retired type rejected.\n'
+printf 'Historical migration 028 E2E passed: retired settings removed; no replacement boards created; unrelated logs retained; retired type rejected.\n'
