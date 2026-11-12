@@ -441,3 +441,7 @@ Drops servers.clan_limit after the updated API and clients are deployed. Leaves
 clan membership, AutoBoard limits, AI allowances/accounting and customization
 grants unchanged. Down restores default 10 without deleting clans; recover
 old per-server overrides from the release backup before reverting the API.
+
+### Donation log restoration (079)
+
+Migration 079 permits optional `donation_log` destinations again, alongside donation AutoBoards. It does not recreate destinations deleted by migration 028. Configure those destinations again through Dashboard or the API. Rollback retains restored rows and blocks new donation-log writes; the previous runtime ignores their events.
