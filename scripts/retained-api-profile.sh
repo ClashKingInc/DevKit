@@ -71,4 +71,5 @@ fixture_sources=(
   "075_remove_server_clan_limit.sql"
   "076_giveaway_withdrawal_receipts.sql"
   "077_reusable_setup_grants.sql"
+  "078_server_clan_order.sql"
 )
