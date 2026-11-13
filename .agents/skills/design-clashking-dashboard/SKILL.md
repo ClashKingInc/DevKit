@@ -23,7 +23,7 @@ When sources disagree, preserve the shipped product behavior and follow the curr
 
 ClashKing interfaces should feel alive and have character. Calm must not become sterile. Build character through coherent backgrounds, authentic imagery, useful icons, tactile controls, and well-judged motion. Do not substitute slogans, welcome paragraphs, feature summaries, decorative status pills, or extra panels for visual craft.
 
-Actively consider generated imagery and bespoke animation when they can materially improve the result. Use image generation for an original bitmap, atmosphere, texture, or illustration when appropriate; use code-native drawing and animation when responsiveness, theme adaptation, interaction, or small asset size make that the better choice. For Clash of Clans subjects, preserve authoritative assets and recognizable models rather than replacing them with invented game art. 
+Actively consider generated imagery and bespoke animation when they can materially improve the result. Use image generation for an original bitmap, atmosphere, texture, or illustration when appropriate; use code-native drawing and animation when responsiveness, theme adaptation, interaction, or small asset size make that the better choice. For Clash of Clans subjects, preserve authoritative assets and recognizable models rather than replacing them with invented game art.
 
 Tie interaction motion to the user's action. Prefer interruptible, restrained press/sheet/selection feedback; reserve ambient motion for places where it will not compete with reading or work. Respect reduced motion and pause unnecessary animation when the app or surface is inactive. Personality must preserve contrast, touch targets, responsiveness, and reliable state feedback.
 
