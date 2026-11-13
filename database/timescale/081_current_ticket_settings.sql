@@ -312,10 +312,16 @@ SET data = p.data || COALESCE((
   FROM jsonb_each(p.data) e WHERE e.key LIKE '%\_settings' ESCAPE '\'
 ),'{}'::jsonb);
 
--- Already accepted work retains the same behavior after the reader switches.
+-- An open form's context is immutable in normal operation. Temporarily disable
+-- only that named guard while the migration holds the table's DDL lock, then
+-- restore it in the same Goose transaction. A failure rolls back both changes.
+-- Keep pages, answers, receipts and welcome snapshots unchanged. Finished and
+-- already-submitted operations retain their original historical contexts.
+ALTER TABLE ticket_runtime_operations DISABLE TRIGGER guard_ticket_runtime_operation;
 UPDATE ticket_runtime_operations op
 SET context=jsonb_set(op.context,'{settings}',pg_temp.current_ticket_settings(op.context->'settings',op.server_id,false))
-WHERE jsonb_typeof(op.context->'settings')='object';
+WHERE op.action = 'open' AND op.state = 'preparing' AND jsonb_typeof(op.context->'settings')='object';
+ALTER TABLE ticket_runtime_operations ENABLE TRIGGER guard_ticket_runtime_operation;
 
 -- +goose Down
 -- Obsolete fields are intentionally not recreated. Restore a reviewed backup
