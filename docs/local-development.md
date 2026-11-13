@@ -173,7 +173,7 @@ push domains.
   unsigned cache-prime request is pointed at the authenticated loopback bridge,
   where the expected 403 remains a best-effort warning and cannot reach the
   production archive origin.
-- Dashboard receives `NEXT_PUBLIC_CLASHKING_API_ORIGIN=http://127.0.0.1:8787`;
+- Dashboard receives `VITE_CLASHKING_API_ORIGIN=http://127.0.0.1:8787`;
   Admin receives `VITE_CLASHKING_API_ORIGIN=http://127.0.0.1:8787`; Expo runs
   from its `expo` workspace with `EXPO_PUBLIC_CK_API_ENV=local` and its API,
   API-v2, proxy, and push base URLs derived from the same loopback API origin.
