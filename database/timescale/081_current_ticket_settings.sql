@@ -306,11 +306,17 @@ $$;
 -- stable, committed source; the lock ends with this Goose transaction.
 LOCK TABLE server_custom_embeds IN SHARE MODE;
 
+-- Archived panels can still authorize staff actions for existing tickets, so
+-- their saved settings need the same contract as live panels. Bypass only the
+-- named archive/identity guard while this settings-only update holds the table
+-- DDL lock; reenable it in this transaction before any writer can continue.
+ALTER TABLE ticket_panels DISABLE TRIGGER guard_canonical_ticket_panel;
 UPDATE ticket_panels p
 SET data = p.data || COALESCE((
   SELECT jsonb_object_agg(e.key,pg_temp.current_ticket_settings(e.value,p.server_id))
   FROM jsonb_each(p.data) e WHERE e.key LIKE '%\_settings' ESCAPE '\'
 ),'{}'::jsonb);
+ALTER TABLE ticket_panels ENABLE TRIGGER guard_canonical_ticket_panel;
 
 -- An open form's context is immutable in normal operation. Temporarily disable
 -- only that named guard while the migration holds the table's DDL lock, then
