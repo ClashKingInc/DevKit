@@ -2,8 +2,8 @@
 # Run one integration suite against an isolated, Goose-migrated Timescale database.
 set -euo pipefail
 
-if [[ ${1:-} != --profile || ( ${2:-} != retained-api && ${2:-} != baseline-006 && ${2:-} != baseline-013 && ${2:-} != baseline-018 && ${2:-} != baseline-021 ) ]]; then
-  echo 'An explicit --profile retained-api, baseline-006, baseline-013, baseline-018, or baseline-021 is required.' >&2
+if [[ ${1:-} != --profile || ( ${2:-} != retained-api && ${2:-} != baseline-006 && ${2:-} != baseline-013 && ${2:-} != baseline-018 && ${2:-} != baseline-021 && ${2:-} != baseline-079 ) ]]; then
+  echo 'An explicit --profile retained-api, baseline-006, baseline-013, baseline-018, baseline-021, or baseline-079 is required.' >&2
   exit 2
 fi
 fixture_profile="$2"
@@ -24,6 +24,14 @@ elif [[ $fixture_profile == baseline-018 ]]; then
   fixture_sources=("${fixture_sources[@]:0:18}")
 elif [[ $fixture_profile == baseline-021 ]]; then
   fixture_sources=("${fixture_sources[@]:0:21}")
+elif [[ $fixture_profile == baseline-079 ]]; then
+  # Seed legacy ticket rows before applying 081 in migration integration tests.
+  baseline_sources=()
+  for fixture_source in "${fixture_sources[@]}"; do
+    [[ $fixture_source == 081_* ]] && break
+    baseline_sources+=("$fixture_source")
+  done
+  fixture_sources=("${baseline_sources[@]}")
 fi
 fixture_container=''
 fixture_child=''
