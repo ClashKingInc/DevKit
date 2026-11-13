@@ -73,4 +73,6 @@ fixture_sources=(
   "077_reusable_setup_grants.sql"
   "078_server_clan_order.sql"
   "079_restore_donation_logs.sql"
+  # 081 converts existing ticket rows; disposable fixtures have no legacy rows.
+  "082_server_lab_tenure.sql"
 )
