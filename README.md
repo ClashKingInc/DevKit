@@ -40,6 +40,14 @@ Design changes should preserve semantic parity across platforms where the
 concept is shared, include usage documentation, and follow the decisions and
 governance recorded under `design/docs/`.
 
+## Contributor guidance
+
+[AGENTS.md](AGENTS.md) contains shared ClashKing development, verification, and
+release rules. The [Dashboard and App design skill](.agents/skills/design-clashking-dashboard/SKILL.md)
+includes its Expo and adaptive-layout references. These copies contain no personal
+workspace paths. Tools that support skills can load the folder directly or copy it
+to their configured skills directory.
+
 ## Working locally
 
 The coordinated Effect-rewrite environment uses the versioned configuration in

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Design ClashKing Dashboard & App"
+  short_description: "Design branded ClashKing Dashboard and Expo UI"
+  default_prompt: "Use $design-clashking-dashboard to refine this Dashboard or Expo page using current ClashKing components, authentic assets, and established page patterns."
