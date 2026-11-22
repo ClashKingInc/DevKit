@@ -95,9 +95,9 @@ VITE_CLASHKING_API_ORIGIN={{server.CLASHKING_API_ORIGIN}}
 If the dashboard image is built in Coolify instead of deployed through Cloudflare, map its public build arguments from the same server values:
 
 ```dotenv
-NEXT_PUBLIC_CLASHKING_API_ORIGIN={{server.CLASHKING_API_ORIGIN}}
-NEXT_PUBLIC_CLASHKING_AI_ORIGIN={{server.CLASHKING_AI_ORIGIN}}
-NEXT_PUBLIC_DISCORD_CLIENT_ID={{server.DISCORD_CLIENT_ID}}
+VITE_CLASHKING_API_ORIGIN={{server.CLASHKING_API_ORIGIN}}
+VITE_CLASHKING_AI_ORIGIN={{server.CLASHKING_AI_ORIGIN}}
+VITE_DISCORD_CLIENT_ID={{server.DISCORD_CLIENT_ID}}
 ```
 
 `HOST`, `PORT`, `LISTEN_HOST`, `LISTEN_PORT`, `NODE_ENV`, `LOCAL`, `MOCK_DB`, and each tracking `--script` selection are resource-local settings rather than server variables.
@@ -108,7 +108,7 @@ Cloudflare Secrets Store owns `OPENAI_API_KEY` and the Worker copy of `AI_USAGE_
 
 `AI_USAGE_SECRET` intentionally crosses the platform boundary: the API reads it from Coolify and the AI Worker reads the identical value from Cloudflare Secrets Store. No other Cloudflare secret is duplicated into Coolify.
 
-The public dashboard build uses `NEXT_PUBLIC_CLASHKING_API_ORIGIN`, `NEXT_PUBLIC_CLASHKING_AI_ORIGIN`, and `NEXT_PUBLIC_DISCORD_CLIENT_ID`; these are public build constants, not secrets.
+The public dashboard build uses `VITE_CLASHKING_API_ORIGIN`, `VITE_CLASHKING_AI_ORIGIN`, and `VITE_DISCORD_CLIENT_ID`; these are public Vite build constants, not secrets. Set them before building the dashboard; changing runtime environment variables does not update an already-built client.
 
 ## Billing state
 
